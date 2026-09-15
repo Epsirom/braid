@@ -1,0 +1,30 @@
+{
+  "name": "braid",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "A small, framework-agnostic DAG runtime for isolated model invocations",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./adapters/openai": {
+      "types": "./dist/adapters/openai.d.ts",
+      "import": "./dist/adapters/openai.js"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "demo": "tsx examples/basic.ts",
+    "check:pi": "npm run build && npm --prefix integrations/pi run check",
+    "test:pi": "npm run build && npm --prefix integrations/pi test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

@@ -1,0 +1,280 @@
+import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { createPiRunner, sumPiUsage } from "../runner.js";
+import type { ModelRequest } from "../../../dist/index.js";
+import type { AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+
+const model = {
+  provider: "fake",
+  id: "model",
+  api: "fake",
+} as unknown as Model<"fake">;
+const usage = (
+  input: number,
+  output: number,
+  cacheRead = 0,
+  cacheWrite = 0,
+): Usage => ({
+  input,
+  output,
+  cacheRead,
+  cacheWrite,
+  totalTokens: input + output + cacheRead + cacheWrite,
+  cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 },
+});
+const message = (
+  content: AssistantMessage["content"],
+  stopReason: AssistantMessage["stopReason"] = "stop",
+): AssistantMessage => ({
+  role: "assistant",
+  content,
+  api: "fake",
+  provider: "fake",
+  model: "model",
+  usage: usage(1, 2),
+  stopReason,
+  timestamp: Date.now(),
+});
+
+function fakeRegistry(responses: AssistantMessage[]) {
+  const contexts: unknown[] = [];
+  const options: unknown[] = [];
+  const registry = {
+    find(provider: string, id: string) {
+      assert.equal(provider, "fake");
+      assert.equal(id, "model");
+      return model;
+    },
+    async complete(_model: unknown, context: unknown, requestOptions: unknown) {
+      contexts.push(structuredClone(context));
+      options.push(structuredClone(requestOptions));
+      const response = responses.shift();
+      if (!response) throw new Error("unexpected completion");
+      return response;
+    },
+  } as unknown as Pick<ModelRegistry, "find" | "complete">;
+  return { registry, contexts, options };
+}
+
+function request(node: ModelRequest["node"]): ModelRequest {
+  return {
+    goal: "goal",
+    node,
+    model: "fake/model",
+    predecessors: [],
+    execution: { runId: "run", rootRunId: "run" },
+    signal: new AbortController().signal,
+  };
+}
+
+test("Pi runner uses exact model lookup, fresh context, decide, and one bounded tool continuation", async () => {
+  const responses = [
+    message(
+      [
+        { type: "text", text: "I choose go." },
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "decide",
+          arguments: { choice: "go" },
+        },
+      ],
+      "toolUse",
+    ),
+    message([{ type: "text", text: "Proceeding." }]),
+  ];
+  const fake = fakeRegistry(responses);
+  const reports: Usage[] = [];
+  const progress: {
+    contextTokens: number;
+    contextSource: string;
+    toolCalls: number;
+    toolRounds: number;
+    phase: string;
+  }[] = [];
+  const runner = createPiRunner(fake.registry, {
+    onUsage: (report) => reports.push(report),
+    onProgress: (update) => progress.push(update),
+  });
+  const invocation = request({
+    type: "decision",
+    id: "route",
+    prompt: "Choose",
+    choices: ["go", "stop"],
+  });
+  let choice: string | undefined;
+  invocation.decide = (selected) => {
+    choice = selected;
+  };
+  // The adapter calls its own callback, so the request callback is replaced only to type the fixture.
+  const output = await runner({
+    ...invocation,
+    decide: (selected) => {
+      choice = selected;
+    },
+  });
+  assert.equal(choice, "go");
+  assert.equal(output.output, "I choose go.\n\nProceeding.");
+  assert.equal(output.model, "fake/model");
+  assert.deepEqual(output.usage, { inputTokens: 2, outputTokens: 4 });
+  assert.equal(fake.contexts.length, 2);
+  const first = fake.contexts[0] as { tools: unknown[]; messages: unknown[] };
+  const second = fake.contexts[1] as { tools: unknown[]; messages: unknown[] };
+  assert.equal(first.tools.length, 5); // read, grep, find, ls, decide
+  assert.equal((first.tools as { name: string }[]).at(-1)?.name, "decide");
+  assert.equal(second.tools.length, 4); // read-only tools remain available for the follow-up
+  assert.equal(first.messages.length, 1);
+  assert.equal(second.messages.length, 3);
+  assert.deepEqual(
+    fake.options.map(
+      (item) => (item as { cacheRetention: string }).cacheRetention,
+    ),
+    ["none", "none"],
+  );
+  assert.equal(reports.length, 2);
+  assert.ok(progress.every((update) => update.contextTokens > 0));
+  assert.ok(
+    progress.every(
+      (update) =>
+        update.contextSource === "estimate" ||
+        update.contextSource === "reported",
+    ),
+  );
+  assert.ok(
+    progress.some(
+      (update) => update.phase === "tool" && update.toolCalls === 1,
+    ),
+  );
+  assert.ok(
+    progress.some(
+      (update) => update.phase === "model" && update.toolRounds === 1,
+    ),
+  );
+});
+
+test("Pi runner gives execute nodes read-only filesystem tools and refuses non-provider model names", async () => {
+  const fake = fakeRegistry([message([{ type: "text", text: "done" }])]);
+  const runner = createPiRunner(fake.registry);
+  const output = await runner(
+    request({ type: "execute", id: "work", prompt: "Work" }),
+  );
+  assert.equal(output.output, "done");
+  assert.deepEqual(
+    (fake.contexts[0] as { tools: { name: string }[] }).tools.map(
+      (tool) => tool.name,
+    ),
+    ["read", "grep", "find", "ls"],
+  );
+  await assert.rejects(
+    runner({
+      ...request({ type: "execute", id: "work", prompt: "Work" }),
+      model: "model",
+    }),
+    /provider\/modelId/,
+  );
+});
+
+test("Pi runner executes read-only node tools and returns their results to the model", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "braid-pi-runner-"));
+  const file = join(directory, "notes.txt");
+  await writeFile(file, "read-only content", "utf8");
+  const fake = fakeRegistry([
+    message(
+      [
+        {
+          type: "toolCall",
+          id: "read-1",
+          name: "read",
+          arguments: { path: file },
+        },
+      ],
+      "toolUse",
+    ),
+    message([{ type: "text", text: "I inspected the file." }]),
+  ]);
+  const runner = createPiRunner(fake.registry, undefined, directory);
+  const output = await runner(
+    request({ type: "execute", id: "inspect", prompt: "Inspect notes.txt" }),
+  );
+  assert.equal(output.output, "I inspected the file.");
+  const followUp = fake.contexts[1] as {
+    messages: {
+      role: string;
+      toolName?: string;
+      content?: { text?: string }[];
+    }[];
+    tools: { name: string }[];
+  };
+  assert.equal(followUp.messages.at(-1)?.role, "toolResult");
+  assert.equal(followUp.messages.at(-1)?.toolName, "read");
+  assert.match(
+    followUp.messages.at(-1)?.content?.[0]?.text ?? "",
+    /read-only content/,
+  );
+  assert.deepEqual(
+    followUp.tools.map((tool) => tool.name),
+    ["read", "grep", "find", "ls"],
+  );
+});
+
+test("Pi runner keeps write and shell tools unavailable", async () => {
+  const fake = fakeRegistry([
+    message(
+      [
+        {
+          type: "toolCall",
+          id: "write-1",
+          name: "write",
+          arguments: { path: "notes.txt", content: "bad" },
+        },
+      ],
+      "toolUse",
+    ),
+    message([
+      { type: "text", text: "I cannot write files from a Braid node." },
+    ]),
+  ]);
+  const runner = createPiRunner(fake.registry, undefined, process.cwd());
+  const output = await runner(
+    request({ type: "execute", id: "safe", prompt: "Do not edit anything." }),
+  );
+  assert.match(output.output, /cannot write files/);
+  const toolResult = (
+    fake.contexts[1] as {
+      messages: {
+        role: string;
+        toolName?: string;
+        isError?: boolean;
+        content?: { text?: string }[];
+      }[];
+    }
+  ).messages.at(-1)!;
+  assert.equal(toolResult.toolName, "write");
+  assert.equal(toolResult.isError, true);
+  assert.match(toolResult.content?.[0]?.text ?? "", /unavailable/);
+  assert.deepEqual(
+    (fake.contexts[0] as { tools: { name: string }[] }).tools.map(
+      (tool) => tool.name,
+    ),
+    ["read", "grep", "find", "ls"],
+  );
+});
+
+test("Pi usage aggregation preserves cache and cost fields", () => {
+  const first = usage(10, 20, 3, 4);
+  const second = usage(1, 2);
+  second.reasoning = 1;
+  assert.deepEqual(sumPiUsage([first, second]), {
+    input: 11,
+    output: 22,
+    cacheRead: 3,
+    cacheWrite: 4,
+    totalTokens: 40,
+    reasoning: 1,
+    cost: { input: 2, output: 4, cacheRead: 6, cacheWrite: 8, total: 20 },
+  });
+});

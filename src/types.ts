@@ -1,0 +1,188 @@
+export interface ExecuteNode {
+  type: "execute";
+  id: string;
+  prompt: string;
+  model?: string;
+}
+
+export interface DecisionNode {
+  type: "decision";
+  id: string;
+  prompt: string;
+  choices: readonly string[];
+  model?: string;
+}
+
+export type BraidNode = ExecuteNode | DecisionNode;
+
+export interface Edge {
+  from: string;
+  to: string;
+  /** Omit for an unconditional edge, including from a decision node. */
+  choice?: string;
+}
+
+export interface BraidInput {
+  goal: string;
+  nodes: readonly BraidNode[];
+  edges: readonly Edge[];
+}
+
+export type NodeStatus =
+  | "pending"
+  | "runnable"
+  | "running"
+  | "completed"
+  | "skipped"
+  | "failed";
+
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface NodeOutput {
+  output: string;
+  decision?: string;
+  model?: string;
+}
+
+export interface PredecessorOutput extends NodeOutput {
+  nodeId: string;
+}
+
+export interface ExecutionContext {
+  runId: string;
+  /** Equal to runId in v0.1; reserved identity for future shared-root accounting. */
+  rootRunId: string;
+}
+
+export interface ModelRequest {
+  goal: string;
+  node: BraidNode;
+  /** Node override, otherwise the run's defaultModel, otherwise adapter default. */
+  model?: string;
+  /** Only direct, completed, active predecessors; never sibling/parent history. */
+  predecessors: PredecessorOutput[];
+  execution: ExecutionContext;
+  signal: AbortSignal;
+  /** Present only on decision nodes. An adapter exposes this as the decide tool. */
+  decide?: (choice: string) => void;
+}
+
+export interface ModelResponse {
+  output: string;
+  /** The actual model reported by the provider, if known. */
+  model?: string;
+  usage?: TokenUsage;
+}
+
+/** Each call must start a fresh model conversation and expose no other tools. */
+export type ModelRunner = (request: ModelRequest) => Promise<ModelResponse>;
+
+/** Frozen snapshots in emission order. Creation means admission of the submitted DAG, not mutation. */
+export type ExecutionEvent = Readonly<
+  {
+    sequence: number;
+    timestamp: number;
+  } & (
+    | { type: "graph_created"; nodeCount: number; edgeCount: number }
+    | {
+        type: "node_created";
+        nodeId: string;
+        nodeType: BraidNode["type"];
+        model?: string;
+      }
+    | { type: "edge_created"; from: string; to: string; choice?: string }
+    | { type: "node_runnable"; nodeId: string }
+    | {
+        type: "handoff";
+        from: string;
+        to: string;
+        output: string;
+        decision?: string;
+      }
+    | { type: "node_started"; nodeId: string; model?: string }
+    | ({
+        type: "node_completed";
+        nodeId: string;
+        latencyMs: number;
+        usage?: Readonly<TokenUsage>;
+      } & NodeOutput)
+    | {
+        type: "node_skipped";
+        nodeId: string;
+        reason: NonNullable<NodeResult["skipReason"]>;
+      }
+    | ({
+        type: "node_failed";
+        nodeId: string;
+        error: Readonly<ExecutionError>;
+        latencyMs: number;
+        usage?: Readonly<TokenUsage>;
+      } & Partial<NodeOutput>)
+    | { type: "graph_completed"; terminalNodeIds: readonly string[] }
+    | {
+        type: "graph_failed";
+        error: Readonly<ExecutionError>;
+        terminalNodeIds: readonly string[];
+      }
+  )
+>;
+
+export interface BraidOptions {
+  runner: ModelRunner;
+  defaultModel?: string;
+  /** Positive integer. Defaults to 4. */
+  maxConcurrency?: number;
+  /** Applied separately to each invocation, starting when it runs. Default: 60s. */
+  nodeTimeoutMs?: number;
+  /** Includes queueing and execution of the entire graph. Default: 5 minutes. */
+  graphTimeoutMs?: number;
+  /** Caller cancellation, independent of node and graph deadlines. */
+  signal?: AbortSignal;
+  /** Live observer. Throws/rejections are ignored; returned work is not awaited. */
+  onEvent?: (event: ExecutionEvent) => void;
+}
+
+export interface ExecutionError {
+  code:
+    | "MODEL_ERROR"
+    | "INVALID_RESPONSE"
+    | "DECISION_REQUIRED"
+    | "INVALID_DECISION"
+    | "NODE_TIMEOUT"
+    | "GRAPH_TIMEOUT"
+    | "CANCELLED";
+  message: string;
+}
+
+/** Output is absent if no valid response was received; status determines success. */
+export interface NodeResult extends Partial<NodeOutput> {
+  id: string;
+  status: NodeStatus;
+  usage?: TokenUsage;
+  startedAt?: number;
+  finishedAt?: number;
+  latencyMs?: number;
+  error?: ExecutionError;
+  skipReason?: "inactive" | "upstream_failed" | "graph_timeout" | "cancelled";
+}
+
+export interface BraidResult {
+  status: "completed" | "failed";
+  /** Completed nodes with no active outgoing edges in this execution. */
+  terminalOutputs: Record<string, NodeOutput>;
+  /** Immutable execution log, including graph construction and runtime handoffs. */
+  events: readonly ExecutionEvent[];
+  nodes: Record<string, NodeResult>;
+  error?: ExecutionError;
+  metadata: ExecutionContext & {
+    startedAt: number;
+    finishedAt: number;
+    latencyMs: number;
+    /** Sum of reported usage only, including responses that fail decision validation. */
+    usage: TokenUsage;
+    usageReportedNodes: number;
+  };
+}
