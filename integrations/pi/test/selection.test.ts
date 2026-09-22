@@ -1,136 +1,150 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import braidExtension, { braidTool } from "../index.js";
-test("Pi adapter teaches proactive selection without forcing Braid for simple work", async () => {
-  let registered: unknown;
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import braidExtension, { createBraidTools } from "../index.js";
+import { context, deferred, input, response } from "./helpers.js";
+
+type Handler = (event: never, ctx: ExtensionContext) => unknown;
+function extension() {
+  const tools = new Map<string, unknown>();
   const commands = new Map<
     string,
     { handler: (args: string, ctx: unknown) => Promise<void> }
   >();
-  let inputHandler:
-    | ((
-        event: { text: string; source: string },
-        ctx: unknown,
-      ) => { action: "transform"; text: string } | undefined)
-    | undefined;
-  let toolCallHandler:
-    | ((event: { toolName: string }, ctx: unknown) => unknown)
-    | undefined;
-  let toolResultHandler:
-    | ((
-        event: { toolName: string; details?: unknown },
-        ctx: unknown,
-      ) => unknown)
-    | undefined;
-  let beforeAgentStart:
-    | ((event: { systemPrompt: string }) => { systemPrompt: string })
-    | undefined;
-  const fakePi = {
-    getActiveTools() {
-      return ["braid", "read"];
+  const handlers = new Map<string, Handler>();
+  const reminder = deferred<{
+    message: Parameters<ExtensionAPI["sendMessage"]>[0];
+    options: Parameters<ExtensionAPI["sendMessage"]>[1];
+  }>();
+  let reminders = 0;
+  braidExtension({
+    registerTool: (tool: { name: string }) => tools.set(tool.name, tool),
+    registerCommand: (name: string, command: never) =>
+      commands.set(name, command),
+    on: (event: string, handler: Handler) => handlers.set(event, handler),
+    sendMessage: (
+      message: Parameters<ExtensionAPI["sendMessage"]>[0],
+      options: Parameters<ExtensionAPI["sendMessage"]>[1],
+    ) => {
+      reminders++;
+      reminder.resolve({ message, options });
     },
-    registerTool(tool: unknown) {
-      registered = tool;
-    },
-    registerCommand(
-      name: string,
-      options: { handler: (args: string, ctx: unknown) => Promise<void> },
-    ) {
-      commands.set(name, options);
-    },
-    on(event: string, handler: unknown) {
-      if (event === "before_agent_start")
-        beforeAgentStart = handler as typeof beforeAgentStart;
-      if (event === "input") inputHandler = handler as typeof inputHandler;
-      if (event === "tool_call")
-        toolCallHandler = handler as typeof toolCallHandler;
-      if (event === "tool_result")
-        toolResultHandler = handler as typeof toolResultHandler;
-    },
-  } as never;
-  braidExtension(fakePi);
-  assert.equal(registered, braidTool);
-  assert.ok(commands.has("braid"));
-  assert.ok(
-    braidTool.description.includes(
-      "Use this tool FIRST for nontrivial engineering work",
-    ),
+  } as unknown as ExtensionAPI);
+  return { tools, commands, handlers, reminder, reminders: () => reminders };
+}
+
+test("extension registers background tools, a panel command, and guidance to wait for reminders", async () => {
+  const fake = extension();
+  assert.deepEqual(
+    [...fake.tools.keys()],
+    ["braid", "braid_status", "braid_cancel"],
   );
-  assert.ok(
-    braidTool.description.includes("the user does not need to mention Braid"),
-  );
-  assert.ok(beforeAgentStart);
-  assert.ok(inputHandler);
-  let notified = "";
-  await commands.get("braid")!.handler("", {
-    hasUI: true,
-    isIdle: () => true,
-    getActiveTools: () => ["braid", "read"],
-    ui: {
-      notify: (message: string) => {
-        notified = message;
-      },
-      setStatus: () => {},
-    },
-  } as never);
-  assert.match(notified, /armed/);
-  const transformed = inputHandler!(
-    { text: "Review this diff", source: "interactive" },
-    { isIdle: () => true, hasUI: true, ui: { setStatus: () => {} } } as never,
-  );
-  assert.equal(transformed?.action, "transform");
+  assert.ok(fake.commands.has("braid"));
+  assert.equal(fake.handlers.has("input"), false);
+  assert.equal(fake.handlers.has("tool_call"), false);
+  const prompt = fake.handlers.get("before_agent_start")!(
+    { systemPrompt: "base" } as never,
+    {} as never,
+  ) as { systemPrompt: string };
   assert.match(
-    transformed?.text ?? "",
-    /Call the braid tool as your first action/,
+    prompt.systemPrompt,
+    /two or more concerns can be analyzed independently/,
   );
-  const prompt = beforeAgentStart!({
-    systemPrompt: "base prompt",
-  }).systemPrompt;
-  assert.match(prompt, /Braid execution policy/);
-  assert.match(prompt, /Selection rule: for a code review, bug investigation/);
-  assert.match(prompt, /two or more concerns can be analyzed independently/);
+  assert.match(prompt.systemPrompt, /do not poll repeatedly/);
   assert.match(
-    prompt,
-    /nodes can inspect the current project with read-only read, grep, find, and ls tools/,
+    prompt.systemPrompt,
+    /Completion reminders refer to existing jobs/,
   );
-  assert.match(prompt, /Do not use braid for a simple one-step answer/);
-  assert.match(
-    prompt,
-    /make this delegation choice before using read, grep, find, edit, write, or bash/,
-  );
-  // The command guard is exercised below; before_agent_start is intentionally
-  // called after the synchronous input hook in this fixture, so it sees the ordinary policy.
-  assert.ok(toolCallHandler);
-  const toolContext = {
-    hasUI: true,
-    signal: undefined,
-    ui: { setStatus: () => {} },
-  };
-  const blocked = toolCallHandler!(
-    { toolName: "read" },
-    toolContext as never,
-  ) as { block?: boolean };
-  assert.equal(blocked.block, true);
-  assert.ok(toolResultHandler);
-  toolCallHandler!({ toolName: "braid" }, toolContext as never);
-  toolResultHandler!(
-    {
-      toolName: "braid",
-      details: {
-        events: [{ type: "graph_created" }, { type: "node_started" }],
-      },
-    },
-    { hasUI: true, signal: undefined, ui: { setStatus: () => {} } } as never,
-  );
-  assert.equal(
-    inputHandler!(
-      { text: "This second prompt must not be armed", source: "interactive" },
-      { isIdle: () => true } as never,
-    ),
-    undefined,
-  );
-  const ordinaryPrompt = beforeAgentStart!({
-    systemPrompt: "base prompt",
-  }).systemPrompt;
-  assert.doesNotMatch(ordinaryPrompt, /Mandatory Braid turn/);
+  fake.handlers.get("session_shutdown")!({} as never, {} as never);
 });
+
+for (const idle of [true, false]) {
+  test(
+    `completion sends one system reminder with automatic continuation while ${idle ? "idle" : "streaming"}`,
+    { timeout: 2_000 },
+    async () => {
+      const fake = extension();
+      const completion = deferred<ReturnType<typeof response>>();
+      const ctx = context(async () => completion.promise);
+      ctx.isIdle = () => idle;
+      const tool = fake.tools.get("braid") as ReturnType<
+        typeof createBraidTools
+      >["braidTool"];
+      const submitted = await tool.execute(
+        "call",
+        input,
+        undefined,
+        undefined,
+        ctx,
+      );
+      assert.equal(fake.reminders(), 0);
+      completion.resolve(response());
+      const { message, options } = await fake.reminder.promise;
+      assert.match(String(message.content), /system-reminder/);
+      assert.match(
+        String(message.content),
+        new RegExp(submitted.details!.jobId),
+      );
+      assert.match(String(message.content), /braid_status/);
+      assert.deepEqual(options, { triggerTurn: true, deliverAs: "followUp" });
+      assert.equal(fake.reminders(), 1);
+      fake.handlers.get("session_shutdown")!({} as never, ctx);
+    },
+  );
+}
+
+test(
+  "a reminder dropped by foreground abort is retried after settling, but delivered reminders are not repeated",
+  { timeout: 2_000 },
+  async () => {
+    const fake = extension();
+    const ctx = context(async () => response());
+    const tool = fake.tools.get("braid") as ReturnType<
+      typeof createBraidTools
+    >["braidTool"];
+    const submitted = await tool.execute(
+      "call",
+      input,
+      undefined,
+      undefined,
+      ctx,
+    );
+    const { message } = await fake.reminder.promise;
+    ctx.isIdle = () => true;
+    ctx.hasPendingMessages = () => true;
+    fake.handlers.get("agent_settled")!({} as never, ctx);
+    assert.equal(fake.reminders(), 1);
+    ctx.hasPendingMessages = () => false;
+    fake.handlers.get("agent_settled")!({} as never, ctx);
+    assert.equal(fake.reminders(), 2);
+    fake.handlers.get("message_start")!(
+      { message: { ...message, role: "custom" } } as never,
+      ctx,
+    );
+    fake.handlers.get("agent_settled")!({} as never, ctx);
+    assert.equal(fake.reminders(), 2);
+    assert.ok(submitted.details!.jobId);
+    fake.handlers.get("session_shutdown")!({} as never, ctx);
+  },
+);
+
+test(
+  "session replacement suppresses completion reminders from the old session",
+  { timeout: 2_000 },
+  async () => {
+    const fake = extension();
+    const ctx = context(async () => new Promise(() => {}));
+    const tool = fake.tools.get("braid") as ReturnType<
+      typeof createBraidTools
+    >["braidTool"];
+    await tool.execute("call", input, undefined, undefined, ctx);
+    fake.handlers.get("session_shutdown")!({ reason: "new" } as never, ctx);
+    // Allow the cancelled run and its completion callback to settle.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fake.handlers.get("agent_settled")!({} as never, ctx);
+    assert.equal(fake.reminders(), 0);
+  },
+);

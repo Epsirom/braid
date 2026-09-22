@@ -1,0 +1,232 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import type { Usage } from "@earendil-works/pi-ai";
+import {
+  truncateHead,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import {
+  braid,
+  validateGraph,
+  type BraidInput,
+  type BraidResult,
+} from "../../dist/index.js";
+import {
+  applyEvent,
+  applyProgress,
+  createLiveState,
+  type BraidLiveState,
+} from "./display.js";
+import { createPiRunner, sumPiUsage } from "./runner.js";
+
+export interface JobOptions {
+  maxConcurrency?: number;
+  nodeTimeoutMs?: number;
+  graphTimeoutMs?: number;
+}
+
+export interface JobSnapshot {
+  jobId: string;
+  goal: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  createdAt: number;
+  live: BraidLiveState;
+  result?: BraidResult;
+  error?: string;
+  fullOutputPath?: string;
+  usage?: Usage;
+}
+
+interface Job extends JobSnapshot {
+  controller: AbortController;
+  done: Promise<void>;
+  usageClaimed: boolean;
+}
+
+/** Jobs belong to one extension/session lifetime, independently of foreground turns. */
+export class BraidJobs {
+  private jobs = new Map<string, Job>();
+  private listeners = new Set<() => void>();
+  private disposed = false;
+
+  constructor(
+    private readonly onFinished: (job: JobSnapshot) => void = () => {},
+  ) {}
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private changed(): void {
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch {
+        /* UI observers cannot fail a job. */
+      }
+    }
+  }
+
+  start(
+    input: BraidInput,
+    options: JobOptions,
+    ctx: ExtensionContext,
+  ): JobSnapshot {
+    if (this.disposed) throw new Error("Braid session has closed");
+    validateGraph(input);
+    const snapshot = structuredClone(input);
+    const settings = { ...options };
+    const model = ctx.model
+      ? `${ctx.model.provider}/${ctx.model.id}`
+      : undefined;
+    const registry = ctx.modelRegistry;
+    const cwd = ctx.cwd;
+    const job: Job = {
+      jobId: crypto.randomUUID(),
+      goal: snapshot.goal,
+      status: "running",
+      createdAt: Date.now(),
+      live: createLiveState(),
+      controller: new AbortController(),
+      done: Promise.resolve(),
+      usageClaimed: false,
+    };
+    this.jobs.set(job.jobId, job);
+    job.done = this.run(job, snapshot, settings, registry, cwd, model);
+    this.changed();
+    return this.get(job.jobId)!;
+  }
+
+  private async run(
+    job: Job,
+    input: BraidInput,
+    options: JobOptions,
+    registry: ExtensionContext["modelRegistry"],
+    cwd: string,
+    model?: string,
+  ): Promise<void> {
+    const reports: Usage[] = [];
+    try {
+      // Return the submission to Pi before doing provider work or sending reminders.
+      await nextTurn();
+      job.result = await braid(input, {
+        ...options,
+        nodeTimeoutMs: options.nodeTimeoutMs ?? Infinity,
+        graphTimeoutMs: options.graphTimeoutMs ?? Infinity,
+        signal: job.controller.signal,
+        ...(model ? { defaultModel: model } : {}),
+        runner: createPiRunner(registry, {
+          cwd,
+          onUsage: (usage) => {
+            if (job.status === "running" && !job.controller.signal.aborted)
+              reports.push(usage);
+          },
+          onProgress: (progress) => {
+            if (job.status !== "running" || job.controller.signal.aborted)
+              return;
+            applyProgress(job.live, progress);
+            this.changed();
+          },
+        }),
+        onEvent: (event) => {
+          applyEvent(job.live, event);
+          this.changed();
+        },
+      });
+      if (reports.length) job.usage = sumPiUsage(reports);
+      job.live.observedAt = job.result.metadata.finishedAt;
+      job.live.latencyMs = job.result.metadata.latencyMs;
+      const status =
+        job.result.error?.code === "CANCELLED"
+          ? "cancelled"
+          : job.result.status;
+      const full = JSON.stringify(job.result, null, 2);
+      const preview = JSON.stringify(
+        { ...this.get(job.jobId), status },
+        null,
+        2,
+      );
+      if (truncateHead(preview).truncated) {
+        const directory = await mkdtemp(join(tmpdir(), "braid-result-"));
+        const path = join(directory, "result.json");
+        await writeFile(path, full, { mode: 0o600 });
+        job.fullOutputPath = path;
+      }
+      job.status = status;
+    } catch (error) {
+      job.status = "failed";
+      job.error = error instanceof Error ? error.message : String(error);
+      if (reports.length) job.usage = sumPiUsage(reports);
+    }
+    this.changed();
+    if (!this.disposed) {
+      try {
+        this.onFinished(this.get(job.jobId)!);
+      } catch {
+        /* Result remains retrievable. */
+      }
+    }
+  }
+
+  get(jobId: string): JobSnapshot | undefined {
+    const job = this.jobs.get(jobId);
+    if (!job) return undefined;
+    const {
+      controller: _controller,
+      done: _done,
+      usageClaimed: _claimed,
+      ...snapshot
+    } = job;
+    const copy = structuredClone(snapshot);
+    if (job.status === "running") {
+      copy.live.observedAt = Date.now();
+      copy.live.latencyMs = copy.live.observedAt - job.createdAt;
+    }
+    return copy;
+  }
+
+  list(): Pick<JobSnapshot, "jobId" | "goal" | "status" | "createdAt">[] {
+    return [...this.jobs.values()]
+      .map(({ jobId, goal, status, createdAt }) => ({
+        jobId,
+        goal,
+        status,
+        createdAt,
+      }))
+      .reverse();
+  }
+
+  cancel(jobId: string): boolean {
+    const job = this.jobs.get(jobId);
+    if (!job) throw new Error(`Unknown Braid job: ${jobId}`);
+    if (job.status !== "running") return false;
+    job.controller.abort();
+    return true;
+  }
+
+  /** Pi accounts usage only once, on the first retrieval of a terminal result. */
+  claimUsage(jobId: string): Usage | undefined {
+    const job = this.jobs.get(jobId);
+    if (!job || job.status === "running" || job.usageClaimed || !job.usage)
+      return undefined;
+    job.usageClaimed = true;
+    return structuredClone(job.usage);
+  }
+
+  async wait(jobId: string): Promise<void> {
+    const job = this.jobs.get(jobId);
+    if (!job) throw new Error(`Unknown Braid job: ${jobId}`);
+    await job.done;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    for (const job of this.jobs.values()) job.controller.abort();
+    this.listeners.clear();
+  }
+}

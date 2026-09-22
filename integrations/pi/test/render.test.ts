@@ -1,6 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { braidTool } from "../index.js";
+import {
+  renderGraphCall,
+  renderGraphResult,
+  type BraidToolDetails,
+} from "../display.js";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+
+function renderResult(
+  result: { content: unknown[]; details: BraidToolDetails },
+  options: { expanded: boolean; isPartial: boolean },
+  theme: Theme,
+  _ctx: unknown,
+) {
+  return renderGraphResult(
+    result.details,
+    options.expanded,
+    options.isPartial,
+    theme,
+  );
+}
 import type { BraidResult, ExecutionEvent } from "../../../dist/index.js";
 
 const theme = {
@@ -96,9 +115,8 @@ const result: BraidResult = {
 };
 
 test("Braid call renderer summarizes topology instead of dumping JSON", () => {
-  assert.ok(braidTool.renderCall);
   const rendered = lines(
-    braidTool.renderCall!(
+    renderGraphCall(
       {
         goal: "A goal that should be visible",
         nodes: [
@@ -114,7 +132,6 @@ test("Braid call renderer summarizes topology instead of dumping JSON", () => {
         options: { maxConcurrency: 2 },
       },
       theme,
-      {} as never,
     ),
   );
   assert.match(rendered, /◆ Braid/);
@@ -127,9 +144,8 @@ test("Braid call renderer summarizes topology instead of dumping JSON", () => {
 });
 
 test("Braid result renderer summarizes flow and expands to per-node detail", () => {
-  assert.ok(braidTool.renderResult);
   const compact = lines(
-    braidTool.renderResult!(
+    renderResult(
       { content: [], details: result },
       { expanded: false, isPartial: false },
       theme,
@@ -145,7 +161,7 @@ test("Braid result renderer summarizes flow and expands to per-node detail", () 
   assert.doesNotMatch(compact, /execution log/);
 
   const expanded = lines(
-    braidTool.renderResult!(
+    renderResult(
       { content: [], details: result },
       { expanded: true, isPartial: false },
       theme,
@@ -162,7 +178,6 @@ test("Braid result renderer summarizes flow and expands to per-node detail", () 
 });
 
 test("running renderer highlights active nodes and shows live progress", () => {
-  assert.ok(braidTool.renderResult);
   const live = {
     status: "running",
     terminalOutputs: {},
@@ -202,7 +217,7 @@ test("running renderer highlights active nodes and shows live progress", () => {
     latencyMs: 12,
   } as never;
   const rendered = lines(
-    braidTool.renderResult!(
+    renderResult(
       { content: [], details: live },
       { expanded: true, isPartial: true },
       theme,
@@ -224,9 +239,8 @@ test("running renderer highlights active nodes and shows live progress", () => {
 });
 
 test("partial renderer remains compact before Braid has result details", () => {
-  assert.ok(braidTool.renderResult);
   const rendered = lines(
-    braidTool.renderResult!(
+    renderResult(
       { content: [], details: undefined },
       { expanded: false, isPartial: true },
       theme,

@@ -1,40 +1,46 @@
 # Braid Pi adapter
 
-This is the optional Pi integration for the local Braid checkout. It registers one tool:
+This optional Pi integration runs Braid graphs as background jobs. It registers:
 
-- `braid` — an LLM-callable tool that submits one complete graph to Braid.
+- `braid` — submit a complete DAG and immediately receive a `jobId`.
+- `braid_status` — retrieve progress and results with `{ "jobId": "..." }`, or
+  omit the ID to list jobs in the current session.
+- `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
+- `/braid [jobId]` — open a live flow panel in interactive Pi.
 
-The tool's Pi TUI rendering shows a Mermaid flowchart for the submitted DAG and
-a live execution view for the result. The DAG is rendered as a Mermaid flowchart
-using Pi's terminal Mermaid renderer. Active nodes are marked `▶ ACTIVE`, shown
-with a highlighted background, and annotated with current context-token estimates
-or provider-reported input/cache tokens plus the model context window and
-read-only tool-call counts. Labels use compact forms such as `20K/1M · T23`
-(context used/window and tool calls), plus node elapsed time such as `12s`. The log also displays graph/node/edge creation,
-runnable and started nodes, predecessor handoffs, completions, skips, failures,
-and graph completion. The chart header shows overall Braid elapsed time.
-Expand the result row for more log events; the
-final details retain the complete execution log.
+The parent can continue independent work or finish its response while a job runs.
+On completion, failure, or cancellation, the extension sends a custom
+`system-reminder` containing the job ID and a request to retrieve its results.
+Pi queues it as a follow-up during streaming; when idle, it starts a new agent
+turn automatically. The agent should wait for this reminder rather than poll.
+Stopping the foreground response does not stop background jobs.
 
-The adapter is intentionally thin. Braid owns graph validation, scheduling,
-joins, routing, skip/failure propagation, timeouts, and result metadata. Pi owns
-model lookup, credentials/OAuth, provider transport, read-only tool execution,
-and token/cost accounting.
+Jobs live in memory for the current Pi session. Quitting, reloading extensions,
+or switching/forking sessions aborts outstanding work and suppresses its
+reminders. Job IDs cannot be retrieved after that lifecycle ends. They are not
+persistent processes outside Pi.
 
-## Force Braid for the next prompt
+## Live flow panel
 
-Run `/braid` in Pi, then enter your ordinary development prompt. The command arms
-only the next non-extension input, adds a mandatory Braid-first instruction to
-that turn, and disarms automatically. It does not immediately start model work.
+Run `/braid` to open the newest job, or `/braid <jobId>` to open a specific job.
+The panel refreshes as nodes start, finish, fail, and pass outputs downstream.
+Use Left/Right to select jobs, Up/Down or Page Up/Page Down to scroll, `c` to
+cancel the selected job, and Escape or `q` to close the panel. Closing the panel
+leaves jobs running. In RPC or noninteractive modes, use `braid_status`.
 
-```text
-/braid
-Review the current diff for correctness, missing tests, and unnecessary complexity.
-```
+The panel renders a Mermaid flowchart, node states, elapsed times, context-token
+estimates or provider-reported usage, context-window sizes, read-only tool-call
+counts, and the execution log. Active nodes are marked `▶ ACTIVE`. The status
+tool also renders a flowchart; expand its result to see more log events.
 
-The model still constructs the complete DAG; you do not need to specify nodes or
-edges. Braid nodes use read-only filesystem tools, so the parent remains the only
-writer and test runner.
+`/braid` now opens this panel; it no longer arms the next prompt. To request
+Braid explicitly, ask the agent to analyze the task using Braid.
+
+Braid owns graph validation, scheduling, joins, routing, skip/failure propagation,
+timeouts, and result metadata. Pi owns model lookup, credentials/OAuth, provider
+transport, read-only tool execution, and token/cost accounting. The first
+`braid_status` retrieval of a finished job reports its accumulated Pi usage;
+subsequent retrievals do not count the same usage again.
 
 ## When Pi will use Braid
 
@@ -50,7 +56,8 @@ an explicit per-turn planning policy to Pi's system prompt and tool metadata:
   work; keep writes, tests, and commands in the parent agent;
 - the user does not need to say “Braid” or design the graph;
 - when Braid fits, the model should construct and submit the complete graph
-  immediately, then use the terminal outputs in its response.
+  immediately, continue independent work, and retrieve the terminal outputs after
+  the completion reminder.
 
 This is a recommendation to the model, not hard enforcement. If a model still
 ignores the policy, use a short instruction such as “decompose this with Braid”
@@ -73,14 +80,14 @@ From the repository root:
 ```sh
 npm ci
 npm run build
-pi install /home/chenhuarong/repo/github/Epsirom/braid
+pi install /home/chenhuarong/repo/github/Epsirom/braid/integrations/pi
 ```
 
 The absolute path avoids ambiguity. To install for only one project instead of
 all Pi sessions, add `-l`:
 
 ```sh
-pi install -l /home/chenhuarong/repo/github/Epsirom/braid
+pi install -l /home/chenhuarong/repo/github/Epsirom/braid/integrations/pi
 ```
 
 The package is local-path based, so edits in this checkout are picked up after a
@@ -113,10 +120,13 @@ npm run demo
 
 The Pi adapter tests use a fake model registry and assert exact model lookup,
 fresh contexts, tool isolation, decision handling, read-only file-tool execution,
-continuation behavior, usage aggregation, context-token progress, and tool counts. Renderer tests cover Mermaid
-topology, live active-node highlighting, handoff/failure logs, expanded per-node
-output, and bounded event previews. Selection tests cover one-shot `/braid`
-arming and automatic disarming. They make no provider requests.
+continuation behavior, usage aggregation, context-token progress, and tool counts.
+Renderer tests cover Mermaid topology, live active-node highlighting,
+handoff/failure logs, expanded per-node output, and bounded event previews.
+Background-job tests cover immediate submission, foreground independence,
+completion reminders, explicit cancellation, shutdown, usage accounting, and
+large-result retrieval. Panel tests cover navigation, scrolling, and cleanup.
+They make no provider requests.
 
 ## Node filesystem capabilities
 
@@ -178,7 +188,10 @@ Expected behavior:
 - `join` receives only `left` as a labelled predecessor.
 - `join` appears in `terminalOutputs`.
 - The Pi TUI shows a compact graph summary rather than the full input JSON.
-- While running, active nodes are highlighted and the execution log updates with starts and handoffs.
+- Submission returns a job ID immediately. Open `/braid` to see active nodes
+  and the execution log update with starts and handoffs.
+- Completion sends a reminder and resumes an idle agent; `braid_status` retrieves
+  the finished result.
 - The result shows completion/failure, node counts, terminal IDs, decisions, failures, skips, and the execution log. Expand the result row to see per-node output and more events.
 
 To test per-node model selection, add `model: "provider/modelId"` to one node.
@@ -187,11 +200,11 @@ fails that node cleanly and does not invoke another provider.
 
 ## Cancellation and limits
 
-The Pi extension has no node or graph time limit by default. Press Escape while
-the `braid` tool is running to cancel it. Pi passes its active abort signal to
-Braid, which aborts running nodes and marks queued nodes `cancelled`. To set a
-node or graph timeout, supply milliseconds in the tool input under `options`;
-each omitted timeout remains unlimited:
+The Pi extension has no node or graph time limit by default. Use `braid_cancel`
+or press `c` in the flow panel to abort running nodes and mark queued nodes
+`cancelled`. Escape stops the foreground response or closes the panel without
+cancelling jobs. To set a node or graph timeout, supply milliseconds in the
+submission tool input under `options`; each omitted timeout remains unlimited:
 
 ```json
 {
@@ -225,4 +238,4 @@ primitives when they improve the result.
 The adapter's policy tells Pi to consider Braid because this task has multiple
 independent reasoning branches and a final synthesis. Whether it actually calls
 the tool remains model-dependent; inspect the transcript for the `braid` tool
-call and its live graph/handoff log.
+submission, completion reminder, and the live graph/handoff log in `/braid`.
