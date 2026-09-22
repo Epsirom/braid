@@ -174,6 +174,8 @@ test("invalid runtime options are rejected before model execution", async () => 
     { nodeTimeoutMs: 0 },
     { graphTimeoutMs: -1 },
     { nodeTimeoutMs: NaN },
+    { nodeTimeoutMs: -Infinity },
+    { graphTimeoutMs: null },
     { graphTimeoutMs: 2_147_483_648 },
     { graphTimeoutMs: "20" },
   ]) {

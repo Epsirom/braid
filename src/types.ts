@@ -135,9 +135,9 @@ export interface BraidOptions {
   defaultModel?: string;
   /** Positive integer. Defaults to 4. */
   maxConcurrency?: number;
-  /** Applied separately to each invocation, starting when it runs. Default: 60s. */
+  /** Applied separately to each invocation, starting when it runs. Default: 60s. Infinity disables it. */
   nodeTimeoutMs?: number;
-  /** Includes queueing and execution of the entire graph. Default: 5 minutes. */
+  /** Includes queueing and execution of the entire graph. Default: 5 minutes. Infinity disables it. */
   graphTimeoutMs?: number;
   /** Caller cancellation, independent of node and graph deadlines. */
   signal?: AbortSignal;

@@ -116,7 +116,9 @@ with `status: "failed"` instead of discarding the run's successful outputs.
 | `signal` | None | Caller cancellation signal; aborts running nodes and marks queued nodes cancelled |
 | `onEvent` | None | Live observer for graph/node creation, readiness, starts, handoffs, completions, skips, failures, and graph completion |
 
-Timeouts must be positive finite milliseconds, at most `2_147_483_647`.
+Timeouts must be positive finite milliseconds, at most `2_147_483_647`, or
+`Infinity` to disable that deadline. Set both timeouts to `Infinity` to run
+without a time limit; caller cancellation still works.
 
 ## Scheduling and routing semantics
 

@@ -36,6 +36,8 @@ test("caller cancellation aborts running nodes and skips queued work while retai
     {
       signal: controller.signal,
       maxConcurrency: 1,
+      nodeTimeoutMs: Infinity,
+      graphTimeoutMs: Infinity,
       runner: async (request) => {
         calls.push(request.node.id);
         if (request.node.id === "done") return { output: "saved" };

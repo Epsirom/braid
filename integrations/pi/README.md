@@ -187,9 +187,11 @@ fails that node cleanly and does not invoke another provider.
 
 ## Cancellation and limits
 
-Press Escape while the `braid` tool is running. Pi passes its active abort signal
-to Braid, which aborts running nodes and marks queued nodes `cancelled`. A node
-or graph timeout can also be supplied in the tool input under `options`:
+The Pi extension has no node or graph time limit by default. Press Escape while
+the `braid` tool is running to cancel it. Pi passes its active abort signal to
+Braid, which aborts running nodes and marks queued nodes `cancelled`. To set a
+node or graph timeout, supply milliseconds in the tool input under `options`;
+each omitted timeout remains unlimited:
 
 ```json
 {

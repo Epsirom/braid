@@ -1,7 +1,43 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { braid, type ModelRequest } from "../src/index.js";
 import { execute, graph } from "./helpers.js";
+
+test("unlimited deadlines allow long executions and queued nodes without timer overflow", {
+  timeout: 2_000,
+}, async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const result = await braid(graph([execute("a"), execute("b")]), {
+    maxConcurrency: 1,
+    nodeTimeoutMs: Infinity,
+    graphTimeoutMs: Infinity,
+    runner: async ({ node, signal }) => {
+      now += 600_000;
+      // Passing Infinity to Node's setTimeout would abort after just 1ms.
+      await delay(20);
+      assert.equal(signal.aborted, false);
+      return { output: node.id };
+    },
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(result.nodes.b!.status, "completed");
+});
+
+for (const scope of ["node", "graph"] as const) {
+  test(`finite ${scope} timeout still applies when the other deadline is unlimited`, {
+    timeout: 2_000,
+  }, async () => {
+    const result = await braid(graph([execute("a")]), {
+      nodeTimeoutMs: scope === "node" ? 10 : Infinity,
+      graphTimeoutMs: scope === "graph" ? 10 : Infinity,
+      runner: () => new Promise(() => {}),
+    });
+    assert.equal(result.nodes.a!.error!.code,
+      scope === "node" ? "NODE_TIMEOUT" : "GRAPH_TIMEOUT");
+  });
+}
 
 // Deliberately starve timer callbacks to test clock checks at invocation boundaries.
 function blockEventLoop(ms: number): void {

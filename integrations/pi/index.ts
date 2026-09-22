@@ -26,7 +26,11 @@ import {
 
 const text = () => Type.String({ minLength: 1 });
 const timeout = () =>
-  Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 2_147_483_647 }));
+  Type.Optional(Type.Number({
+    exclusiveMinimum: 0,
+    maximum: 2_147_483_647,
+    description: "Timeout in milliseconds; omit for no time limit",
+  }));
 
 const braidParameters = Type.Object(
   {
@@ -179,6 +183,8 @@ export const braidTool = defineTool<typeof braidParameters, BraidToolDetails>({
     try {
       result = await braid(input, {
         ...params.options,
+        nodeTimeoutMs: params.options?.nodeTimeoutMs ?? Infinity,
+        graphTimeoutMs: params.options?.graphTimeoutMs ?? Infinity,
         runner: createPiRunner(ctx.modelRegistry, {
           onUsage: (usage) => reports.push(usage),
           onProgress: (progress) => {

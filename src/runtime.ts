@@ -62,10 +62,11 @@ function validateOptions(options: BraidOptions): void {
     const value = options[key];
     if (
       value !== undefined &&
+      value !== Infinity &&
       (!Number.isFinite(value) || value <= 0 || value > 2_147_483_647)
     ) {
       throw new TypeError(
-        `${key} must be a positive number no greater than 2147483647`,
+        `${key} must be Infinity or a positive number no greater than 2147483647`,
       );
     }
   }
@@ -233,7 +234,9 @@ async function runNode(
     "NODE_TIMEOUT",
     `Node '${result.id}' exceeded ${timeoutMs}ms`,
   );
-  const timer = setTimeout(() => controller.abort(nodeTimeout), timeoutMs);
+  const timer = Number.isFinite(timeoutMs)
+    ? setTimeout(() => controller.abort(nodeTimeout), timeoutMs)
+    : undefined;
   let onAbort: () => void;
   const aborted = new Promise<never>((_, reject) => {
     onAbort = () => reject(signal.reason);
@@ -413,10 +416,9 @@ export async function braid(
     controller.abort(new RunError("CANCELLED", "Graph cancelled by caller"));
   signal?.addEventListener("abort", onCancel, { once: true });
   if (signal?.aborted) onCancel();
-  const timer = setTimeout(
-    () => controller.abort(graphTimeout),
-    graphTimeoutMs,
-  );
+  const timer = Number.isFinite(graphTimeoutMs)
+    ? setTimeout(() => controller.abort(graphTimeout), graphTimeoutMs)
+    : undefined;
 
   try {
     while (true) {
