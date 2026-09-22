@@ -23,7 +23,9 @@ persistent processes outside Pi.
 ## Live flow panel
 
 Run `/braid` to open the newest job, or `/braid <jobId>` to open a specific job.
-The panel refreshes as nodes start, finish, fail, and pass outputs downstream.
+The bordered panel keeps the job header and keyboard controls visible while
+you scroll the flow and event log. It refreshes as nodes start, finish, fail,
+and pass outputs downstream.
 Use Left/Right to select jobs, Up/Down or Page Up/Page Down to scroll, `c` to
 cancel the selected job, and Escape or `q` to close the panel. Closing the panel
 leaves jobs running. In RPC or noninteractive modes, use `braid_status`.

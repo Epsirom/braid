@@ -46,7 +46,10 @@ test(
     assert.match(lines.join("\n"), /Second goal/);
     assert.match(lines.join("\n"), /▶ ACTIVE/);
     assert.ok(lines.length <= 28);
-    assert.ok(lines.every((line) => visibleWidth(line) <= 100));
+    assert.ok(lines.every((line) => visibleWidth(line) === 100));
+    assert.match(lines[0]!, /^╭.*╮$/);
+    assert.match(lines.at(-1)!, /^╰─+╯$/);
+    assert.match(lines.at(-2)!, /Esc close/);
     panel.handleInput("\x1b[C");
     assert.match(panel.render(100).join("\n"), new RegExp(first.jobId));
     panel.handleInput("c");
@@ -75,13 +78,17 @@ test("panel handles empty jobs, narrow terminals, and completed results", async 
   assert.match(panel.render(100).join("\n"), /No Braid jobs/);
   panel.handleInput("\x1b[C");
   const job = jobs.start(
-    input,
+    { ...input, goal: "Review 中文 layout 🚀 with long labels" },
     {},
     context(async () => response()),
   );
   await jobs.wait(job.jobId);
   assert.match(panel.render(100).join("\n"), /completed/);
-  assert.ok(panel.render(20).every((line) => visibleWidth(line) <= 20));
+  for (const width of [20, 40, 100]) {
+    const lines = panel.render(width);
+    assert.ok(lines.every((line) => visibleWidth(line) === width));
+    assert.match(lines.at(-1)!, /^╰─+╯$/);
+  }
 });
 
 test("/braid opens the panel in an overlay and disposes it after close", async () => {
@@ -119,6 +126,11 @@ test("/braid opens the panel in an overlay and disposes it after close", async (
     },
   });
   assert.equal((options as { overlay: boolean }).overlay, true);
+  assert.equal(
+    (options as { overlayOptions: { maxHeight: string } }).overlayOptions
+      .maxHeight,
+    "90%",
+  );
   await assert.rejects(handler("", { mode: "rpc" }), /interactive Pi/);
   jobs.dispose();
 });
@@ -147,13 +159,13 @@ test("panel scrolls long execution logs within the terminal viewport", async (t)
   );
   t.after(() => panel.dispose());
   const initial = panel.render(100);
-  assert.match(initial.at(-1)!, /Lines 1–/);
+  assert.match(initial.at(-3)!, /Lines 1–/);
   panel.handleInput("\x1b[6~");
   const scrolled = panel.render(100);
-  assert.match(scrolled.at(-1)!, /Lines 11–/);
+  assert.match(scrolled.at(-3)!, /Lines 11–/);
   assert.ok(scrolled.length <= 16);
   panel.handleInput("\x1b[A");
-  assert.match(panel.render(100).at(-1)!, /Lines 10–/);
+  assert.match(panel.render(100).at(-3)!, /Lines 10–/);
   panel.handleInput("\x1b[5~");
-  assert.match(panel.render(100).at(-1)!, /Lines 1–/);
+  assert.match(panel.render(100).at(-3)!, /Lines 1–/);
 });
