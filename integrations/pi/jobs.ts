@@ -20,6 +20,7 @@ import {
   type BraidLiveState,
 } from "./display.js";
 import { createPiRunner, sumPiUsage } from "./runner.js";
+import type { PiNodeWorkspace } from "./workspaces.js";
 
 export interface JobOptions {
   maxConcurrency?: number;
@@ -30,6 +31,8 @@ export interface JobOptions {
 }
 
 export interface JobSnapshot {
+  /** Short exact alias scoped to this session. UUID jobId remains supported. */
+  handle: string;
   jobId: string;
   goal: string;
   status: "running" | "completed" | "failed" | "cancelled";
@@ -39,6 +42,8 @@ export interface JobSnapshot {
   error?: string;
   fullOutputPath?: string;
   usage?: Usage;
+  /** Core workspace lifecycle, including recovery refs for failed and cancelled nodes. */
+  workspaces?: Record<string, PiNodeWorkspace>;
 }
 
 interface Job extends JobSnapshot {
@@ -50,6 +55,8 @@ interface Job extends JobSnapshot {
 /** Jobs belong to one extension/session lifetime, independently of foreground turns. */
 export class BraidJobs {
   private jobs = new Map<string, Job>();
+  private handles = new Map<string, string>();
+  private nextHandle = 1;
   private listeners = new Set<() => void>();
   private disposed = false;
 
@@ -89,6 +96,7 @@ export class BraidJobs {
     const registry = ctx.modelRegistry;
     const cwd = ctx.cwd;
     const job: Job = {
+      handle: `job-${this.nextHandle++}`,
       jobId: crypto.randomUUID(),
       goal: snapshot.goal,
       status: "running",
@@ -99,6 +107,7 @@ export class BraidJobs {
       usageClaimed: false,
     };
     this.jobs.set(job.jobId, job);
+    this.handles.set(job.handle, job.jobId);
     job.done = this.run(job, snapshot, settings, registry, cwd, model);
     this.changed();
     return this.get(job.jobId)!;
@@ -118,6 +127,7 @@ export class BraidJobs {
       await nextTurn();
       job.result = await braid(input, {
         ...options,
+        cwd,
         nodeTimeoutMs: options.nodeTimeoutMs ?? Infinity,
         graphTimeoutMs: options.graphTimeoutMs ?? Infinity,
         signal: job.controller.signal,
@@ -138,6 +148,12 @@ export class BraidJobs {
           },
         }),
         onEvent: (event) => {
+          if (event.type === "workspace_updated") {
+            job.workspaces ??= {};
+            Object.defineProperty(job.workspaces, event.workspace.nodeId, {
+              value: { ...event.workspace }, enumerable: true, configurable: true, writable: true,
+            });
+          }
           applyEvent(job.live, event);
           this.changed();
         },
@@ -149,7 +165,7 @@ export class BraidJobs {
         job.result.error?.code === "CANCELLED"
           ? "cancelled"
           : job.result.status;
-      const full = JSON.stringify(job.result, null, 2);
+      const full = JSON.stringify({ ...job.result, workspaces: job.workspaces }, null, 2);
       const preview = JSON.stringify(
         { ...this.get(job.jobId), status },
         null,
@@ -177,8 +193,17 @@ export class BraidJobs {
     }
   }
 
+  private lookup(jobId: string): Job | undefined {
+    return this.jobs.get(this.handles.get(jobId) ?? jobId);
+  }
+
+  unknownJob(jobId: string): Error {
+    const available = this.list().slice(0, 8).map(job => ({ jobId: job.handle, status: job.status }));
+    return new Error(`Unknown Braid job: ${jobId}. Exact session handles or UUIDs are required; IDs are never guessed. Available jobs: ${JSON.stringify(available)}. Omit jobId in braid_status to list all session jobs.`);
+  }
+
   get(jobId: string): JobSnapshot | undefined {
-    const job = this.jobs.get(jobId);
+    const job = this.lookup(jobId);
     if (!job) return undefined;
     const {
       controller: _controller,
@@ -194,10 +219,11 @@ export class BraidJobs {
     return copy;
   }
 
-  list(): Pick<JobSnapshot, "jobId" | "goal" | "status" | "createdAt">[] {
+  list(): Pick<JobSnapshot, "jobId" | "handle" | "goal" | "status" | "createdAt">[] {
     return [...this.jobs.values()]
-      .map(({ jobId, goal, status, createdAt }) => ({
+      .map(({ jobId, handle, goal, status, createdAt }) => ({
         jobId,
+        handle,
         goal,
         status,
         createdAt,
@@ -206,8 +232,8 @@ export class BraidJobs {
   }
 
   cancel(jobId: string): boolean {
-    const job = this.jobs.get(jobId);
-    if (!job) throw new Error(`Unknown Braid job: ${jobId}`);
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
     if (job.status !== "running") return false;
     job.controller.abort();
     return true;
@@ -215,7 +241,7 @@ export class BraidJobs {
 
   /** Pi accounts usage only once, on the first retrieval of a terminal result. */
   claimUsage(jobId: string): Usage | undefined {
-    const job = this.jobs.get(jobId);
+    const job = this.lookup(jobId);
     if (!job || job.status === "running" || job.usageClaimed || !job.usage)
       return undefined;
     job.usageClaimed = true;
@@ -223,8 +249,8 @@ export class BraidJobs {
   }
 
   async wait(jobId: string): Promise<void> {
-    const job = this.jobs.get(jobId);
-    if (!job) throw new Error(`Unknown Braid job: ${jobId}`);
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
     await job.done;
   }
 

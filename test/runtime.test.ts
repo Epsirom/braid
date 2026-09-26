@@ -2,12 +2,11 @@ import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import test from "node:test";
 import {
-  braid,
   type ModelRequest,
   type ModelResponse,
   type ModelRunner,
 } from "../src/index.js";
-import { decision, deferred, execute, graph } from "./helpers.js";
+import { braid, decision, deferred, execute, graph } from "./helpers.js";
 
 const bounds = { timeout: 2_000 };
 const echo: ModelRunner = async (request) => ({ output: request.node.id });
@@ -444,13 +443,17 @@ for (const [name, choose, code] of [
   ],
 ] as const) {
   test(
-    `${name} decide calls fail the node and block descendants`,
+    `${name} decide calls fail the node and pass errors to unconditional descendants`,
     bounds,
     async () => {
       const result = await braid(
         graph([decision(), execute("child")], [{ from: "route", to: "child" }]),
         {
           runner: async (request) => {
+            if (request.node.id === "child") {
+              assert.equal(request.predecessors[0]!.error!.code, code);
+              return { output: "Recovered" };
+            }
             assert.equal(request.node.id, "route");
             choose(request);
             return {
@@ -462,8 +465,8 @@ for (const [name, choose, code] of [
       );
       assert.equal(result.status, "failed");
       assert.equal(result.nodes.route!.error!.code, code);
-      assert.equal(result.nodes.child!.skipReason, "upstream_failed");
-      assert.deepEqual(result.terminalOutputs, {});
+      assert.equal(result.nodes.child!.status, "completed");
+      assert.deepEqual(result.terminalOutputs, { child: { output: "Recovered" } });
       if (name === "missing" || name === "caught invalid") {
         assert.equal(result.nodes.route!.output, "Explanation");
         assert.deepEqual(result.metadata.usage, {
@@ -506,7 +509,7 @@ test(
 );
 
 test(
-  "failures block dependent joins transitively while independent terminal outputs survive",
+  "failures pass through dependent joins while independent terminal outputs survive",
   bounds,
   async () => {
     const calls: string[] = [];
@@ -532,22 +535,24 @@ test(
           calls.push(request.node.id);
           if (request.node.id === "bad")
             throw new Error("provider unavailable");
+          if (request.node.id === "dependent")
+            assert.equal(request.predecessors[0]!.error!.message, "provider unavailable");
           return { output: request.node.id };
         },
       },
     );
-    assert.deepEqual(calls, ["bad", "good", "independent"]);
+    assert.deepEqual(calls, ["bad", "good", "independent", "dependent", "join", "tail"]);
     assert.equal(result.status, "failed");
     assert.deepEqual(result.nodes.bad!.error, {
       code: "MODEL_ERROR",
       message: "provider unavailable",
     });
     for (const id of ["dependent", "join", "tail"]) {
-      assert.equal(result.nodes[id]!.status, "skipped");
-      assert.equal(result.nodes[id]!.skipReason, "upstream_failed");
+      assert.equal(result.nodes[id]!.status, "completed");
     }
     assert.deepEqual(result.terminalOutputs, {
       independent: { output: "independent" },
+      tail: { output: "tail" },
     });
   },
 );
@@ -645,7 +650,7 @@ test(
 );
 
 test(
-  "node timeout aborts its signal, blocks descendants, and ignores a late response",
+  "node timeout aborts its signal, passes the failure onward, and ignores a late response",
   bounds,
   async () => {
     const late = deferred<ModelResponse>();
@@ -659,6 +664,10 @@ test(
         nodeTimeoutMs: 25,
         runner: async (invocation) => {
           if (invocation.node.id === "good") return { output: "good" };
+          if (invocation.node.id === "child") {
+            assert.equal(invocation.predecessors[0]!.error!.code, "NODE_TIMEOUT");
+            return { output: "Recovered" };
+          }
           request = invocation;
           return late.promise; // Deliberately ignores the abort signal.
         },
@@ -667,8 +676,8 @@ test(
     assert.equal(result.status, "failed");
     assert.equal(result.nodes.route!.error!.code, "NODE_TIMEOUT");
     assert.equal(request.signal.aborted, true);
-    assert.equal(result.nodes.child!.skipReason, "upstream_failed");
-    assert.deepEqual(result.terminalOutputs, { good: { output: "good" } });
+    assert.equal(result.nodes.child!.status, "completed");
+    assert.deepEqual(result.terminalOutputs, { good: { output: "good" }, child: { output: "Recovered" } });
     const snapshot = structuredClone(result);
     assert.throws(() => request.decide!("left"), /after invocation ended/);
     late.resolve({

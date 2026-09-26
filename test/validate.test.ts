@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  braid,
   GraphValidationError,
   validateGraph,
   type BraidInput,
   type BraidOptions,
 } from "../src/index.js";
-import { decision, execute, graph } from "./helpers.js";
+import { braid, decision, execute, graph } from "./helpers.js";
 
 const invalid: [string, unknown][] = [
   ["null graph", null],

@@ -246,3 +246,26 @@ test(
     assert.match(output, /Full result\/log:/);
   },
 );
+
+test("short handles resolve exactly across status, cancellation, waiting, and usage without fuzzy matching", bounds, async (t) => {
+  const ready = deferred<void>();
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const done = jobs.start(input, {}, context(async () => response("done")));
+  const running = jobs.start(input, {}, context(async () => { ready.resolve(); return new Promise(() => {}); }));
+  assert.equal(done.handle, "job-1");
+  assert.equal(running.handle, "job-2");
+  await jobs.wait("job-1");
+  await ready.promise;
+  assert.equal(jobs.get("job-1")!.jobId, done.jobId);
+  assert.equal(jobs.get(done.jobId)!.handle, "job-1");
+  assert.equal(jobs.get("job-01"), undefined);
+  assert.equal(jobs.get(done.jobId.slice(0, -1)), undefined);
+  assert.match(jobs.unknownJob("job-01").message, /job-1.*completed/);
+  assert.match(jobs.unknownJob("job-01").message, /job-2.*running/);
+  assert.ok(jobs.claimUsage("job-1"));
+  assert.equal(jobs.claimUsage(done.jobId), undefined);
+  assert.equal(jobs.cancel("job-2"), true);
+  await jobs.wait("job-2");
+  assert.equal(jobs.get(running.jobId)!.status, "cancelled");
+});

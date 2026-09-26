@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { braid, type ModelRequest } from "../src/index.js";
-import { deferred, execute, graph } from "./helpers.js";
+import { type ModelRequest } from "../src/index.js";
+import { braid, deferred, execute, graph } from "./helpers.js";
 
 test("pre-cancelled graphs skip all nodes without invoking the runner", async () => {
   const controller = new AbortController();

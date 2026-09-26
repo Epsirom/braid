@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { braid, type BraidInput } from "../src/index.js";
+import { type BraidInput } from "../src/index.js";
 import { createOpenAICompatibleRunner } from "../src/adapters/openai.js";
-import { decision, execute, graph } from "./helpers.js";
+import { braid, decision, execute, graph } from "./helpers.js";
 
 type WireMessage = {
   role: string;
@@ -302,8 +302,8 @@ for (const [name, responses, expectedCode, node] of [
     execute("route"),
   ],
 ] as const) {
-  test(`adapter rejects ${name} without retrying or running children`, async () => {
-    const mock = queuedFetch([...responses]);
+  test(`adapter rejects ${name} and passes the failure to children without retrying`, async () => {
+    const mock = queuedFetch([...responses, completion("Recovered")]);
     const result = await braid(
       graph([node, execute("child")], [{ from: "route", to: "child" }]),
       {
@@ -315,9 +315,11 @@ for (const [name, responses, expectedCode, node] of [
     );
     assert.equal(result.status, "failed");
     assert.equal(result.nodes.route!.error!.code, expectedCode);
-    assert.equal(result.nodes.child!.skipReason, "upstream_failed");
-    assert.equal(mock.calls.length, responses.length);
-    assert.deepEqual(result.terminalOutputs, {});
+    assert.equal(result.nodes.child!.status, "completed");
+    assert.equal(mock.calls.length, responses.length + 1);
+    const payload = JSON.parse(mock.calls.at(-1)!.messages[1]!.content!);
+    assert.equal(payload.predecessors[0].error.code, expectedCode);
+    assert.equal(result.terminalOutputs.child!.output, "Recovered");
   });
 }
 
@@ -367,4 +369,65 @@ test("adapter forwards cancellation to fetch", { timeout: 2_000 }, async () => {
   });
   assert.equal(result.nodes.a!.error!.code, "NODE_TIMEOUT");
   assert.equal(aborted, true);
+});
+
+test("OpenAI merge tools expose agent-selected Git operations and finish dispositions", async () => {
+  const fake = queuedFetch([
+    completion("Inspect first", [toolCall('{"command":"status","args":["--short"]}', "git")]),
+    completion(null, [toolCall('{"command":"cherry-pick","args":["checkpoint"]}', "git")]),
+    completion(null, [toolCall('{"dispositions":[{"nodeId":"work","disposition":"integrated","reason":"Reviewed and picked"}]}', "finish_merge")]),
+    completion("Integrated"),
+  ]);
+  const gitCalls: string[][] = [];
+  const dispositions: unknown[] = [];
+  const runner = createOpenAICompatibleRunner({ defaultModel: "fake", fetch: fake.fetch });
+  const result = await runner({
+    goal: "Integrate reviewed work", node: { type: "merge", id: "merge" },
+    predecessors: [], execution: { runId: "run", rootRunId: "run" }, signal: new AbortController().signal,
+    workspace: { nodeId: "merge", mode: "merge", sourceRoot: "/repo", workingDirectory: "/repo", state: "ready" },
+    git: async args => { gitCalls.push(args); return { exitCode: 0, stdout: "", stderr: "" }; },
+    merge: {
+      sources: [{ nodeId: "work", mode: "worktree", workingDirectory: "/work", state: "ready", checkpointRef: "checkpoint",
+        changes: { files: ["chosen.txt"], filesTruncated: false, stat: { text: "1 file changed", truncated: false }, diff: { text: "+chosen change", truncated: false } } }],
+      sourceStatus: { text: " M user.txt\n", truncated: false, dirty: true },
+      finish: async values => { dispositions.push(...values); },
+    },
+  });
+  assert.deepEqual(gitCalls, [["status", "--short"], ["cherry-pick", "checkpoint"]]);
+  assert.deepEqual(dispositions, [{ nodeId: "work", disposition: "integrated", reason: "Reviewed and picked" }]);
+  assert.equal(result.output, "Inspect first\n\nIntegrated");
+  assert.deepEqual(result.usage, { inputTokens: 40, outputTokens: 8 });
+  assert.deepEqual(fake.calls[0]!.tools!.map(tool => tool.function.name), ["git", "finish_merge"]);
+  assert.equal(fake.calls[0]!.tool_choice, "auto");
+  assert.match(fake.calls[0]!.messages[0]!.content!, /core has not merged anything/);
+  assert.match(fake.calls[0]!.messages[0]!.content!, /Only process the current mergeSources IDs \["work"\]/);
+  const payload = JSON.parse(fake.calls[0]!.messages[1]!.content!);
+  assert.deepEqual(payload.mergeSources[0].changes.files, ["chosen.txt"]);
+  assert.equal(payload.sourceCheckoutStatus.dirty, true);
+  const finishSchema = fake.calls[0]!.tools![1]!.function.parameters as unknown as {
+    properties: { dispositions: { minItems: number; maxItems: number; items: { properties: { nodeId: { enum: string[] } } } } };
+  };
+  assert.equal(finishSchema.properties.dispositions.minItems, 1);
+  assert.equal(finishSchema.properties.dispositions.maxItems, 1);
+  assert.deepEqual(finishSchema.properties.dispositions.items.properties.nodeId.enum, ["work"]);
+  assert.equal(fake.calls[3]!.messages.filter(message => message.role === "tool").length, 3);
+});
+
+test("OpenAI rejects duplicate Git commands before invoking the runner capability", async () => {
+  const fake = queuedFetch([
+    completion(null, [toolCall('{"command":"status","args":["status"]}', "git")]),
+    completion(null, [toolCall('{"command":"status","args":["--short"]}', "git")]),
+    completion(null, [toolCall('{"dispositions":[]}', "finish_merge")]),
+    completion("Dirty checkout confirmed"),
+  ]);
+  const calls: string[][] = [];
+  await createOpenAICompatibleRunner({ defaultModel: "fake", fetch: fake.fetch })({
+    goal: "Inspect", node: { type: "merge", id: "work", prompt: "Inspect status" },
+    predecessors: [], execution: { runId: "run", rootRunId: "run" }, signal: new AbortController().signal,
+    git: async args => { calls.push(args); return { exitCode: 0, stdout: "?? change.txt\n", stderr: "" }; },
+    merge: { sources: [], finish: async () => {} },
+  });
+  assert.deepEqual(calls, [["status", "--short"]]);
+  assert.match(fake.calls[1]!.messages.at(-1)!.content!, /DUPLICATE_GIT_COMMAND/);
+  assert.match(fake.calls[2]!.messages.at(-1)!.content!, /change.txt/);
 });

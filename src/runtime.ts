@@ -12,6 +12,8 @@ import type {
   PredecessorOutput,
 } from "./types.js";
 import { compileGraph, type Graph } from "./validate.js";
+import { GitWorkspaces } from "./workspaces.js";
+import { resolve } from "node:path";
 
 class RunError extends Error {
   constructor(
@@ -38,6 +40,8 @@ function describeError(error: unknown): ExecutionError {
 function validateOptions(options: BraidOptions): void {
   if (!options || typeof options.runner !== "function")
     throw new TypeError("A model runner is required");
+  if (options.cwd !== undefined && (typeof options.cwd !== "string" || !options.cwd.trim()))
+    throw new TypeError("cwd must be a non-empty directory path");
   if (
     options.defaultModel !== undefined &&
     (typeof options.defaultModel !== "string" || !options.defaultModel.trim())
@@ -100,6 +104,7 @@ function createEventLog(onEvent?: BraidOptions["onEvent"]): EventLog {
       if ("error" in event) Object.freeze(event.error);
       if ("usage" in event && event.usage) Object.freeze(event.usage);
       if ("terminalNodeIds" in event) Object.freeze(event.terminalNodeIds);
+      if ("workspace" in event) Object.freeze(event.workspace);
       events.push(event);
       if (onEvent) {
         try {
@@ -121,7 +126,7 @@ function edgeState(edge: Edge, results: Map<string, NodeResult>): EdgeState {
         ? "active"
         : "inactive";
     case "failed":
-      return "blocked";
+      return edge.choice === undefined ? "active" : "blocked";
     case "skipped":
       // Failure is not inactivity: a downstream join must not silently lose required input.
       return source.skipReason === "inactive" ? "inactive" : "blocked";
@@ -164,8 +169,8 @@ function resolveDependencies(
 }
 
 function nodeOutput(result: NodeResult): NodeOutput {
-  // Only called for completed nodes, whose response has already been validated.
-  const output: NodeOutput = { output: result.output! };
+  // Failed predecessors can have no valid response; preserve their error separately.
+  const output: NodeOutput = { output: result.output ?? "" };
   if (result.decision !== undefined) output.decision = result.decision;
   if (result.model !== undefined) output.model = result.model;
   return output;
@@ -186,6 +191,8 @@ function predecessorOutputs(
   return [...activeIds].map((nodeId) => ({
     nodeId,
     ...nodeOutput(results.get(nodeId)!),
+    ...(results.get(nodeId)!.error ? { error: { ...results.get(nodeId)!.error! } } : {}),
+    ...(results.get(nodeId)!.workspace ? { workspace: { ...results.get(nodeId)!.workspace! } } : {}),
   }));
 }
 
@@ -224,6 +231,7 @@ async function runNode(
   graphSignal: AbortSignal,
   graphDeadline: number,
   log: EventLog,
+  workspaces: GitWorkspaces,
 ): Promise<void> {
   result.status = "running";
   result.startedAt = Date.now();
@@ -243,6 +251,10 @@ async function runNode(
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) onAbort();
   });
+  void aborted.catch(() => {});
+  let acceptingWrites = true;
+  const writes = new Set<Promise<unknown>>();
+  let merge: Awaited<ReturnType<GitWorkspaces["beginMerge"]>> | undefined;
   let acceptingDecisions = true;
   let decision: string | undefined;
   let decisionError: RunError | undefined;
@@ -250,6 +262,17 @@ async function runNode(
   const choices =
     request.node.type === "decision" ? [...request.node.choices] : undefined;
   const invocation: ModelRequest = { ...request, signal };
+  invocation.withWorkspaceWrite = async operation => {
+    signal.throwIfAborted();
+    if (!acceptingWrites) throw new Error("Node has finished; further writes are unavailable");
+    const pending = Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return operation();
+    });
+    writes.add(pending);
+    try { return await pending; }
+    finally { writes.delete(pending); }
+  };
   if (Number.isFinite(timeoutMs) || Number.isFinite(graphDeadline)) {
     invocation.deadlines = {
       ...(Number.isFinite(timeoutMs) ? { node: started + timeoutMs } : {}),
@@ -297,6 +320,19 @@ async function runNode(
   }
 
   try {
+    checkDeadline();
+    if (request.node.type === "merge") {
+      merge = await workspaces.beginMerge(invocation, request.predecessors.map(value => value.nodeId));
+      invocation.merge = { sources: structuredClone(merge.sources),
+        ...(merge.sourceStatus ? { sourceStatus: structuredClone(merge.sourceStatus) } : {}), finish: merge.finish };
+    } else {
+      invocation.workspace = await workspaces.prepare(invocation);
+    }
+    invocation.workspace = structuredClone(invocation.workspace!);
+    if (invocation.workspace?.sourceRoot) {
+      const gitRequest = { ...invocation, node: structuredClone(invocation.node), workspace: structuredClone(invocation.workspace) };
+      invocation.git = (args, input) => workspaces.git(gitRequest, args, input);
+    }
     // The rejection handler remains attached if a non-cooperative runner finishes late.
     const response = await Promise.race([
       aborted,
@@ -342,6 +378,15 @@ async function runNode(
     result.error = describeError(error);
   } finally {
     acceptingDecisions = false;
+    acceptingWrites = false;
+    await Promise.allSettled(writes);
+    if (merge) {
+      try { await merge.complete(result.status === "completed"); }
+      catch (error) {
+        result.status = "failed";
+        result.error = { code: "MERGE_FAILED", message: error instanceof Error ? error.message : String(error) };
+      }
+    }
     if (decision !== undefined) result.decision = decision;
     clearTimeout(timer);
     signal.removeEventListener("abort", onAbort!);
@@ -363,7 +408,7 @@ async function runNode(
   }
 }
 
-/** Submit one complete, immutable DAG. Validation errors throw; execution failures return results. */
+/** Submit a complete DAG; core may append a final merge node for pending worktrees. */
 export async function braid(
   input: BraidInput,
   options: BraidOptions,
@@ -412,7 +457,15 @@ export async function braid(
       return [node.id, result];
     }),
   );
+  const workspaces = new GitWorkspaces(resolve(options.cwd ?? process.cwd()), workspace => {
+    if (workspace.mode === "read-only") return;
+    const node = results.get(workspace.nodeId);
+    if (node) node.workspace = { ...workspace };
+    log.emit({ type: "workspace_updated", workspace: { ...workspace } });
+  });
   const running = new Map<string, Promise<void>>();
+  let automaticMergeAdded = false;
+  let cleanupError: ExecutionError | undefined;
   const controller = new AbortController();
   const graphTimeout = new RunError(
     "GRAPH_TIMEOUT",
@@ -446,6 +499,10 @@ export async function braid(
         if (running.size >= maxConcurrency) break;
         const result = results.get(node.id)!;
         if (result.status !== "runnable") continue;
+        // A merge owns the source checkout and may remove predecessors. Let
+        // currently running consumers finish first, and admit no workers during it.
+        if ([...running.keys()].some(id => graph.nodes.find(value => value.id === id)?.type === "merge")) break;
+        if (node.type === "merge" && running.size > 0) continue;
         const predecessors = predecessorOutputs(graph, node.id, results);
         const request: Omit<ModelRequest, "signal" | "decide"> = {
           goal: graph.goal,
@@ -462,17 +519,48 @@ export async function braid(
           controller.signal,
           graphDeadline,
           log,
+          workspaces,
         ).finally(() => {
           running.delete(node.id);
         });
         running.set(node.id, task);
       }
-      if (running.size === 0) break;
+      if (running.size === 0) {
+        const pending = workspaces.pending();
+        if (!automaticMergeAdded && pending.length) {
+          automaticMergeAdded = true;
+          let id = "__braid_merge__";
+          while (results.has(id)) id += "_";
+          const node = { type: "merge" as const, id, prompt: "Review every remaining node checkpoint, including partial work from failed nodes. Decide whether to integrate each change using git merge, cherry-pick, apply, or another available local operation. Preserve the user's existing changes. Call finish_merge to account for every source." };
+          graph.nodes.push(node);
+          graph.topologicalOrder.push(node);
+          graph.incoming.set(id, pending.map(from => ({ from, to: id })));
+          graph.outgoing.set(id, []);
+          for (const edge of graph.incoming.get(id)!) {
+            graph.edges.push(edge);
+            graph.outgoing.get(edge.from)!.push(edge);
+          }
+          results.set(id, { id, status: "pending", ...(defaultModel ? { model: defaultModel } : {}) });
+          log.emit({ type: "node_created", nodeId: id, nodeType: "merge", ...(defaultModel ? { model: defaultModel } : {}) });
+          for (const edge of graph.incoming.get(id)!) log.emit({ type: "edge_created", ...edge });
+          continue;
+        }
+        break;
+      }
       await Promise.race(running.values());
     }
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onCancel);
+    try {
+      await workspaces.archivePending("Run ended before an agent integrated these changes; recover them from checkpointRef");
+    } catch (error) {
+      cleanupError = { code: "CLEANUP_FAILED", message: error instanceof Error ? error.message : String(error) };
+    }
+    try { await workspaces.close(); }
+    catch (error) {
+      cleanupError ??= { code: "CLEANUP_FAILED", message: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   const terminalOutputs = Object.fromEntries(
@@ -495,14 +583,15 @@ export async function braid(
       usageReportedNodes++;
     }
   }
-  const error = controller.signal.aborted
+  const error = cleanupError ?? (controller.signal.aborted
     ? describeError(controller.signal.reason)
-    : [...results.values()].find((result) => result.status === "failed")?.error;
+    : [...results.values()].find((result) => result.status === "failed")?.error);
   const result: BraidResult = {
     status: error ? "failed" : "completed",
     terminalOutputs,
     events: [],
     nodes: Object.fromEntries(results),
+    ...(Object.values(workspaces.all()).some(value => value.mode !== "read-only") ? { workspaces: workspaces.all() } : {}),
     metadata: {
       ...execution,
       startedAt,

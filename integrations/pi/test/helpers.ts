@@ -1,5 +1,14 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after } from "node:test";
+
+// General provider/job tests use a real non-Git directory. Git worktree behavior
+// has separate integration fixtures, so tests never register worktrees in this repo.
+export const readOnlyCwd = mkdtempSync(join(tmpdir(), "braid-read-only-test-"));
+after(() => rmSync(readOnlyCwd, { recursive: true, force: true }));
 
 export function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -36,7 +45,7 @@ export function context(
 ): ExtensionContext {
   const model = { provider: "fake", id: "model", contextWindow: 100_000 };
   return {
-    cwd: process.cwd(),
+    cwd: readOnlyCwd,
     model,
     mode: "tui",
     hasUI: true,

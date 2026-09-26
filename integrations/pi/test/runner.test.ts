@@ -7,6 +7,10 @@ import { createPiRunner, sumPiUsage } from "../runner.js";
 import type { ModelRequest } from "../../../dist/index.js";
 import type { AssistantMessage, Context, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { createAvailableReadTools } from "../read-tools.js";
+import { readOnlyCwd } from "./helpers.js";
+
+const readToolNames = (await createAvailableReadTools(readOnlyCwd)).tools.map(tool => tool.name);
 
 const model = {
   provider: "fake",
@@ -86,7 +90,7 @@ for (const options of [{}, { maxToolRounds: Infinity, maxToolCalls: Infinity }])
       ...Array.from({ length: 13 }, () => reads(3)),
       message([{ type: "text", text: "Finished after 39 calls" }]),
     ]);
-    const output = await createPiRunner(fake.registry, options)(
+    const output = await createPiRunner(fake.registry, { ...options, cwd: readOnlyCwd })(
       request({ type: "execute", id: "work", prompt: "Work" }),
     );
     assert.equal(output.output, "Finished after 39 calls");
@@ -99,7 +103,7 @@ for (const options of [{}, { maxToolRounds: Infinity, maxToolCalls: Infinity }])
 
 test("finite tool budgets refresh the system reminder and allow a final answer at the cap", async () => {
   const fake = fakeRegistry([reads(2), message([{ type: "text", text: "Done" }])]);
-  const output = await createPiRunner(fake.registry, { maxToolRounds: 1, maxToolCalls: 2 })(
+  const output = await createPiRunner(fake.registry, { cwd: readOnlyCwd, maxToolRounds: 1, maxToolCalls: 2 })(
     request({ type: "execute", id: "work", prompt: "Work" }),
   );
   assert.equal(output.output, "Done");
@@ -118,7 +122,7 @@ for (const scenario of [
 ]) {
   test(`finite tool budget is enforced: ${JSON.stringify(scenario.options)}`, async () => {
     const fake = fakeRegistry(scenario.responses);
-    await assert.rejects(createPiRunner(fake.registry, scenario.options)(
+    await assert.rejects(createPiRunner(fake.registry, { ...scenario.options, cwd: readOnlyCwd })(
       request({ type: "execute", id: "work", prompt: "Work" }),
     ), /exceeded its tool budget/);
     assert.equal(fake.contexts.length, scenario.completions);
@@ -140,7 +144,7 @@ test("decision calls count toward finite budgets and can finish at the cap", asy
     message([{ type: "text", text: "Go" }]),
   ]);
   const choices: string[] = [];
-  const output = await createPiRunner(fake.registry, { maxToolRounds: 1, maxToolCalls: 1 })({
+  const output = await createPiRunner(fake.registry, { cwd: readOnlyCwd, maxToolRounds: 1, maxToolCalls: 1 })({
     ...request({ type: "decision", id: "route", prompt: "Choose", choices: ["go"] }),
     decide: choice => { choices.push(choice); },
   });
@@ -159,7 +163,7 @@ test("time reminders refresh before each model call", async (t) => {
     now += 100;
     return response;
   });
-  await createPiRunner(fake.registry)({
+  await createPiRunner(fake.registry, { cwd: readOnlyCwd })({
     ...request({ type: "execute", id: "work", prompt: "Work" }),
     deadlines: { node: 1_000, graph: 2_000 },
   });
@@ -197,6 +201,7 @@ test("Pi runner uses exact model lookup, fresh context, decide, and one bounded 
     phase: string;
   }[] = [];
   const runner = createPiRunner(fake.registry, {
+    cwd: readOnlyCwd,
     onUsage: (report) => reports.push(report),
     onProgress: (update) => progress.push(update),
   });
@@ -224,9 +229,9 @@ test("Pi runner uses exact model lookup, fresh context, decide, and one bounded 
   assert.equal(fake.contexts.length, 2);
   const first = fake.contexts[0] as { tools: unknown[]; messages: unknown[] };
   const second = fake.contexts[1] as { tools: unknown[]; messages: unknown[] };
-  assert.equal(first.tools.length, 5); // read, grep, find, ls, decide
+  assert.equal(first.tools.length, readToolNames.length + 1);
   assert.equal((first.tools as { name: string }[]).at(-1)?.name, "decide");
-  assert.equal(second.tools.length, 4); // read-only tools remain available for the follow-up
+  assert.equal(second.tools.length, readToolNames.length);
   assert.equal(first.messages.length, 1);
   assert.equal(second.messages.length, 3);
   assert.deepEqual(
@@ -258,7 +263,7 @@ test("Pi runner uses exact model lookup, fresh context, decide, and one bounded 
 
 test("Pi runner gives execute nodes read-only filesystem tools and refuses non-provider model names", async () => {
   const fake = fakeRegistry([message([{ type: "text", text: "done" }])]);
-  const runner = createPiRunner(fake.registry);
+  const runner = createPiRunner(fake.registry, { cwd: readOnlyCwd });
   const output = await runner(
     request({ type: "execute", id: "work", prompt: "Work" }),
   );
@@ -267,7 +272,7 @@ test("Pi runner gives execute nodes read-only filesystem tools and refuses non-p
     (fake.contexts[0] as { tools: { name: string }[] }).tools.map(
       (tool) => tool.name,
     ),
-    ["read", "grep", "find", "ls"],
+    readToolNames,
   );
   await assert.rejects(
     runner({
@@ -317,7 +322,7 @@ test("Pi runner executes read-only node tools and returns their results to the m
   );
   assert.deepEqual(
     followUp.tools.map((tool) => tool.name),
-    ["read", "grep", "find", "ls"],
+    readToolNames,
   );
 });
 
@@ -338,7 +343,7 @@ test("Pi runner keeps write and shell tools unavailable", async () => {
       { type: "text", text: "I cannot write files from a Braid node." },
     ]),
   ]);
-  const runner = createPiRunner(fake.registry, undefined, process.cwd());
+  const runner = createPiRunner(fake.registry, undefined, readOnlyCwd);
   const output = await runner(
     request({ type: "execute", id: "safe", prompt: "Do not edit anything." }),
   );
@@ -360,7 +365,7 @@ test("Pi runner keeps write and shell tools unavailable", async () => {
     (fake.contexts[0] as { tools: { name: string }[] }).tools.map(
       (tool) => tool.name,
     ),
-    ["read", "grep", "find", "ls"],
+    readToolNames,
   );
 });
 

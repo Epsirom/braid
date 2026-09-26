@@ -54,6 +54,9 @@ test("extension registers background tools, a panel command, and guidance to wai
     /two or more concerns can be analyzed independently/,
   );
   assert.match(prompt.systemPrompt, /do not poll repeatedly/);
+  assert.match(prompt.systemPrompt, /individual writable worktree/);
+  assert.match(prompt.systemPrompt, /Outside Git, nodes have read and ls, plus grep\/find when their local dependencies are available/);
+  assert.match(prompt.systemPrompt, /Merge nodes operate in the source checkout/);
   assert.match(
     prompt.systemPrompt,
     /Completion reminders refer to existing jobs/,
@@ -86,7 +89,7 @@ for (const idle of [true, false]) {
       assert.match(String(message.content), /system-reminder/);
       assert.match(
         String(message.content),
-        new RegExp(submitted.details!.jobId),
+        new RegExp(submitted.details!.handle),
       );
       assert.match(String(message.content), /braid_status/);
       assert.deepEqual(options, { triggerTurn: true, deliverAs: "followUp" });

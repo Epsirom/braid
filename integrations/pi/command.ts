@@ -33,7 +33,7 @@ export class BraidPanel implements Component {
     private readonly done: () => void,
     jobId?: string,
   ) {
-    this.selected = jobId;
+    this.selected = jobId ? jobs.get(jobId)?.jobId ?? jobId : undefined;
     this.unsubscribe = jobs.subscribe(() => this.refresh());
     this.ticker = setInterval(() => this.refresh(), 1000);
     this.ticker.unref();
@@ -121,6 +121,7 @@ export class BraidPanel implements Component {
             {
               ...(current.result ?? current.live),
               progress: current.live.progress,
+              ...(current.workspaces ? { workspaces: current.workspaces } : {}),
               ...(current.fullOutputPath
                 ? { fullOutputPath: current.fullOutputPath }
                 : {}),
@@ -209,7 +210,7 @@ export function registerBraidCommand(pi: ExtensionAPI, jobs: BraidJobs): void {
         );
       const jobId = args.trim() || undefined;
       if (jobId && !jobs.get(jobId))
-        throw new Error(`Unknown Braid job: ${jobId}`);
+        throw jobs.unknownJob(jobId);
       let panel: BraidPanel | undefined;
       try {
         await ctx.ui.custom<void>(

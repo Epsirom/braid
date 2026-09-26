@@ -42,6 +42,16 @@ test(
       },
     );
     t.after(() => panel.dispose());
+    const selectedByHandle = new BraidPanel(
+      jobs,
+      { requestRender: () => {}, terminal: { rows: 30 } } as never,
+      theme,
+      () => {},
+      first.handle,
+    );
+    assert.match(selectedByHandle.render(100).join("\n"), new RegExp(first.jobId));
+    assert.doesNotMatch(selectedByHandle.render(100).join("\n"), /Second goal/);
+    selectedByHandle.dispose();
     const lines = panel.render(100);
     assert.match(lines.join("\n"), /Second goal/);
     assert.match(lines.join("\n"), /▶ ACTIVE/);

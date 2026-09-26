@@ -177,6 +177,26 @@ test("Braid result renderer summarizes flow and expands to per-node detail", () 
   assert.match(expanded, /failed · answer \(MODEL_ERROR\)/);
 });
 
+test("failed graphs show retained workspace paths when expanded", () => {
+  const details: BraidToolDetails = {
+    ...result,
+    workspaces: {
+      left: { nodeId: "left", mode: "worktree", state: "ready", workingDirectory: "/tmp/node-worktree", worktreeRoot: "/tmp/node-worktree" },
+    },
+  };
+  const compact = lines(renderGraphResult(details, false, false, theme));
+  assert.match(compact, /workspaces: 1 active · 0 cleaned/);
+  assert.doesNotMatch(compact, /\/tmp\/node-worktree/);
+  const expanded = lines(renderGraphResult(details, true, false, theme));
+  assert.match(expanded, /left · ready: \/tmp\/node-worktree/);
+  details.workspaces!.left!.state = "archived";
+  details.workspaces!.left!.checkpointRef = "refs/braid/checkpoints/recovery";
+  const archived = lines(renderGraphResult(details, true, false, theme));
+  assert.match(archived, /0 active · 1 cleaned/);
+  assert.match(archived, /left · archived: refs\/braid\/checkpoints\/recovery/);
+  assert.doesNotMatch(archived, /\/tmp\/node-worktree/);
+});
+
 test("running renderer highlights active nodes and shows live progress", () => {
   const live = {
     status: "running",

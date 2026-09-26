@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { braid, type ModelRequest } from "../src/index.js";
-import { execute, graph } from "./helpers.js";
+import { type ModelRequest } from "../src/index.js";
+import { braid, execute, graph } from "./helpers.js";
 
 test("runner deadlines preserve graph queue time and give each node its own time budget", async (t) => {
   let now = 0;

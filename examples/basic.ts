@@ -1,5 +1,8 @@
 import { braid, type BraidInput, type ModelRunner } from "../src/index.js";
 import { createOpenAICompatibleRunner } from "../src/adapters/openai.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const input: BraidInput = {
   goal: "Compare the benefits and risks of adopting a four-day work week.",
@@ -74,6 +77,10 @@ if (process.argv.includes("--live")) {
   });
 }
 
-const result = await braid(input, { runner, defaultModel, maxConcurrency: 2 });
-console.log(JSON.stringify(result, null, 2));
-if (result.status === "failed") process.exitCode = 1;
+// This text-only demo runs outside Git and needs no repository workspaces.
+const cwd = await mkdtemp(join(tmpdir(), "braid-demo-"));
+try {
+  const result = await braid(input, { cwd, runner, defaultModel, maxConcurrency: 2 });
+  console.log(JSON.stringify(result, null, 2));
+  if (result.status === "failed") process.exitCode = 1;
+} finally { await rm(cwd, { recursive: true, force: true }); }
