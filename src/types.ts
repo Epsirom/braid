@@ -66,6 +66,8 @@ export interface ModelRequest {
   predecessors: PredecessorOutput[];
   execution: ExecutionContext;
   signal: AbortSignal;
+  /** Finite deadlines on the performance.now() clock; absent scopes are unlimited. */
+  deadlines?: { node?: number; graph?: number };
   /** Present only on decision nodes. An adapter exposes this as the decide tool. */
   decide?: (choice: string) => void;
 }

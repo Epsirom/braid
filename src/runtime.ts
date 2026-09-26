@@ -250,6 +250,12 @@ async function runNode(
   const choices =
     request.node.type === "decision" ? [...request.node.choices] : undefined;
   const invocation: ModelRequest = { ...request, signal };
+  if (Number.isFinite(timeoutMs) || Number.isFinite(graphDeadline)) {
+    invocation.deadlines = {
+      ...(Number.isFinite(timeoutMs) ? { node: started + timeoutMs } : {}),
+      ...(Number.isFinite(graphDeadline) ? { graph: graphDeadline } : {}),
+    };
+  }
   if (choices) {
     invocation.decide = (...values: string[]) => {
       if (!acceptingDecisions || signal.aborted) {

@@ -143,7 +143,31 @@ uses a default read-only capability set:
 The adapter does not provide `edit`, `write`, `bash`, or `powershell`. This means
 parallel nodes can inspect the same checkout without shared-write conflicts. Read
 access still uses Pi's normal filesystem permissions and is not a sandbox or
-snapshot. Read-only calls are bounded to 12 tool rounds or 32 calls per node.
+snapshot.
+
+Tool and time budgets are unlimited by default in Pi. To set finite hard limits,
+pass any of these fields in the `braid` tool's `options`:
+
+| Option | Meaning |
+| --- | --- |
+| `maxToolRounds` | Maximum assistant responses containing tool calls, per node |
+| `maxToolCalls` | Maximum total requested tool calls, per node |
+| `nodeTimeoutMs` | Time allowed for each node after it starts, in milliseconds |
+| `graphTimeoutMs` | Time allowed for the entire graph, including queueing, in milliseconds |
+
+For example, `options: { maxToolRounds: 20, maxToolCalls: 60, nodeTimeoutMs: 120000 }`.
+Omit a field for no limit; programmatic runner/job options also accept `Infinity`.
+Tool limits must be positive safe integers. Counts include `decide` and rejected
+tool requests. A batch exceeding either tool limit is rejected before execution
+and fails the node; a final text response is still allowed at the exact limit.
+
+When any budget is finite, the worker's system prompt contains a `system-reminder`
+before its first model call and refreshes it before each continuation. It reports
+finite tool limits and remaining rounds/calls, and remaining node/graph time.
+Workers are instructed to reserve a call for `decide` when required and finish
+within the remaining budgets. Graph time is shared across all nodes; a queued
+node receives the remaining graph time, not a fresh graph timeout. Reminders do
+not extend deadlines or interrupt an in-flight model response.
 
 ## Test real Pi models
 
