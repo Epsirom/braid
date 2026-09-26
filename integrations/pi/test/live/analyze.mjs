@@ -145,47 +145,47 @@ export function writeReport(root, runs, baseline, driverErrors = []) {
   const summaries = runs.map(run => ({ run, ...json(join(run,'summary.json')) }));
   const link = (title, path) => `[${title}](${path})`;
   const total = key => summaries.reduce((sum,s) => sum + Object.values(s.checks).filter(key).length, 0);
-  const lines = ['**Braid 工具可靠性：本机 Pi 端到端报告**', '',
-    `${summaries.filter(s => s.passed).length}/${summaries.length} 个场景符合预期；${total(Boolean)}/${total(() => true)} 项断言通过。`, '',
-    `Pi ${config.piVersion ?? '见配置'}，模型 ${config.model}；检测到 grep=${config.searchTools?.grep}、find=${config.searchTools?.find}。`, '',
-    '父 agent 和节点均通过本机 Pi 调用真实模型。本轮检查重复 Git 命令不会执行、同名文件可以显式查询、工具列表与本机依赖相符，以及合并/失败/取消后的工作树清理。', '',
-    'partial-failure 和 merge-failure 的 provider 故障为记录器在真实工具操作后注入；cancel 在真实写入后暂停 provider 请求以稳定制造取消窗口。Git 冲突是真实 cherry-pick 产生，模型回复未伪造。', '',
-    '| 场景 | Pi 状态 | 节点模型响应 / 工具调用 | 耗时 | 断言 |', '|---|---|---:|---:|---|'];
-  if (driverErrors.length) lines.splice(3, 0, `驱动错误：${driverErrors.length} 项。下表只统计有完整结果的场景；整轮测试失败。详情见 driver-errors.json。`, '');
+  const lines = ['**Braid tool reliability: local Pi end-to-end report**', '',
+    `${summaries.filter(s => s.passed).length}/${summaries.length} scenarios met expectations; ${total(Boolean)}/${total(() => true)} assertions passed.`, '',
+    `Pi ${config.piVersion ?? '(see configuration)'}, model ${config.model}; detected search tools: grep=${config.searchTools?.grep}, find=${config.searchTools?.find}.`, '',
+    'The parent agent and nodes call real models through local Pi. This suite checks that repeated Git commands are rejected before execution, same-named files can be queried explicitly, tool availability matches local dependencies, and worktrees are cleaned up after integration, failure, or cancellation.', '',
+    'For partial-failure and merge-failure, the recorder injects provider failures after real tool operations. For cancel, it pauses the provider request after a real write to create a predictable cancellation window. The Git conflict comes from actual cherry-picks; model responses are not fabricated.', '',
+    '| Scenario | Pi status | Node model responses / tool calls | Duration | Assertions |', '|---|---|---:|---:|---|'];
+  if (driverErrors.length) lines.splice(3, 0, `Driver errors: ${driverErrors.length}. The table includes only scenarios with complete results; the overall suite failed. See driver-errors.json for details.`, '');
   const guarded = summaries.flatMap(s => s.toolErrors).filter(e => JSON.stringify(e).includes('DUPLICATE_GIT_COMMAND')).length;
   const intentional = summaries.filter(s => s.case === 'git-arguments').flatMap(s => s.toolErrors).filter(e => JSON.stringify(e).includes('DUPLICATE_GIT_COMMAND')).length;
   const dependencyErrors = summaries.flatMap(s => s.toolErrors).filter(e => /could not be downloaded|no longer available/.test(JSON.stringify(e))).length;
   const cleaned = summaries.filter(s => s.case !== 'non-git').every(s => s.checks['no leaked registered worktrees'] && s.checks['node directories removed'] && s.checks['temporary workspace roots removed']);
   const worktreeCount = summaries.flatMap(s => Object.values(s.nodes)).filter(n => n.workspace?.worktreeRoot).length;
-  lines.splice(6, 0, `本轮重复命令拒绝 ${guarded} 次（${intentional} 次是专项场景的故意请求）；缺失搜索依赖的执行错误 ${dependencyErrors} 次。共 ${worktreeCount} 个节点 worktree，全部清理：${cleaned ? '是' : '否'}。`, '');
-  lines.splice(6, 0, '本轮实现：共享 Git 参数校验在执行前拒绝首个参数与命令重复的请求；Pi 按本机依赖生成搜索工具列表，并在执行前复查；真实测试驱动、原始 prompt、断言和报告生成器已纳入仓库。', `复跑方法：${link('测试说明',join(dirname(config.extension),'test/live/README.md'))}。`, '');
-  if (implementation) lines.splice(6, 0, `回归测试：core ${implementation.coreTests} 项、Pi ${implementation.piTests} 项通过。实现记录：${link('implementation.json',join(root,'implementation.json'))}。`, '');
+  lines.splice(6, 0, `Repeated-command requests rejected: ${guarded} (${intentional} were intentional requests in the dedicated scenario). Execution errors due to missing search dependencies: ${dependencyErrors}. Node worktrees: ${worktreeCount}; all cleaned up: ${cleaned ? 'yes' : 'no'}.`, '');
+  lines.splice(6, 0, 'Implementation: shared Git argument validation rejects requests whose first argument repeats the command before execution. Pi builds the search tool list from local dependencies and checks availability again before execution. The live test driver, prompts, assertions, and report generator are included in the repository.', `To rerun: ${link('test instructions',join(dirname(config.extension),'test/live/README.md'))}.`, '');
+  if (implementation) lines.splice(6, 0, `Regression tests passed: ${implementation.coreTests} core tests and ${implementation.piTests} Pi tests. Implementation record: ${link('implementation.json',join(root,'implementation.json'))}.`, '');
   for (const s of summaries) {
     const nodes=Object.values(s.nodes);
-    lines.push(`| ${s.case} | ${s.status} | ${nodes.reduce((n,v)=>n+v.modelCalls,0)} / ${nodes.reduce((n,v)=>n+v.toolCalls,0)} | ${(s.latencyMs/1000).toFixed(1)}s | ${s.passed?'通过':'失败'} |`);
+    lines.push(`| ${s.case} | ${s.status} | ${nodes.reduce((n,v)=>n+v.modelCalls,0)} / ${nodes.reduce((n,v)=>n+v.toolCalls,0)} | ${(s.latencyMs/1000).toFixed(1)}s | ${s.passed?'passed':'failed'} |`);
   }
-  lines.push('', 'failed/cancelled 可以是故障测试的预期终态；取消在 core 中为 failed + CANCELLED，在 Pi 显示为 cancelled。耗时不含父 agent 构图/汇报，模型响应计数不含被注入故障或暂停拦截的请求。单次模型运行存在波动，耗时和调用数不能视为稳定性能基准。', '');
+  lines.push('', 'failed/cancelled may be expected terminal states in failure scenarios. Cancellation is represented as failed + CANCELLED in core and cancelled in Pi. Durations exclude the parent agent\'s graph construction and reporting; model response counts exclude requests intercepted by injected failures or pauses. Individual model runs vary, so durations and call counts are not a stable performance benchmark.', '');
   if (baseline && existsSync(baseline)) {
-    lines.push('与上一轮相同场景对比：', '', '| 场景 | 耗时：上轮 → 本轮 | 节点工具调用：上轮 → 本轮 | Prompt 一致 |', '|---|---:|---:|---|');
+    lines.push('Comparison with matching scenarios from the previous run:', '', '| Scenario | Duration: previous → current | Node tool calls: previous → current | Identical prompt |', '|---|---:|---:|---|');
     for (const s of summaries) {
       const before = readdirSync(baseline).find(name=>name.startsWith(s.case+'-') && existsSync(join(baseline,name,'summary.json')));
       if (!before) continue;
       const a=json(join(baseline,before,'summary.json'));
-      lines.push(`| ${s.case} | ${(a.latencyMs/1000).toFixed(1)}s → ${(s.latencyMs/1000).toFixed(1)}s | ${Object.values(a.nodes).reduce((n,v)=>n+v.toolCalls,0)} → ${Object.values(s.nodes).reduce((n,v)=>n+v.toolCalls,0)} | ${readFileSync(join(baseline,before,'prompt.txt'),'utf8') === readFileSync(join(s.run,'prompt.txt'),'utf8') ? '是' : '否'} |`);
+      lines.push(`| ${s.case} | ${(a.latencyMs/1000).toFixed(1)}s → ${(s.latencyMs/1000).toFixed(1)}s | ${Object.values(a.nodes).reduce((n,v)=>n+v.toolCalls,0)} → ${Object.values(s.nodes).reduce((n,v)=>n+v.toolCalls,0)} | ${readFileSync(join(baseline,before,'prompt.txt'),'utf8') === readFileSync(join(s.run,'prompt.txt'),'utf8') ? 'yes' : 'no'} |`);
     }
     lines.push('');
   }
-  lines.push(`运行配置：${link('config.json',join(root,'config.json'))}。测试仅覆盖可控终止；不覆盖进程强杀、跨进程合并协调、清理权限故障或模型放弃冲突解决后主动归档。`, '');
+  lines.push(`Run configuration: ${link('config.json',join(root,'config.json'))}. Tests cover controlled termination only; they do not cover forced process termination, cross-process merge coordination, cleanup permission failures, or a model choosing to archive changes after abandoning conflict resolution.`, '');
   for (const s of summaries) {
-    lines.push(`**${s.case}**`, '', '完整测试 prompt：', '', '```text', readFileSync(join(s.run,'prompt.txt'),'utf8'), '```', '',
-      '实际 braid 参数：', '', '```json', readFileSync(join(s.run,'braid-call.json'),'utf8'), '```', '',
-      '| 节点 | 状态 | 模型响应 | 工具调用 | 工作区 disposition |', '|---|---|---:|---:|---|');
+    lines.push(`**${s.case}**`, '', 'Full test prompt:', '', '```text', readFileSync(join(s.run,'prompt.txt'),'utf8'), '```', '',
+      'Actual braid arguments:', '', '```json', readFileSync(join(s.run,'braid-call.json'),'utf8'), '```', '',
+      '| Node | Status | Model responses | Tool calls | Workspace disposition |', '|---|---|---:|---:|---|');
     for (const [id,n] of Object.entries(s.nodes)) lines.push(`| \`${id}\` | ${n.status} | ${n.modelCalls} | ${n.toolCalls} | ${n.workspace?.worktreeRoot ? n.workspace.state : '—'} |`);
-    lines.push('', `父工具序列：${s.parentCalls.join(' → ')}`, '',
+    lines.push('', `Parent tool sequence: ${s.parentCalls.join(' → ')}`, '',
       ['prompt.txt','braid-call.json','nodes.jsonl','rpc.jsonl','verification.json','braid-result.json','assertions.json','summary.json'].map(name=>link(name,join(s.run,name))).join(' · '), '',
-      '工具错误（包含预期的参数拒绝/冲突，按 toolCallId 去重）：', '', '```json', JSON.stringify(s.toolErrors,null,2), '```', '');
+      'Tool errors (including expected argument rejections and conflicts, deduplicated by toolCallId):', '', '```json', JSON.stringify(s.toolErrors,null,2), '```', '');
     const failures=Object.entries(s.checks).filter(([,ok])=>!ok).map(([name])=>name);
-    if (failures.length) lines.push('未通过断言：'+failures.join('；'),'');
+    if (failures.length) lines.push('Failed assertions: '+failures.join('; '),'');
   }
   save(join(root,'driver-errors.json'),driverErrors);
   save(join(root,'suite-summary.json'),summaries);

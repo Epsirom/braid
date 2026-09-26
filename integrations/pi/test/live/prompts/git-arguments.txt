@@ -1,7 +1,7 @@
-请用 braid 执行 Git 参数和搜索工具的端到端回归测试，只提交一次图。父 agent 不要修改文件或接手合并。
-提交 execute probe -> merge cleanup。probe 先在自己的 worktree 用 write 创建 probe-change.txt，内容为 "argument guard marker\n"，再创建一个文件名恰好为 status 的文件，内容为 "same named file\n"。
-这是错误处理测试：probe 必须故意调用一次 git 工具 {"command":"status","args":["status"]}，确认得到 DUPLICATE_GIT_COMMAND 错误而非 working tree clean。不要主动省略这次错误调用，它不会执行 Git。随后调用 {"command":"status","args":["--short"]}，确认实际完整状态能看见 probe-change.txt 和 status。
-再调用 {"command":"status","args":["--","status"]}，确认显式同名路径仍可查询。再故意调用一次 {"command":"diff","args":["diff","--stat"]} 验证同类错误，然后改成 {"command":"diff","args":["--stat"]}。
-如果工具列表提供 grep，用它搜索 probe-change.txt 中的 "argument guard marker"；如果提供 find，用它搜索 probe-change.txt。缺少某工具则报告缺少的依赖并使用 ls/read，不要尝试调用未提供的工具或安装依赖。
-cleanup 评审 probe 的结果，将这个测试专用 checkpoint 标为 discarded，并说明无需集成测试文件；不要修改源仓库。
-options 只设 nodeTimeoutMs=180000、graphTimeoutMs=480000。提交后等待完成提醒再调用 braid_status。最终报告错误是否在 Git 执行前被拒绝、修正查询是否看到了实际修改、同名文件查询、实际搜索工具以及 worktree 清理。
+Use braid to run an end-to-end regression test for Git arguments and search tools. Submit exactly one graph. The parent agent must not modify files or take over integration.
+Submit execute probe -> merge cleanup. In its own worktree, probe must first use write to create probe-change.txt with the exact content "argument guard marker\n", then create a file named exactly status with the content "same named file\n".
+This is an error-handling test: probe must deliberately call the git tool once with {"command":"status","args":["status"]} and verify that it receives a DUPLICATE_GIT_COMMAND error rather than a clean working tree result. Do not skip this invalid call; it will not execute Git. Then call {"command":"status","args":["--short"]} and verify that the full status shows both probe-change.txt and status.
+Next, call {"command":"status","args":["--","status"]} to verify that an explicit path matching the command name can still be queried. Deliberately call {"command":"diff","args":["diff","--stat"]} once to verify the same error, then correct it to {"command":"diff","args":["--stat"]}.
+If grep is available in the tool list, use it to search for "argument guard marker" in probe-change.txt. If find is available, use it to search for probe-change.txt. If either tool is missing, report the missing dependency and use ls/read. Do not call unavailable tools or install dependencies.
+cleanup must review probe's results, mark this test-only checkpoint as discarded, and explain why the test files do not need to be integrated. Do not modify the source repository.
+Set only nodeTimeoutMs=180000 and graphTimeoutMs=480000 in options. After submission, wait for the completion reminder, then call braid_status. In the final report, describe whether invalid arguments were rejected before Git executed, whether corrected queries showed the actual changes, whether the same-named file could be queried, which search tools were used, and whether worktrees were cleaned up.
