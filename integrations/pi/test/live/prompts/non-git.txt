@@ -1,0 +1,1 @@
+这是一个不在 Git 仓库中的临时目录。请只调用一次 braid，提交一个 execute 节点 probe，无边。probe 要读取 input.txt，然后尝试创建 forbidden.txt，内容 "must not be written"；如果没有写入工具，明确说明这一限制，不要寻找 shell 或其他绕过方法。父 agent 不要创建这个文件。options 只设 nodeTimeoutMs=120000、graphTimeoutMs=180000。等待完成提醒后通过 braid_status 报告节点实际可用工具、是否写入成功、是否创建 worktree 或自动 merge 节点。

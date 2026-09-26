@@ -13,6 +13,7 @@ import type {
   NodeResult,
 } from "../../dist/index.js";
 import type { PiNodeProgress } from "./runner.js";
+import type { PiNodeWorkspace } from "./workspaces.js";
 
 export const MAX_VISIBLE_EVENTS = 80;
 export const MAX_VISIBLE_NODES = 80;
@@ -21,7 +22,7 @@ export const MAX_VISIBLE_NODES = 80;
 export interface BraidLiveState {
   status: "running";
   nodes: Record<string, NodeResult>;
-  nodeTypes: Record<string, "execute" | "decision">;
+  nodeTypes: Record<string, "execute" | "decision" | "merge">;
   edges: Array<{ from: string; to: string; choice?: string }>;
   progress: Record<string, PiNodeProgress>;
   events: ExecutionEvent[];
@@ -32,6 +33,7 @@ export type BraidToolDetails =
   | ((BraidResult | BraidLiveState) & {
       fullOutputPath?: string;
       progress?: Record<string, PiNodeProgress>;
+      workspaces?: Record<string, PiNodeWorkspace>;
     })
   | undefined;
 type Palette = Pick<Theme, "fg" | "bg" | "bold">;
@@ -93,7 +95,7 @@ function compact(value: unknown, max = 90): string {
 
 function graphParts(result: BraidResult | BraidLiveState): {
   nodes: Record<string, NodeResult>;
-  nodeTypes: Record<string, "execute" | "decision">;
+  nodeTypes: Record<string, "execute" | "decision" | "merge">;
   edges: Array<{ from: string; to: string; choice?: string }>;
   progress: Record<string, PiNodeProgress>;
 } {
@@ -102,7 +104,7 @@ function graphParts(result: BraidResult | BraidLiveState): {
     Object.create(null),
     result.nodes,
   );
-  const nodeTypes: Record<string, "execute" | "decision"> = Object.create(null);
+  const nodeTypes: Record<string, "execute" | "decision" | "merge"> = Object.create(null);
   const edges: Array<{ from: string; to: string; choice?: string }> = [];
   for (const event of result.events) {
     if (event.type === "node_created") {
@@ -318,6 +320,8 @@ function eventText(event: ExecutionEvent): string {
       return `node created · ${compact(event.nodeId, 40)} (${event.nodeType})${event.model ? ` · ${compact(event.model, 50)}` : ""}`;
     case "edge_created":
       return `edge created · ${compact(event.from, 40)}${event.choice ? ` -${compact(event.choice, 30)}->` : " →"} ${compact(event.to, 40)}`;
+    case "workspace_updated":
+      return `workspace · ${compact(event.workspace.nodeId, 40)} · ${event.workspace.state}`;
     case "node_runnable":
       return `runnable · ${compact(event.nodeId, 40)}`;
     case "handoff":
@@ -528,6 +532,17 @@ export function renderGraphResult(
   const chartStart = lines.length;
   const chart = mermaidLines(result, theme);
   lines.push(...chart);
+  const workspaces = Object.values(result.workspaces ?? {}).filter(workspace => workspace.worktreeRoot);
+  if (workspaces.length) {
+    const active = workspaces.filter(workspace => ["preparing", "ready", "failed"].includes(workspace.state)).length;
+    lines.push(theme.fg("accent", `workspaces: ${active} active · ${workspaces.length - active} cleaned${expanded ? "" : " (expand for recovery refs)"}`));
+    if (expanded) {
+      for (const workspace of workspaces.slice(0, MAX_VISIBLE_NODES)) {
+        const active = ["preparing", "ready", "failed"].includes(workspace.state);
+        lines.push(theme.fg("dim", `  ${compact(workspace.nodeId, 40)} · ${workspace.state}: ${compact(active ? workspace.worktreeRoot : workspace.checkpointRef ?? workspace.reason, 240)}`));
+      }
+    }
+  }
   if (expanded) lines.push(...renderEventLog(result.events ?? [], true, theme));
   if ("fullOutputPath" in result && result.fullOutputPath)
     lines.push(

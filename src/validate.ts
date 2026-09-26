@@ -58,7 +58,7 @@ export function compileGraph(input: BraidInput): Graph {
   for (const node of input.nodes) {
     requireValid(isRecord(node), "Node must be an object");
     requireValid(
-      node.type === "execute" || node.type === "decision",
+      node.type === "execute" || node.type === "decision" || node.type === "merge",
       "Unknown node type",
     );
     fields(
@@ -71,7 +71,7 @@ export function compileGraph(input: BraidInput): Graph {
     requireValid(text(node.id), "Node id must be a non-empty string");
     requireValid(!byId.has(node.id), `Duplicate node id '${node.id}'`);
     requireValid(
-      text(node.prompt),
+      text(node.prompt) || (node.type === "merge" && node.prompt === undefined),
       `Node '${node.id}' needs a non-empty prompt`,
     );
     requireValid(
@@ -80,7 +80,7 @@ export function compileGraph(input: BraidInput): Graph {
     );
     const common = {
       id: node.id,
-      prompt: node.prompt,
+      prompt: node.prompt ?? "Review all predecessor changes, decide how to integrate them into the source repository, and account for every source with finish_merge.",
       ...(node.model !== undefined ? { model: node.model } : {}),
     };
     if (node.type === "decision") {
@@ -96,7 +96,7 @@ export function compileGraph(input: BraidInput): Graph {
       );
       byId.set(node.id, { type: "decision", ...common, choices });
     } else {
-      byId.set(node.id, { type: "execute", ...common });
+      byId.set(node.id, { type: node.type, ...common });
     }
   }
 

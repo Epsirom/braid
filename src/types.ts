@@ -13,7 +13,58 @@ export interface DecisionNode {
   model?: string;
 }
 
-export type BraidNode = ExecuteNode | DecisionNode;
+export interface MergeNode {
+  type: "merge";
+  id: string;
+  /** Defaults to reviewing and integrating all predecessor workspaces. */
+  prompt?: string;
+  model?: string;
+}
+
+export type BraidNode = ExecuteNode | DecisionNode | MergeNode;
+
+export interface NodeWorkspace {
+  nodeId: string;
+  mode: "read-only" | "worktree" | "merge";
+  workingDirectory: string;
+  worktreeRoot?: string;
+  sourceRoot?: string;
+  baseCommit?: string;
+  snapshotCommit?: string;
+  checkpointRef?: string;
+  checkpointCommit?: string;
+  /** Source checkout snapshot captured before a merge agent receives write access. */
+  backupRef?: string;
+  state: "preparing" | "ready" | "integrated" | "discarded" | "archived" | "failed";
+  reason?: string;
+}
+
+export interface MergeDisposition {
+  nodeId: string;
+  disposition: "integrated" | "discarded" | "archived";
+  reason: string;
+}
+
+export interface GitPreview {
+  text: string;
+  truncated: boolean;
+}
+
+export interface MergeSource extends NodeWorkspace {
+  /** Inspection-only summaries relative to snapshotCommit; omitted by custom runners. */
+  changes?: { files: string[]; filesTruncated: boolean; stat: GitPreview; diff: GitPreview };
+}
+
+export interface SourceCheckoutStatus extends GitPreview {
+  /** True when Git porcelain status has any staged, unstaged, or untracked entries. */
+  dirty: boolean;
+}
+
+export interface GitResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
 
 export interface Edge {
   from: string;
@@ -49,6 +100,9 @@ export interface NodeOutput {
 
 export interface PredecessorOutput extends NodeOutput {
   nodeId: string;
+  /** Failed predecessors remain available on unconditional edges. */
+  error?: ExecutionError;
+  workspace?: NodeWorkspace;
 }
 
 export interface ExecutionContext {
@@ -62,12 +116,23 @@ export interface ModelRequest {
   node: BraidNode;
   /** Node override, otherwise the run's defaultModel, otherwise adapter default. */
   model?: string;
-  /** Only direct, completed, active predecessors; never sibling/parent history. */
+  /** Direct active predecessors, including failures on unconditional edges; no parent history. */
   predecessors: PredecessorOutput[];
   execution: ExecutionContext;
   signal: AbortSignal;
   /** Finite deadlines on the performance.now() clock; absent scopes are unlimited. */
   deadlines?: { node?: number; graph?: number };
+  workspace?: NodeWorkspace;
+  /** Adapters must wrap mutating file tools so cancellation and cleanup wait for in-flight writes. */
+  withWorkspaceWrite?: <T>(operation: () => Promise<T>) => Promise<T>;
+  /** Local Git operations: inspection for workers, integration commands for merge nodes. */
+  git?: (args: string[], input?: string) => Promise<GitResult>;
+  /** Merge nodes must account for every source before returning their final answer. */
+  merge?: {
+    sources: MergeSource[];
+    sourceStatus?: SourceCheckoutStatus;
+    finish: (dispositions: MergeDisposition[]) => Promise<void>;
+  };
   /** Present only on decision nodes. An adapter exposes this as the decide tool. */
   decide?: (choice: string) => void;
 }
@@ -96,6 +161,7 @@ export type ExecutionEvent = Readonly<
         model?: string;
       }
     | { type: "edge_created"; from: string; to: string; choice?: string }
+    | { type: "workspace_updated"; workspace: Readonly<NodeWorkspace> }
     | { type: "node_runnable"; nodeId: string }
     | {
         type: "handoff";
@@ -135,6 +201,8 @@ export type ExecutionEvent = Readonly<
 export interface BraidOptions {
   runner: ModelRunner;
   defaultModel?: string;
+  /** Source checkout. Git workspace management is automatic; outside Git, nodes are read-only. */
+  cwd?: string;
   /** Positive integer. Defaults to 4. */
   maxConcurrency?: number;
   /** Applied separately to each invocation, starting when it runs. Default: 60s. Infinity disables it. */
@@ -155,7 +223,9 @@ export interface ExecutionError {
     | "INVALID_DECISION"
     | "NODE_TIMEOUT"
     | "GRAPH_TIMEOUT"
-    | "CANCELLED";
+    | "CANCELLED"
+    | "MERGE_FAILED"
+    | "CLEANUP_FAILED";
   message: string;
 }
 
@@ -169,6 +239,7 @@ export interface NodeResult extends Partial<NodeOutput> {
   latencyMs?: number;
   error?: ExecutionError;
   skipReason?: "inactive" | "upstream_failed" | "graph_timeout" | "cancelled";
+  workspace?: NodeWorkspace;
 }
 
 export interface BraidResult {
@@ -178,6 +249,7 @@ export interface BraidResult {
   /** Immutable execution log, including graph construction and runtime handoffs. */
   events: readonly ExecutionEvent[];
   nodes: Record<string, NodeResult>;
+  workspaces?: Record<string, NodeWorkspace>;
   error?: ExecutionError;
   metadata: ExecutionContext & {
     startedAt: number;

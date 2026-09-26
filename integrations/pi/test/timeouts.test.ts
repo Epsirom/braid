@@ -6,6 +6,7 @@ import type { Context } from "@earendil-works/pi-ai";
 import type { BraidResult } from "../../../dist/index.js";
 import { createBraidTools } from "../index.js";
 import { BraidJobs } from "../jobs.js";
+import { readOnlyCwd } from "./helpers.js";
 
 for (const scenario of [
   {
@@ -15,12 +16,12 @@ for (const scenario of [
   },
   {
     name: "explicit node timeout applies",
-    options: { nodeTimeoutMs: 10 },
+    options: { nodeTimeoutMs: 1_000 },
     error: "NODE_TIMEOUT",
   },
   {
     name: "explicit graph timeout applies",
-    options: { graphTimeoutMs: 10 },
+    options: { graphTimeoutMs: 1_000 },
     error: "GRAPH_TIMEOUT",
   },
 ]) {
@@ -29,13 +30,13 @@ for (const scenario of [
     t.mock.method(performance, "now", () => now);
     const model = { provider: "fake", id: "model" };
     const ctx = {
-      cwd: process.cwd(),
+      cwd: readOnlyCwd,
       model,
       modelRegistry: {
         find: () => model,
         complete: async (_model: unknown, context: Context) => {
           if (!scenario.error) assert.doesNotMatch(context.systemPrompt!, /system-reminder/);
-          else assert.match(context.systemPrompt!, new RegExp(`${scenario.error === "NODE_TIMEOUT" ? "Node" : "Graph"} time budget: 10 ms remaining`));
+          else assert.match(context.systemPrompt!, new RegExp(`${scenario.error === "NODE_TIMEOUT" ? "Node" : "Graph"} time budget: 1000 ms remaining`));
           now += 600_000;
           await delay(20);
           return {

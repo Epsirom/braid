@@ -35,9 +35,9 @@ const braidParameters = Type.Object(
     nodes: Type.Array(
       Type.Object(
         {
-          type: StringEnum(["execute", "decision"]),
+          type: StringEnum(["execute", "decision", "merge"]),
           id: text(),
-          prompt: text(),
+          prompt: Type.Optional(text()),
           model: Type.Optional(
             Type.String({
               description:
@@ -82,12 +82,19 @@ const braidParameters = Type.Object(
   { additionalProperties: false },
 );
 
+const BRAID_FILESYSTEM_GUIDANCE =
+  "In a Git repository, execute and decision nodes get individual writable worktrees with read, ls, write, edit, and Git inspection. Search tools grep/find are exposed only when their local rg/fd dependencies are available. " +
+  "Worktrees include tracked changes and non-ignored untracked files. Merge nodes operate in the source checkout and decide whether to merge, cherry-pick, apply, or discard predecessor changes; core never makes that choice. " +
+  "Merge agents must call finish_merge for every source; core checkpoints changes and removes processed worktrees. Core appends a final merge agent for remaining worktrees. Failed predecessors pass their errors and partial work along unconditional edges. " +
+  "Outside Git, nodes have read and ls, plus grep/find when their local dependencies are available. Shell commands and tests remain unavailable in all nodes. " +
+  "Inspect braid_status for integration outcomes and recovery checkpoint refs, then run tests in the parent. Avoid concurrent parent edits while a merge agent owns the source checkout.";
+
 const BRAID_USAGE_GUIDANCE = [
   "Braid is a proactive execution primitive, not only a user-requested command.",
   "Selection rule: for a code review, bug investigation, design comparison, test-planning request, or change spanning multiple files, call braid FIRST when two or more concerns can be analyzed independently. Do this without waiting for the user to say Braid; do not read everything in the parent and then decide whether to delegate.",
-  "Braid nodes can inspect the current project with read-only read, grep, find, and ls tools. Use those capabilities for repository-aware analysis. Nodes cannot edit files, write files, run shell commands, or run tests.",
+  BRAID_FILESYSTEM_GUIDANCE,
   "When Braid fits, construct and submit the complete DAG in one call: use parallel execute nodes for independent concerns and a final execute node to synthesize their outputs. The tool returns a jobId immediately. Continue independent work or finish your turn while it runs; do not poll repeatedly. A completion reminder will resume you. Use braid_status with the jobId to retrieve terminal outputs before relying on them.",
-  "Do not use braid for a simple one-step answer, a trivial direct edit, shell work, or when decomposition adds no value. Apply edits, run tests, and execute commands in the parent agent after Braid analysis.",
+  "Do not use braid for a simple one-step answer, a trivial direct edit, shell work, or when decomposition adds no value. The parent reviews results, runs tests, and executes shell commands after Braid completes.",
 ].join("\n");
 
 export function createBraidTools(jobs: BraidJobs) {
@@ -98,20 +105,22 @@ export function createBraidTools(jobs: BraidJobs) {
       description:
         "Use this tool FIRST for nontrivial engineering work: code reviews, bug investigations, design comparisons, test planning, and changes spanning multiple files. " +
         "It starts a background job and immediately returns jobId for a complete DAG of isolated LLM invocations with parallel branches and joins; the user does not need to mention Braid. " +
-        "Only execute and decision nodes exist. Decision nodes must declare choices and call decide; matching choice edges activate together. " +
+        "Use execute, decision, or merge nodes. Decision nodes must declare choices and call decide; matching choice edges activate together. Merge nodes accept multiple predecessors and an optional prompt. " +
         "Unlabelled edges are unconditional. Joins wait for all possible predecessor paths to resolve. " +
-        "Nodes see only the goal, their prompt, labelled direct-predecessor outputs, and read-only read/grep/find/ls tools: " +
-        "no parent history, writes, shell, tests, or recursive Braid calls. " +
-        "Do not use it for a simple one-step answer or trivial direct edit. The parent applies edits and runs tests after analysis. " +
+        "Nodes see only the goal, their prompt, labelled direct-predecessor outputs, and their filesystem capabilities: " +
+        "no parent history, shell, tests, or recursive Braid calls. " +
+        BRAID_FILESYSTEM_GUIDANCE + " " +
+        "Do not use it for a simple one-step answer or trivial direct edit. " +
         "Use braid_status(jobId) for progress and results, or braid_cancel(jobId) to stop it. A completion reminder resumes the agent if idle; do independent work or end your turn instead of polling. Humans can open /braid for the live flow panel. " +
         "Read result.status: failed graphs can still return successful terminal outputs.",
       promptSnippet:
         "Use FIRST for nontrivial code review/debug/design work; parallelize independent analysis and synthesize",
       promptGuidelines: [
-        "Call braid before direct repository inspection when a code task has two or more separable review, debugging, design, or test-planning concerns; the Braid nodes can inspect the checkout read-only.",
+        "Call braid before direct repository inspection when a code task has two or more separable review, debugging, design, or test-planning concerns; the Braid nodes can inspect the project and edit isolated Git worktrees.",
         "Use parallel execute nodes for independent concerns and a final synthesis node. The user does not need to mention Braid or design the graph.",
-        "Do not use braid for simple one-step answers or trivial direct edits. Keep writes, shell commands, and test execution in the parent after Braid analysis.",
-        "Braid nodes have read, grep, find, and ls plus decide on decision nodes; they cannot edit files, write files, run shell commands, run tests, or call recursive Braid.",
+        "Do not use braid for simple one-step answers or trivial direct edits. Keep shell commands and test execution in the parent; use merge nodes for integration.",
+        BRAID_FILESYSTEM_GUIDANCE,
+        "Decision nodes additionally receive decide. Nodes cannot call recursive Braid.",
         "Tool and time budgets are unlimited by default. Set maxToolRounds, maxToolCalls, nodeTimeoutMs, or graphTimeoutMs in options to impose hard limits; nodes receive system reminders of their remaining budgets before each model call.",
       ],
       parameters: braidParameters,
@@ -151,7 +160,8 @@ export function createBraidTools(jobs: BraidJobs) {
               {
                 type: "text",
                 text: JSON.stringify({
-                  jobId: job.jobId,
+                  jobId: job.handle,
+                  canonicalJobId: job.jobId,
                   status: job.status,
                   message:
                     "Running in background. Use braid_status to retrieve progress/results. A completion reminder will resume you; do not poll repeatedly.",
@@ -180,7 +190,7 @@ export function createBraidTools(jobs: BraidJobs) {
     name: "braid_status",
     label: "Braid status",
     description:
-      "Retrieve a background Braid job's status, node progress, and final results by jobId. Omit jobId to list jobs in this session. Completion reminders arrive automatically; avoid repeated polling.",
+      "Retrieve a background Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Prefer the short handle from submission/reminders. Omit jobId to list jobs in this session. Completion reminders arrive automatically; avoid repeated polling.",
     parameters: statusParameters,
     renderResult(result, options, theme) {
       const job = result.details;
@@ -199,6 +209,7 @@ export function createBraidTools(jobs: BraidJobs) {
         {
           ...(job.result ?? job.live),
           progress: job.live.progress,
+          ...(job.workspaces ? { workspaces: job.workspaces } : {}),
           ...(job.fullOutputPath ? { fullOutputPath: job.fullOutputPath } : {}),
         },
         options.expanded,
@@ -214,10 +225,7 @@ export function createBraidTools(jobs: BraidJobs) {
           details: undefined,
         };
       const job = jobs.get(params.jobId);
-      if (!job)
-        throw new Error(
-          `Unknown Braid job: ${params.jobId}. Jobs are available only in the current session until reload or exit.`,
-        );
+      if (!job) throw jobs.unknownJob(params.jobId);
       const preview = truncateHead(JSON.stringify(job, null, 2));
       const suffix = preview.truncated
         ? `\n[Preview truncated. ${job.fullOutputPath ? `Full result/log: ${job.fullOutputPath}` : "Full results will be available when the job finishes."}]`
@@ -262,12 +270,13 @@ export function createBraidTools(jobs: BraidJobs) {
 export default function braidExtension(pi: ExtensionAPI) {
   const pending = new Map<string, JobSnapshot["status"]>();
   const remind = (jobId: string, status: JobSnapshot["status"]): void => {
+    const handle = jobs.get(jobId)?.handle ?? jobId;
     pi.sendMessage(
       {
         customType: "braid-completed",
         display: true,
-        content: `[system-reminder] Braid job ${jobId} finished with status ${status}. Retrieve its results with braid_status({"jobId":"${jobId}"}) and continue the original task. Failed or cancelled jobs may contain successful partial outputs. [/system-reminder]`,
-        details: { jobId, status },
+        content: `[system-reminder] Braid job ${handle} finished with status ${status}. Retrieve its results with braid_status({"jobId":"${handle}"}) and continue the original task. Failed or cancelled jobs may contain successful partial outputs. [/system-reminder]`,
+        details: { jobId, handle, status },
       },
       { triggerTurn: true, deliverAs: "followUp" },
     );

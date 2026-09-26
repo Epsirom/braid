@@ -1,0 +1,5 @@
+请用 braid 执行这个临时仓库测试，只提交一次图。父 agent 不要修改文件，也不要替节点做合并。
+目标：calculator.cjs 的 add(2,3) 必须等于 5，add("2","3") 必须等于 5。README 增加一行“Supports numeric strings.”。保留 user.txt 的现有未提交内容以及 notes.txt。
+图包含三个互相独立的 execute 节点：numeric 实现 Number(a)+Number(b)；alternative 实现 Number(a)-Number(b)，作为待评审的备选方案；docs 更新 README。numeric 和 alternative 都必须先读取 user.txt 与 notes.txt，并检查 ignored.txt 是否存在，报告读到的内容及各自 workspace 路径，然后只修改 calculator.cjs。
+再加入一个显式 merge 节点 select，只依赖 numeric 和 alternative。select 要根据目标判断使用哪个方案，检查 checkpoint，自己选择 merge、cherry-pick、apply 或文件编辑等方式；不得因为是前驱就全部合并。逐项调用 finish_merge 报告 integrated/discarded/archived 和理由。docs 不连接到 select，也不要在提交图中加入最终收尾节点，让 core 自动生成 merge agent 来处理剩余 worktree。
+options 只设 maxConcurrency=3、nodeTimeoutMs=180000、graphTimeoutMs=480000，不设工具预算。提交后不要反复轮询；等待完成提醒再调用 braid_status。最后报告实际图、节点状态、使用的合并策略、丢弃的方案、自动 merge 节点和 worktree 清理情况。

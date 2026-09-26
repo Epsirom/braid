@@ -20,7 +20,8 @@
     "test": "tsx --test test/*.test.ts",
     "demo": "tsx examples/basic.ts",
     "check:pi": "npm run build && npm --prefix integrations/pi run check",
-    "test:pi": "npm run build && npm --prefix integrations/pi test"
+    "test:pi": "npm run build && npm --prefix integrations/pi test",
+    "test:pi:live": "npm run build && node integrations/pi/test/live/run.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

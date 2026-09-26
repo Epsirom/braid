@@ -20,6 +20,8 @@ export function formatBudgetReminder(
     "\n\n<system-reminder>\n" + lines.join("\n") +
     "\nThese are hard limits. Time includes model generation and tool execution; the graph budget is shared by all nodes. " +
     "Finish your analysis and return a final answer within the remaining budgets. " +
-    "If a decision is required, call decide before finishing.\n</system-reminder>"
+    "If a decision is required, call decide before finishing. " +
+    (request.node.type === "merge" ? "Reserve budget to call finish_merge for every source before finishing. " : "") +
+    "\n</system-reminder>"
   );
 }

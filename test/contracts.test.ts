@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { braid, GraphValidationError, validateGraph } from "../src/index.js";
-import { decision, execute, graph } from "./helpers.js";
+import { GraphValidationError, validateGraph } from "../src/index.js";
+import { braid, decision, execute, graph } from "./helpers.js";
 
 for (const args of [[], ["left", "right"], [["left"]], [null]]) {
   test(`decide rejects a nonconforming argument list: ${JSON.stringify(args)}`, async () => {

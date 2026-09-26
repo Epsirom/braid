@@ -8,6 +8,10 @@ This optional Pi integration runs Braid graphs as background jobs. It registers:
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
 
+Submission and completion reminders use short session handles such as `job-1`.
+Status, cancellation and the panel accept either that exact handle or the original
+UUID. Unknown IDs report available handles; IDs are never guessed or fuzzy-matched.
+
 The parent can continue independent work or finish its response while a job runs.
 On completion, failure, or cancellation, the extension sends a custom
 `system-reminder` containing the job ID and a request to retrieve its results.
@@ -31,7 +35,7 @@ cancel the selected job, and Escape or `q` to close the panel. Closing the panel
 leaves jobs running. In RPC or noninteractive modes, use `braid_status`.
 
 The panel renders a Mermaid flowchart, node states, elapsed times, context-token
-estimates or provider-reported usage, context-window sizes, read-only tool-call
+estimates or provider-reported usage, context-window sizes, filesystem tool-call
 counts, and the execution log. Active nodes are marked `▶ ACTIVE`. The status
 tool also renders a flowchart; expand its result to see more log events.
 
@@ -39,8 +43,9 @@ tool also renders a flowchart; expand its result to see more log events.
 Braid explicitly, ask the agent to analyze the task using Braid.
 
 Braid owns graph validation, scheduling, joins, routing, skip/failure propagation,
-timeouts, and result metadata. Pi owns model lookup, credentials/OAuth, provider
-transport, read-only tool execution, and token/cost accounting. The first
+timeouts, Git worktree/checkpoint/merge lifecycle, and result metadata. Pi owns
+model lookup, credentials/OAuth, provider transport, filesystem tool execution,
+and token/cost accounting. The first
 `braid_status` retrieval of a finished job reports its accumulated Pi usage;
 subsequent retrievals do not count the same usage again.
 
@@ -52,10 +57,10 @@ an explicit per-turn planning policy to Pi's system prompt and tool metadata:
 
 - for code reviews, bug investigations, design comparisons, test planning, or
   changes spanning multiple files, call Braid first when two or more concerns
-  can be analyzed independently; nodes can inspect the current checkout
-  read-only;
+  can be handled independently; nodes can inspect the project and edit isolated
+  worktrees in Git repositories;
 - do not use Braid for simple one-step answers, trivial direct edits, or shell
-  work; keep writes, tests, and commands in the parent agent;
+  work; keep tests and shell commands in the parent agent;
 - the user does not need to say “Braid” or design the graph;
 - when Braid fits, the model should construct and submit the complete graph
   immediately, continue independent work, and retrieve the terminal outputs after
@@ -67,13 +72,21 @@ or strengthen the project/system prompt for that model. The adapter explicitly
 asks the model to make the delegation choice before directly inspecting the
 repository. Do not add a generic `always call braid` rule: that would waste
 model calls and bypass direct tools.
-The key distinction is that Braid nodes may read the repository themselves, but
-the parent remains the only writer/test runner.
+Merge agents review and integrate node changes; the parent reviews results and runs tests.
 Each node gets a new Pi AI context containing only the Braid goal, its node prompt,
-and labelled direct predecessor outputs. By default it also receives Pi's
-read-only `read`, `grep`, `find`, and `ls` tools. It receives no parent transcript,
-write tools, shell tools, test runner, skills, or arbitrary code execution.
-Decision nodes receive those read-only tools plus `decide`.
+labelled direct predecessor outputs, and workspace metadata. It receives Pi's
+`read` and `ls`, plus `grep` when local `rg` is available and `find` when
+local `fd`/`fdfind` is available. Missing search dependencies are reported in the
+node prompt, with `ls`/`read` as alternatives. Dependencies are checked before
+exposing search tools and again before executing them; missing tools are not
+installed by Braid. Git worktrees additionally receive `write` and `edit`.
+It receives no parent transcript, shell tools, test runner, skills, or arbitrary
+code execution. Decision nodes additionally receive `decide`. Git nodes receive
+local Git inspection; merge nodes also receive Git integration commands and
+`finish_merge`. Merge agents receive bounded changed-file lists, diff statistics
+and previews, plus the source checkout's dirty status. The model-facing `git`
+tool has a role-specific `command` enum and separate `args`; `finish_merge` lists
+only the current source IDs and diagnoses missing, duplicate or unexpected IDs.
 
 ## Install this local checkout in Pi
 
@@ -121,7 +134,7 @@ npm run demo
 ```
 
 The Pi adapter tests use a fake model registry and assert exact model lookup,
-fresh contexts, tool isolation, decision handling, read-only file-tool execution,
+fresh contexts, tool isolation, decision handling, filesystem tool execution,
 continuation behavior, usage aggregation, context-token progress, and tool counts.
 Renderer tests cover Mermaid topology, live active-node highlighting,
 handoff/failure logs, expanded per-node output, and bounded event previews.
@@ -132,18 +145,56 @@ They make no provider requests.
 
 ## Node filesystem capabilities
 
-Braid's framework-agnostic core does not provide tools to nodes. The Pi adapter
-uses a default read-only capability set:
+Core owns workspace preparation, checkpointing, serialization, and cleanup for
+all integrations. Pi exposes `read` and `ls` in all directories, plus search tools whose local dependencies are available.
+In Git, execute and decision nodes also get `write`/`edit` restricted to their own
+detached worktree, plus local Git inspection. Outside Git, filesystem tools stay
+read-only. Nodes never receive shell commands or a test runner.
 
-- `read` — read text/images
-- `grep` — search file contents
-- `find` — find paths by glob
-- `ls` — list directories
+The initial snapshot includes tracked staged/unstaged changes, deletions, and
+non-ignored untracked files. It preserves the source index and files. Ignored
+files are not copied; submodules are not initialized or recursively snapshotted,
+and Pi rejects writes inside them to keep checkpoint recovery complete.
+Every worker shares that baseline until a merge ends, after which new workers
+snapshot the current source checkout. Uncommitted predecessor changes are not
+implicitly applied to downstream workers. Their paths and checkpoint refs are
+available as context for inspection.
 
-The adapter does not provide `edit`, `write`, `bash`, or `powershell`. This means
-parallel nodes can inspect the same checkout without shared-write conflicts. Read
-access still uses Pi's normal filesystem permissions and is not a sandbox or
-snapshot.
+A `merge` node accepts multiple predecessors and an optional prompt/model. It
+operates in the source checkout, with guarded `write`/`edit` and local `git`
+commands (`add`, `commit`, `merge`, `cherry-pick`, `apply`, `restore`, plus
+inspection). The agent decides which changes to use and how to integrate them.
+Core never automatically merges or cherry-picks. The agent must call
+`finish_merge` with `integrated`, `discarded`, or `archived` and a reason for every
+source. Tool errors and conflicts go back to the agent for recovery. Failed
+predecessors pass errors and partial work along unconditional edges.
+
+Core removes processed source worktrees after the merge agent finishes. If any
+worktrees remain after declared nodes settle, core appends a final merge agent.
+Its model, tool calls, budgets, events, and usage behave like any other node.
+Missing finish calls, unresolved conflicts, or archived sources fail the merge.
+Cancellation, timeout, and failure archive remaining changes and clean worktrees;
+they do not start new merge agents after graph cancellation.
+
+`braid_status` includes core's `workspaces` map with workspace paths, states,
+reasons, `checkpointRef`, and pre-merge `backupRef`. The panel distinguishes active
+worktrees from cleaned workspaces. Worktrees use
+`os.tmpdir()/braid-workspaces-*/<unique-id>`; after removal their contents remain
+recoverable from `refs/braid/checkpoints/*`. Use `git show <checkpointRef>:<path>`
+or `git diff <snapshotCommit> <checkpointRef>` to inspect archived changes.
+Remove individual recovery refs with `git update-ref -d <ref>` once reviewed.
+
+A failed merge does not reset partial changes or conflict state in the source
+checkout. Its `backupRef` preserves the pre-agent snapshot. Cleanup errors report
+retained paths instead of silently claiming success. A process crash cannot run
+cleanup. The merge mutex coordinates runs in the same process only; avoid parent
+edits to the source checkout while a merge agent is running.
+
+File writes reject external paths, Git metadata, symlinks, hard links, and special
+files. Read access follows Pi's normal permissions. This does not replace an OS
+sandbox against concurrent filesystem attacks. For programmatic use, pass
+`createPiRunner(...)` to core `braid(..., { cwd, runner })`; calling the runner
+directly without a core workspace gives read-only capabilities.
 
 Tool and time budgets are unlimited by default in Pi. To set finite hard limits,
 pass any of these fields in the `braid` tool's `options`:
@@ -157,14 +208,15 @@ pass any of these fields in the `braid` tool's `options`:
 
 For example, `options: { maxToolRounds: 20, maxToolCalls: 60, nodeTimeoutMs: 120000 }`.
 Omit a field for no limit; programmatic runner/job options also accept `Infinity`.
-Tool limits must be positive safe integers. Counts include `decide` and rejected
+Tool limits must be positive safe integers. Counts include `decide`, `git`,
+`finish_merge`, and rejected
 tool requests. A batch exceeding either tool limit is rejected before execution
 and fails the node; a final text response is still allowed at the exact limit.
 
 When any budget is finite, the worker's system prompt contains a `system-reminder`
 before its first model call and refreshes it before each continuation. It reports
 finite tool limits and remaining rounds/calls, and remaining node/graph time.
-Workers are instructed to reserve a call for `decide` when required and finish
+Workers must reserve a call for `decide` or `finish_merge` when required and finish
 within the remaining budgets. Graph time is shared across all nodes; a queued
 node receives the remaining graph time, not a fresh graph timeout. Reminders do
 not extend deadlines or interrupt an in-flight model response.
@@ -241,13 +293,14 @@ submission tool input under `options`; each omitted timeout remains unlimited:
 ```
 
 The adapter sets `maxRetries: 0`, `cacheRetention: "none"`, and gives each node a
-fresh provider context. Read-only tools are bounded to 12 tool rounds or 32
-calls per node. Missing paths and invalid read-only tool arguments are returned
-as tool errors so the node can recover; write/shell tool requests are unavailable
-and are also returned as errors. Provider authentication and calls may still
-incur normal provider costs. Braid cannot forcibly stop synchronous JavaScript
-or a remote provider that ignores cancellation. Read access follows Pi's normal
-filesystem permissions and is not a sandbox or snapshot.
+fresh provider context. Tool budgets are unlimited unless `maxToolRounds` or
+`maxToolCalls` is set. Missing paths, invalid arguments, disallowed writes, and
+unavailable tools are returned as tool errors so the node can recover. Provider
+authentication and calls may still incur normal provider costs. Braid cannot
+forcibly stop synchronous JavaScript or a remote provider that ignores
+cancellation. Cancellation prevents further tool calls but does not roll back
+writes already made. Core waits for tracked writes, preserves checkpoints, and
+removes worker worktrees before completing cancellation.
 
 The tool output is capped at 50KB/2000 lines to protect Pi context. When exceeded,
 the adapter writes a mode-600 full JSON result to a temporary file and includes
@@ -265,3 +318,11 @@ The adapter's policy tells Pi to consider Braid because this task has multiple
 independent reasoning branches and a final synthesis. Whether it actually calls
 the tool remains model-dependent; inspect the transcript for the `braid` tool
 submission, completion reminder, and the live graph/handoff log in `/braid`.
+
+## Live end-to-end tests
+
+The reusable RPC suite is in [test/live/README.md](test/live/README.md). It uses
+your local Pi installation and configured credentials with real provider calls.
+Run it explicitly; it is separate from the deterministic tests and incurs model
+usage. It saves prompts, actual Braid parameters, node/tool transcripts, Git/file
+assertions and a Markdown report in a temporary output directory.

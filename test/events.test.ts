@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { braid, type ExecutionEvent, type ModelRunner } from "../src/index.js";
-import { decision, execute, graph } from "./helpers.js";
+import { type ExecutionEvent, type ModelRunner } from "../src/index.js";
+import { braid, decision, execute, graph } from "./helpers.js";
 
 function types(events: readonly ExecutionEvent[]): string[] {
   return events.map((event) => event.type);
@@ -123,7 +123,7 @@ test("execution log records graph creation, handoffs, routing, skips, and comple
   });
 });
 
-test("execution log records failures and failure-derived skips", async () => {
+test("execution log records failures and continued handoffs", async () => {
   const runner: ModelRunner = async (request) => {
     if (request.node.id === "bad") throw new Error("boom");
     return { output: request.node.id };
@@ -141,20 +141,13 @@ test("execution log records failures and failure-derived skips", async () => {
     assert.equal(failure.nodeId, "bad");
     assert.deepEqual(failure.error, { code: "MODEL_ERROR", message: "boom" });
   }
-  const skipped = result.events.find(
-    (event) => event.type === "node_skipped" && event.nodeId === "dependent",
-  );
-  assert.deepEqual(skipped && { ...skipped, timestamp: undefined }, {
-    type: "node_skipped",
-    sequence: skipped?.sequence,
-    timestamp: undefined,
-    nodeId: "dependent",
-    reason: "upstream_failed",
-  });
+  assert.ok(result.events.some(event => event.type === "handoff" && event.from === "bad" && event.to === "dependent"));
+  assert.equal(result.nodes.dependent!.status, "completed");
   const final = result.events.at(-1);
   assert.equal(final?.type, "graph_failed");
   assert.deepEqual(result.terminalOutputs, {
     independent: { output: "independent" },
+    dependent: { output: "dependent" },
   });
 });
 

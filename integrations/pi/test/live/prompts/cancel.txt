@@ -1,0 +1,4 @@
+请用 braid 进行运行中取消的清理测试，只提交一次图。父 agent 不要修改文件或接手合并。
+图只有 execute worker，无边。worker 必须先用 write 创建 cancelled.txt，内容为 "recoverable cancelled change\n"，然后读取检查。测试记录器会在这次真实写入后的下一次 provider 调用前暂停节点，并给父 agent 发出 live-test-ready 消息；这只是在测试中稳定制造取消窗口。
+提交图后结束当前回复，等待 live-test-ready。收到后立即用提交返回的 jobId 调用 braid_cancel，不要提前取消。再等待 braid 的完成提醒，调用 braid_status。不要重新提交图，不要为了集成修改添加 merge 节点。options 只设 nodeTimeoutMs=180000、graphTimeoutMs=480000。
+最终报告实际取消状态、是否未启动自动 merge、未完成修改是否保存在 checkpoint、节点 worktree 是否清理，以及源仓库的 user.txt 和 notes.txt 是否保留。
