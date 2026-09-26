@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Context } from "@earendil-works/pi-ai";
 import type { BraidResult } from "../../../dist/index.js";
 import { createBraidTools } from "../index.js";
 import { BraidJobs } from "../jobs.js";
@@ -32,7 +33,9 @@ for (const scenario of [
       model,
       modelRegistry: {
         find: () => model,
-        complete: async () => {
+        complete: async (_model: unknown, context: Context) => {
+          if (!scenario.error) assert.doesNotMatch(context.systemPrompt!, /system-reminder/);
+          else assert.match(context.systemPrompt!, new RegExp(`${scenario.error === "NODE_TIMEOUT" ? "Node" : "Graph"} time budget: 10 ms remaining`));
           now += 600_000;
           await delay(20);
           return {

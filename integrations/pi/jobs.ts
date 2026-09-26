@@ -25,6 +25,8 @@ export interface JobOptions {
   maxConcurrency?: number;
   nodeTimeoutMs?: number;
   graphTimeoutMs?: number;
+  maxToolRounds?: number;
+  maxToolCalls?: number;
 }
 
 export interface JobSnapshot {
@@ -122,6 +124,8 @@ export class BraidJobs {
         ...(model ? { defaultModel: model } : {}),
         runner: createPiRunner(registry, {
           cwd,
+          maxToolRounds: options.maxToolRounds ?? Infinity,
+          maxToolCalls: options.maxToolCalls ?? Infinity,
           onUsage: (usage) => {
             if (job.status === "running" && !job.controller.signal.aborted)
               reports.push(usage);

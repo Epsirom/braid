@@ -74,6 +74,27 @@ function queuedFetch(responses: unknown[]) {
   return { fetch, calls };
 }
 
+test("OpenAI time reminders refresh on the decision continuation", async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const fake = queuedFetch([completion(null, [toolCall()]), completion("Done")]);
+  const runner = createOpenAICompatibleRunner({
+    defaultModel: "fake",
+    fetch: async (...args) => {
+      const response = await fake.fetch(...args);
+      now += 50;
+      return response;
+    },
+  });
+  const result = await braid(graph([decision("route", ["left", "right"])]), {
+    runner, nodeTimeoutMs: 200, graphTimeoutMs: 300,
+  });
+  assert.equal(result.status, "completed");
+  assert.match(fake.calls[0]!.messages[0]!.content!, /Node time budget: 200 ms remaining/);
+  assert.match(fake.calls[1]!.messages[0]!.content!, /Node time budget: 150 ms remaining/);
+  assert.match(fake.calls[1]!.messages[0]!.content!, /Graph time budget: 250 ms remaining/);
+});
+
 test("OpenAI-compatible adapter runs decision -> parallel branches -> join end to end", async () => {
   const calls: WireRequest[] = [];
   const input: BraidInput = graph(

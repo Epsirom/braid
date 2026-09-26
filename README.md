@@ -251,9 +251,24 @@ one tool-free follow-up request to obtain the final text after `decide`. It keep
 both pre-tool and final textual content, sums reported usage across those
 requests, and rejects unsupported tool calls and truncated completions. It has
 no general tool loop, retries, or streaming. The optional Pi adapter instead
-runs a bounded loop for the standard read-only `read`, `grep`, `find`, and `ls`
+runs a loop for the standard read-only `read`, `grep`, `find`, and `ls`
 tools, returning tool errors to the node model so it can recover. It never
 provides `edit`, `write`, `bash`, or `powershell`.
+
+Pi tool and time budgets are unlimited by default. Its `options.maxToolRounds`
+and `options.maxToolCalls` can impose positive integer limits per node; counts
+include `decide` and rejected requests. Exceeding either limit fails the node
+before executing the over-budget batch. Returning final text at the limit is
+allowed. See the [Pi budget options](integrations/pi/README.md#node-filesystem-capabilities)
+for configuration, including `nodeTimeoutMs` and `graphTimeoutMs`.
+
+For finite budgets, Pi inserts a system reminder with remaining tool and time
+budgets before every model call. The OpenAI-compatible adapter also refreshes
+finite time-budget reminders before each request. The core supplies optional
+`request.deadlines` on the `performance.now()` clock for adapters to calculate
+remaining node and shared graph time. Reminders do not extend hard limits or
+interrupt a model response already in progress. The core API's default timeouts
+remain 60 seconds per node and 5 minutes per graph.
 
 ## Results, timeouts, and accounting
 

@@ -19,6 +19,14 @@ const timeout = () =>
       description: "Timeout in milliseconds; omit for no time limit",
     }),
   );
+const toolBudget = (unit: string) =>
+  Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: Number.MAX_SAFE_INTEGER,
+      description: `Maximum tool ${unit} per node, including decide and rejected requests; omit for no limit`,
+    }),
+  );
 
 const braidParameters = Type.Object(
   {
@@ -64,6 +72,8 @@ const braidParameters = Type.Object(
           maxConcurrency: Type.Optional(Type.Integer({ minimum: 1 })),
           nodeTimeoutMs: timeout(),
           graphTimeoutMs: timeout(),
+          maxToolRounds: toolBudget("rounds"),
+          maxToolCalls: toolBudget("calls"),
         },
         { additionalProperties: false },
       ),
@@ -102,6 +112,7 @@ export function createBraidTools(jobs: BraidJobs) {
         "Use parallel execute nodes for independent concerns and a final synthesis node. The user does not need to mention Braid or design the graph.",
         "Do not use braid for simple one-step answers or trivial direct edits. Keep writes, shell commands, and test execution in the parent after Braid analysis.",
         "Braid nodes have read, grep, find, and ls plus decide on decision nodes; they cannot edit files, write files, run shell commands, run tests, or call recursive Braid.",
+        "Tool and time budgets are unlimited by default. Set maxToolRounds, maxToolCalls, nodeTimeoutMs, or graphTimeoutMs in options to impose hard limits; nodes receive system reminders of their remaining budgets before each model call.",
       ],
       parameters: braidParameters,
       renderCall(args, theme) {

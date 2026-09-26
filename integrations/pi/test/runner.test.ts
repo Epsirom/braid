@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { createPiRunner, sumPiUsage } from "../runner.js";
 import type { ModelRequest } from "../../../dist/index.js";
-import type { AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Context, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 const model = {
@@ -70,6 +70,106 @@ function request(node: ModelRequest["node"]): ModelRequest {
     signal: new AbortController().signal,
   };
 }
+
+function reads(count: number): AssistantMessage {
+  return message(Array.from({ length: count }, (_, i) => ({
+    type: "toolCall" as const,
+    id: `read-${i}`,
+    name: "read",
+    arguments: { path: new URL("../../../package.json", import.meta.url).pathname, limit: 1 },
+  })), "toolUse");
+}
+
+for (const options of [{}, { maxToolRounds: Infinity, maxToolCalls: Infinity }]) {
+  test(`tool budgets are unlimited with ${JSON.stringify(Object.keys(options))}`, async () => {
+    const fake = fakeRegistry([
+      ...Array.from({ length: 13 }, () => reads(3)),
+      message([{ type: "text", text: "Finished after 39 calls" }]),
+    ]);
+    const output = await createPiRunner(fake.registry, options)(
+      request({ type: "execute", id: "work", prompt: "Work" }),
+    );
+    assert.equal(output.output, "Finished after 39 calls");
+    assert.equal(fake.contexts.length, 14);
+    for (const context of fake.contexts as Context[]) {
+      assert.doesNotMatch(context.systemPrompt!, /system-reminder/);
+    }
+  });
+}
+
+test("finite tool budgets refresh the system reminder and allow a final answer at the cap", async () => {
+  const fake = fakeRegistry([reads(2), message([{ type: "text", text: "Done" }])]);
+  const output = await createPiRunner(fake.registry, { maxToolRounds: 1, maxToolCalls: 2 })(
+    request({ type: "execute", id: "work", prompt: "Work" }),
+  );
+  assert.equal(output.output, "Done");
+  const [first, last] = fake.contexts as Context[];
+  assert.match(first!.systemPrompt!, /Tool round budget: 0\/1 used; 1 remaining/);
+  assert.match(first!.systemPrompt!, /Tool call budget: 0\/2 used; 2 remaining/);
+  assert.match(last!.systemPrompt!, /Tool round budget: 1\/1 used; 0 remaining/);
+  assert.match(last!.systemPrompt!, /Tool call budget: 2\/2 used; 0 remaining/);
+  assert.match(last!.systemPrompt!, /make no further tool calls/);
+  assert.equal(last!.systemPrompt!.match(/<system-reminder>/g)?.length, 1);
+});
+
+for (const scenario of [
+  { options: { maxToolRounds: 1 }, responses: [reads(1), reads(1)], completions: 2 },
+  { options: { maxToolCalls: 1 }, responses: [reads(2)], completions: 1 },
+]) {
+  test(`finite tool budget is enforced: ${JSON.stringify(scenario.options)}`, async () => {
+    const fake = fakeRegistry(scenario.responses);
+    await assert.rejects(createPiRunner(fake.registry, scenario.options)(
+      request({ type: "execute", id: "work", prompt: "Work" }),
+    ), /exceeded its tool budget/);
+    assert.equal(fake.contexts.length, scenario.completions);
+  });
+}
+
+test("invalid finite tool budgets are rejected", () => {
+  const fake = fakeRegistry([]);
+  for (const key of ["maxToolRounds", "maxToolCalls"]) {
+    for (const value of [0, -1, 1.5, NaN, -Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(() => createPiRunner(fake.registry, { [key]: value }), TypeError);
+    }
+  }
+});
+
+test("decision calls count toward finite budgets and can finish at the cap", async () => {
+  const fake = fakeRegistry([
+    message([{ type: "toolCall", id: "decision", name: "decide", arguments: { choice: "go" } }], "toolUse"),
+    message([{ type: "text", text: "Go" }]),
+  ]);
+  const choices: string[] = [];
+  const output = await createPiRunner(fake.registry, { maxToolRounds: 1, maxToolCalls: 1 })({
+    ...request({ type: "decision", id: "route", prompt: "Choose", choices: ["go"] }),
+    decide: choice => { choices.push(choice); },
+  });
+  assert.equal(output.output, "Go");
+  assert.deepEqual(choices, ["go"]);
+  assert.match((fake.contexts[1] as Context).systemPrompt!, /Tool call budget: 1\/1 used; 0 remaining/);
+});
+
+test("time reminders refresh before each model call", async (t) => {
+  let now = 100;
+  t.mock.method(performance, "now", () => now);
+  const fake = fakeRegistry([reads(1), message([{ type: "text", text: "Done" }])]);
+  const original = fake.registry.complete;
+  t.mock.method(fake.registry, "complete", async (...args: Parameters<typeof original>) => {
+    const response = await original(...args);
+    now += 100;
+    return response;
+  });
+  await createPiRunner(fake.registry)({
+    ...request({ type: "execute", id: "work", prompt: "Work" }),
+    deadlines: { node: 1_000, graph: 2_000 },
+  });
+  const [first, last] = fake.contexts as Context[];
+  assert.match(first!.systemPrompt!, /Node time budget: 900 ms remaining/);
+  assert.match(first!.systemPrompt!, /Graph time budget: 1900 ms remaining/);
+  assert.match(last!.systemPrompt!, /Node time budget: 800 ms remaining/);
+  assert.match(last!.systemPrompt!, /Graph time budget: 1800 ms remaining/);
+  assert.doesNotMatch(last!.systemPrompt!, /Tool call budget/);
+});
 
 test("Pi runner uses exact model lookup, fresh context, decide, and one bounded tool continuation", async () => {
   const responses = [

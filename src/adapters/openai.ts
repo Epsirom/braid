@@ -1,4 +1,5 @@
 import type { ModelResponse, ModelRunner, TokenUsage } from "../types.js";
+import { formatBudgetReminder } from "../budgets.js";
 
 export interface OpenAICompatibleOptions {
   apiKey?: string;
@@ -146,8 +147,10 @@ export function createOpenAICompatibleRunner(
           ]
         : undefined;
 
+    const systemPrompt = messages[0]!.content as string;
     let usage: TokenUsage | undefined;
     const complete = async (withTool: boolean): Promise<Completion> => {
+      messages[0]!.content = systemPrompt + formatBudgetReminder(request);
       const response = await fetchImpl(url, {
         method: "POST",
         headers: {

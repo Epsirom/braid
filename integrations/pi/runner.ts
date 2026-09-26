@@ -18,9 +18,7 @@ import {
   type ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelRunner } from "../../dist/index.js";
-
-const MAX_TOOL_ROUNDS = 12;
-const MAX_TOOL_CALLS = 32;
+import { formatBudgetReminder } from "../../dist/budgets.js";
 
 export interface PiNodeProgress {
   nodeId: string;
@@ -37,6 +35,10 @@ export interface PiRunnerOptions {
   onUsage?: (usage: Usage) => void;
   onProgress?: (progress: PiNodeProgress) => void;
   cwd?: string;
+  /** Per node, including decide and rejected requests. Omit or use Infinity for no limit. */
+  maxToolRounds?: number;
+  /** Per node, including decide and rejected requests. Omit or use Infinity for no limit. */
+  maxToolCalls?: number;
 }
 
 /** Keep Pi's provider/auth plumbing and read-only tool execution here, never in Braid's core. */
@@ -50,6 +52,13 @@ export function createPiRunner(
       ? { onUsage: onUsageOrOptions, cwd }
       : { ...onUsageOrOptions, cwd: onUsageOrOptions?.cwd ?? cwd };
   const workingDirectory = resolve(options.cwd ?? cwd);
+  const maxToolRounds = options.maxToolRounds ?? Infinity;
+  const maxToolCalls = options.maxToolCalls ?? Infinity;
+  for (const [name, value] of Object.entries({ maxToolRounds, maxToolCalls })) {
+    if (value !== Infinity && (!Number.isSafeInteger(value) || value < 1)) {
+      throw new TypeError(`${name} must be Infinity or a positive safe integer`);
+    }
+  }
   const onUsage = options.onUsage;
   const onProgress = options.onProgress;
   const reportProgress = (progress: PiNodeProgress): void => {
@@ -133,6 +142,7 @@ export function createPiRunner(
       tools: allToolDefinitions,
     };
     const toolByName = new Map(readOnlyTools.map((tool) => [tool.name, tool]));
+    const systemPrompt = context.systemPrompt!;
     const sessionId = crypto.randomUUID();
     const usage = { inputTokens: 0, outputTokens: 0 };
     const textParts: string[] = [];
@@ -144,6 +154,23 @@ export function createPiRunner(
 
     const complete = async (): Promise<AssistantMessage> => {
       request.signal.throwIfAborted();
+      const budgets: string[] = [];
+      if (Number.isFinite(maxToolRounds)) {
+        budgets.push(
+          `Tool round budget: ${toolRounds}/${maxToolRounds} used; ${maxToolRounds - toolRounds} remaining. A round is one assistant response containing tool calls.`,
+        );
+      }
+      if (Number.isFinite(maxToolCalls)) {
+        budgets.push(
+          `Tool call budget: ${toolCalls}/${maxToolCalls} used; ${maxToolCalls - toolCalls} remaining. Every requested call counts, including decide and rejected calls.`,
+        );
+      }
+      if (budgets.length > 0) {
+        budgets.push(
+          "When a tool budget reaches zero, make no further tool calls and return your final answer. Reserve budget for decide if required.",
+        );
+      }
+      context.systemPrompt = systemPrompt + formatBudgetReminder(request, budgets);
       reportProgress({
         nodeId: request.node.id,
         contextTokens: estimateContextTokens(context),
@@ -277,9 +304,9 @@ export function createPiRunner(
         toolRounds,
         phase: "tool",
       });
-      if (toolRounds > MAX_TOOL_ROUNDS || toolCalls > MAX_TOOL_CALLS) {
+      if (toolRounds > maxToolRounds || toolCalls > maxToolCalls) {
         throw new Error(
-          `Braid node exceeded its read-only tool limit (${MAX_TOOL_ROUNDS} rounds or ${MAX_TOOL_CALLS} calls)`,
+          `Braid node exceeded its tool budget (${maxToolRounds} rounds or ${maxToolCalls} calls)`,
         );
       }
 

@@ -4,6 +4,24 @@ import { setTimeout as delay } from "node:timers/promises";
 import { braid, type ModelRequest } from "../src/index.js";
 import { execute, graph } from "./helpers.js";
 
+test("runner deadlines preserve graph queue time and give each node its own time budget", async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const deadlines: ModelRequest["deadlines"][] = [];
+  const result = await braid(graph([execute("a"), execute("b")]), {
+    maxConcurrency: 1,
+    nodeTimeoutMs: 100,
+    graphTimeoutMs: 200,
+    runner: async request => {
+      deadlines.push(request.deadlines);
+      now += 50;
+      return { output: request.node.id };
+    },
+  });
+  assert.equal(result.status, "completed");
+  assert.deepEqual(deadlines, [{ node: 100, graph: 200 }, { node: 150, graph: 200 }]);
+});
+
 test("unlimited deadlines allow long executions and queued nodes without timer overflow", {
   timeout: 2_000,
 }, async (t) => {
@@ -13,7 +31,8 @@ test("unlimited deadlines allow long executions and queued nodes without timer o
     maxConcurrency: 1,
     nodeTimeoutMs: Infinity,
     graphTimeoutMs: Infinity,
-    runner: async ({ node, signal }) => {
+    runner: async ({ node, signal, deadlines }) => {
+      assert.equal(deadlines, undefined);
       now += 600_000;
       // Passing Infinity to Node's setTimeout would abort after just 1ms.
       await delay(20);
