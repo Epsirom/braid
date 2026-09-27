@@ -1,5 +1,5 @@
 {
-  "name": "pi-braid",
+  "name": "@chrok/pi-braid",
   "version": "0.1.0",
   "license": "MIT",
   "description": "Pi extension for Braid: background DAG jobs and a live flow panel",

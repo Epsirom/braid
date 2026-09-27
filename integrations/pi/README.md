@@ -1,4 +1,4 @@
-# Braid for Pi (`pi-braid`)
+# Braid for Pi (`@chrok/pi-braid`)
 
 This optional Pi integration runs Braid graphs as background jobs. It registers:
 
@@ -93,7 +93,7 @@ only the current source IDs and diagnoses missing, duplicate or unexpected IDs.
 Requires Node.js 22.19+ and Pi 0.85.1 (the tested version):
 
 ```sh
-pi install npm:pi-braid
+pi install npm:@chrok/pi-braid
 ```
 
 Add `-l` for a project-local installation. Run `/reload` after installation.

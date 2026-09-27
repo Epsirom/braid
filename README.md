@@ -36,13 +36,13 @@ framework. [Runnable examples](docs/examples.md) show the tradeoffs.
 ## Install in your application
 
 ```sh
-npm install braid
+npm install @chrok/braid
 ```
 
 Save this as `example.mjs` and run `node example.mjs` (no API key needed):
 
 ```js
-import { braid } from "braid";
+import { braid } from "@chrok/braid";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,7 +76,7 @@ before running a custom adapter against a repository.
 With Pi 0.85.1 and Node.js 22.19+:
 
 ```sh
-pi install npm:pi-braid
+pi install npm:@chrok/pi-braid
 ```
 
 Run `/reload`, ask Pi to analyze a task with Braid, and open `/braid` to inspect
@@ -119,8 +119,8 @@ After installing the package, submit the graph in one call;
 configuration and the trusted provider adapter are separate from the graph data:
 
 ```ts
-import { braid } from "braid";
-import { createOpenAICompatibleRunner } from "braid/adapters/openai";
+import { braid } from "@chrok/braid";
+import { createOpenAICompatibleRunner } from "@chrok/braid/adapters/openai";
 
 const apiKey = process.env.OPENAI_API_KEY;
 const model = process.env.BRAID_MODEL;
@@ -289,7 +289,7 @@ worktrees; nodes outside Git stay read-only. Merge agents handle integration; th
 The core accepts a `ModelRunner` function with this contract:
 
 ```ts
-import type { ModelRequest } from "braid";
+import type { ModelRequest } from "@chrok/braid";
 
 type ModelRunner = (request: ModelRequest) => Promise<{
   output: string;

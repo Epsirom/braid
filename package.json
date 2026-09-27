@@ -1,5 +1,5 @@
 {
-  "name": "braid",
+  "name": "@chrok/braid",
   "version": "0.1.0",
   "license": "MIT",
   "description": "A small, framework-agnostic DAG runtime for isolated model invocations",

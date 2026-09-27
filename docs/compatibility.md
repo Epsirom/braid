@@ -30,7 +30,7 @@ preserve documented behavior; breaking API or semantic changes require a minor
 version bump, a changelog entry, and migration guidance. New optional fields or
 fixes that restore the documented contract may ship in a patch.
 
-Supported core entry points are `braid` and `braid/adapters/openai`. Internal
+Supported core entry points are `@chrok/braid` and `@chrok/braid/adapters/openai`. Internal
 files and Pi helper classes are not stable public APIs. Documented result/error
 fields, routing behavior, `ModelRunner`, and existing event meanings are part of
 the public contract. Consumers should ignore new diagnostic fields and provide a
