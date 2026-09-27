@@ -46,7 +46,7 @@
     "test:pi:live": "npm run build:pi && node integrations/pi/test/live/run.mjs"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.2",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"
   },
