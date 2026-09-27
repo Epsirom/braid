@@ -98,7 +98,10 @@ export function createOpenAICompatibleRunner(
 ): ModelRunner {
   const { apiKey, defaultModel } = options;
   const fetchImpl = options.fetch ?? globalThis.fetch;
-  const url = `${(options.baseURL ?? "https://api.openai.com/v1").replace(/\/+$/, "")}/chat/completions`;
+  const baseURL = options.baseURL ?? "https://api.openai.com/v1";
+  let end = baseURL.length;
+  while (end > 0 && baseURL[end - 1] === "/") end--;
+  const url = `${baseURL.slice(0, end)}/chat/completions`;
 
   return async (request) => {
     const model = request.model ?? defaultModel;
