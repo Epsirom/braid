@@ -74,6 +74,31 @@ function queuedFetch(responses: unknown[]) {
   return { fetch, calls };
 }
 
+test("OpenAI base URLs preserve internal slashes and remove only trailing slashes", async () => {
+  const longPath = `https://example.invalid/${"/".repeat(100_000)}v1`;
+  for (const [baseURL, expected] of [
+    [undefined, "https://api.openai.com/v1"],
+    ["https://example.invalid/v1///", "https://example.invalid/v1"],
+    [longPath, longPath],
+    [`${longPath}///`, longPath],
+    ["///", ""],
+  ] as const) {
+    let calls = 0;
+    const runner = createOpenAICompatibleRunner({
+      ...(baseURL === undefined ? {} : { baseURL }),
+      defaultModel: "fake",
+      fetch: async (url) => {
+        calls++;
+        assert.equal(url, `${expected}/chat/completions`);
+        return Response.json(completion("PASS"));
+      },
+    });
+    const result = await braid(graph([execute("a")]), { runner });
+    assert.equal(result.status, "completed");
+    assert.equal(calls, 1);
+  }
+});
+
 test("OpenAI time reminders refresh on the decision continuation", async (t) => {
   let now = 0;
   t.mock.method(performance, "now", () => now);

@@ -6,6 +6,10 @@ source so its installed extension never reaches outside its own package.
 
 ## Prepare a release
 
+Version tags (`v*`) cannot be moved or deleted. New GitHub releases are immutable:
+prepare a draft and attach any assets before publishing. Published tag/asset
+corrections require a new version. See [repository settings](repository-settings.md).
+
 1. Update both `package.json` versions and both lockfiles. Use a minor version
    for breaking 0.x changes, and describe migrations in the changelog.
 2. Run `npm ci`, `npm ci --prefix integrations/pi`, and `npm run verify`.

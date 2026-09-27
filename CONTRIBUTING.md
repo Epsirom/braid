@@ -29,6 +29,12 @@ calls a model. `npm test` is the fast core-only loop; `npm run test:pi` tests Pi
 
 ## Changes and reviews
 
+Submit changes to `main` through a pull request, including maintainer changes.
+Keep the branch up to date, pass the required CI and CodeQL checks, and resolve
+review conversations before squash merging. See the
+[repository policies](docs/repository-settings.md) for the complete settings and
+the current single-maintainer review policy.
+
 - Keep the TypeScript strict checks passing. Follow nearby code and the
   repository's two-space formatting; use explicit public types.
 - For behavior changes, add a regression test that fails before the change.

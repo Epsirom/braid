@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-No changes yet.
+- Trim OpenAI-compatible base URL trailing slashes in linear time, avoiding
+  excessive regular-expression backtracking on long internal slash sequences.
+- Protect the main branch and version tags; document repository governance,
+  CodeQL checks, Actions restrictions, and immutable releases.
 
 ## 0.1.0 — 2026-09-27
 
