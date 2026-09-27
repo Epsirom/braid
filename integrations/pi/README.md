@@ -90,7 +90,7 @@ only the current source IDs and diagnoses missing, duplicate or unexpected IDs.
 
 ## Install from npm
 
-Requires Node.js 22.19+ and Pi 0.85.1 (the tested version):
+Requires Node.js 22.19+ and Pi 0.87.1 (the tested version):
 
 ```sh
 pi install npm:@chrok/pi-braid
@@ -100,7 +100,7 @@ Add `-l` for a project-local installation. Run `/reload` after installation.
 The package includes compiled Braid core code from the matching release; it does
 not depend on a source checkout. Pi supplies its core peer packages at runtime.
 Their wildcard ranges follow Pi's packaging convention, not universal version
-compatibility. Development and CI pin Pi 0.85.1.
+compatibility. Development and CI pin Pi 0.87.1.
 
 ## Install this local checkout in Pi
 

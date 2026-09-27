@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Validate the Pi integration against Pi 0.87.1; update GitHub Actions and tsx.
+- Group routine dependency updates and reserve Node/TypeScript major upgrades
+  for deliberate compatibility changes across both packages.
 - Clarify Pi tool and context guidance for parallel implementation and merge
   nodes; describe read-only filesystem access by the node's assigned workspace
   instead of assuming its directory is outside Git.

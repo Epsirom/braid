@@ -65,3 +65,18 @@ Use a new version for a correction. See [the release guide](releasing.md).
 
 These are repository settings, not organization-wide changes. Neither commit
 sign-off nor a CLA is required for contributions.
+
+## Dependency maintenance
+
+Dependabot checks both npm manifests weekly. Pi host packages stay in a separate
+group because even 0.x minor releases can change extension contracts. Other npm
+minor/patch updates are grouped; GitHub Actions updates are grouped monthly and
+retain full commit SHA pins. Grouping does not enable automatic merging.
+
+Keep `@types/node` on 22.x to match the oldest supported Node major. TypeScript
+major upgrades require a coordinated migration of core and Pi, including the
+standalone package/declaration checks; the current migration is tracked in the
+[roadmap](../ROADMAP.md). Automatic major version updates for these two packages
+are ignored until their compatibility policy changes. Minor/patch updates,
+vulnerability alerts, and security-update configuration remain enabled. Review
+any security fix that requires crossing an ignored major version manually.

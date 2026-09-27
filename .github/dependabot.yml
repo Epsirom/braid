@@ -1,19 +1,32 @@
 version: 2
 updates:
   - package-ecosystem: npm
-    directory: /
+    directories:
+      - /
+      - /integrations/pi
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
-  - package-ecosystem: npm
-    directory: /integrations/pi
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 3
+    ignore:
+      # Keep declarations aligned with the minimum supported Node runtime.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # Migrate both packages together; see ROADMAP.md.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
     groups:
+      # Pi 0.x minor releases can break host APIs; review them separately.
       pi:
         patterns: ['@earendil-works/*']
+      npm-minor-patch:
+        patterns: ['*']
+        exclude-patterns: ['@earendil-works/*']
+        update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      github-actions:
+        patterns: ['*']
