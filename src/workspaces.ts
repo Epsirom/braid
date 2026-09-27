@@ -127,7 +127,9 @@ export class GitWorkspaces {
     }
     sourceRoot = await realpath(sourceRoot);
     const cwdSuffix = relative(sourceRoot, await realpath(this.cwd));
-    const directory = await mkdtemp(join(tmpdir(), "braid-workspaces-"));
+    // Git records canonical worktree paths. In particular, Windows tmpdir()
+    // can contain an 8.3 alias that Git later rejects for lock/remove commands.
+    const directory = await realpath(await mkdtemp(join(tmpdir(), "braid-workspaces-")));
     const hooksDirectory = join(directory, "hooks");
     await mkdir(hooksDirectory);
     const index = join(directory, "snapshot-index");
