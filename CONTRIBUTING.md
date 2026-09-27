@@ -12,13 +12,20 @@ Use Node.js 22.19+ and npm. From a fresh checkout:
 git clone https://github.com/Epsirom/braid.git
 cd braid
 npm ci
-npm ci --prefix integrations/pi
 npm run verify
 ```
 
-There are two packages and two lockfiles. The core has no runtime dependencies;
-Pi's dependencies belong in `integrations/pi`. Update and commit the corresponding
-lockfile when changing a dependency. Do not commit generated `dist` directories,
+The root npm workspace lockfile covers both packages. A development-only
+`@chrok/braid: file:.` dependency links the core checkout into `node_modules`;
+Pi's manifest still declares the exact release version. This lets CI test a
+new core before it is published. `check:pi`, `test:pi`, and `build:pi` rebuild
+core so package imports resolve current JavaScript and declarations. Consumers
+installing either published package do not install this development dependency.
+Use `npm install --workspace @chrok/pi-braid <dependency>` for Pi dependency
+updates; do not create a separate lockfile in `integrations/pi`.
+
+The core has no runtime dependencies. Pi's dependencies belong in its workspace
+manifest. Update and commit the root lockfile when changing a dependency. Do not commit generated `dist` directories,
 tarballs, credentials, or provider output containing private data.
 
 `verify` type-checks both packages, runs deterministic tests and offline examples,

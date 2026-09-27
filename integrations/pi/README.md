@@ -97,8 +97,9 @@ pi install npm:@chrok/pi-braid
 ```
 
 Add `-l` for a project-local installation. Run `/reload` after installation.
-The package includes compiled Braid core code from the matching release; it does
-not depend on a source checkout. Pi supplies its core peer packages at runtime.
+The package depends on the exact matching `@chrok/braid` release; npm installs
+core automatically. It does not bundle core or depend on a source checkout.
+Pi supplies its core peer packages at runtime.
 Their wildcard ranges follow Pi's packaging convention, not universal version
 compatibility. Development and CI pin Pi 0.87.1.
 
@@ -108,7 +109,6 @@ From the repository root:
 
 ```sh
 npm ci
-npm ci --prefix integrations/pi
 npm run build:pi
 pi install ./integrations/pi
 ```
@@ -130,14 +130,16 @@ pi config
 ```
 
 The extension loads its own compiled `dist/` and the Pi host dependencies.
-`npm ci --prefix integrations/pi` installs the pinned development environment;
-use `npm install --prefix integrations/pi` when intentionally updating its lockfile. The adapter uses the `grok-mermaid` terminal renderer for Mermaid flowcharts.
+`npm ci` at the repository root installs the pinned workspace development
+environment, including a local link to core. Use
+`npm install --workspace @chrok/pi-braid <dependency>` when updating Pi dependencies;
+both packages share the root lockfile. The adapter uses the `grok-mermaid` terminal renderer for Mermaid flowcharts.
 The local install is trusted code: Pi extensions execute with the process's full
 permissions.
 
 ## Test the adapter without spending money
 
-After both `npm ci` commands above, verify the core and adapter:
+After the root `npm ci` command above, verify the core and adapter:
 
 ```sh
 npm run check

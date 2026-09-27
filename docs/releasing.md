@@ -1,8 +1,8 @@
 # Releasing
 
 Core and Pi are separate public npm packages built from one commit. Both use the
-same version. The core has no runtime dependencies. Pi bundles compiled core
-source so its installed extension never reaches outside its own package.
+same version. The core has no runtime dependencies. Pi declares an exact
+`@chrok/braid` dependency and includes only its own compiled integration code.
 
 ## Prepare a release
 
@@ -10,11 +10,14 @@ Version tags (`v*`) cannot be moved or deleted. New GitHub releases are immutabl
 prepare a draft and attach any assets before publishing. Published tag/asset
 corrections require a new version. See [repository settings](repository-settings.md).
 
-1. Update both `package.json` versions and both lockfiles. Use a minor version
+1. Update both `package.json` versions, Pi's exact `@chrok/braid` dependency,
+   and the root workspace lockfile (`npm install --package-lock-only`). Use a minor version
    for breaking 0.x changes, and describe migrations in the changelog.
-2. Run `npm ci`, `npm ci --prefix integrations/pi`, and `npm run verify`.
+2. Run `npm ci` and `npm run verify` from the repository root.
    The package check verifies clean builds, public ESM imports, declarations,
    licenses, and Pi registration in a temporary consumer outside the checkout.
+   A temporary local registry serves the unpublished core tarball; installing
+   only the Pi tarball must fetch core transitively through its version dependency.
 3. Update the changelog and supported Pi version. Commit and review the changes;
    require the CI matrix to pass before tagging that commit `vX.Y.Z`.
 4. Inspect `npm pack --dry-run` and `npm pack --dry-run` from `integrations/pi`.
@@ -64,7 +67,11 @@ npm trust list @chrok/pi-braid
 
 Publishing a non-prerelease GitHub release triggers `.github/workflows/release.yml`.
 It validates the tag/version relationship, repeats all checks, and publishes
-core then Pi using short-lived OIDC credentials. It does not require `NPM_TOKEN`.
+core then Pi using short-lived OIDC credentials. After each publish (or retry
+of an existing version), it waits for matching version/commit metadata and a
+successful tarball download. Pi is not published until core is available. npm
+processing is polled every 15 seconds for up to 10 minutes; a timeout fails the
+workflow with retry instructions. It does not require `NPM_TOKEN`.
 The workflow installs npm 11 and uses Node 24. See
 [npm's trusted publishing documentation](https://docs.npmjs.com/trusted-publishers/).
 

@@ -4,7 +4,7 @@ import {
   truncateHead,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import type { BraidInput } from "../../src/index.js";
+import type { BraidInput } from "@chrok/braid";
 import { Text } from "@earendil-works/pi-tui";
 import { BraidJobs, type JobSnapshot } from "./jobs.js";
 import { registerBraidCommand } from "./command.js";

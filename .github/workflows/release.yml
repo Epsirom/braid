@@ -29,7 +29,6 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: node scripts/check-release.mjs
       - run: npm ci
-      - run: npm ci --prefix integrations/pi
       - run: npm run verify
       - name: Publish core and Pi package with npm trusted publishing
         run: node scripts/publish.mjs
