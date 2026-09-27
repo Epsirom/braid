@@ -51,7 +51,7 @@ test("extension registers background tools, a panel command, and guidance to wai
   ) as { systemPrompt: string };
   assert.match(
     prompt.systemPrompt,
-    /two or more concerns can be analyzed independently/,
+    /two or more concerns can be handled independently/,
   );
   assert.match(prompt.systemPrompt, /do not poll repeatedly/);
   assert.match(prompt.systemPrompt, /individual writable worktree/);
