@@ -1,6 +1,6 @@
 {
   "name": "@chrok/braid",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "A small, framework-agnostic DAG runtime for isolated model invocations",
   "type": "module",
