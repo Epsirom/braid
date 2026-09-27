@@ -1,11 +1,14 @@
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { BraidJobs } from "../integrations/pi/jobs.js";
 import { BraidPanel } from "../integrations/pi/command.js";
 
 const jobs = new BraidJobs();
+const cwd = await mkdtemp(join(tmpdir(), "braid-panel-demo-"));
 const model = { provider: "demo", id: "offline", contextWindow: 100_000 };
 const ctx = {
-  cwd: process.cwd(), model,
+  cwd, model,
   modelRegistry: {
     find: () => model,
     complete: async (): Promise<unknown> => ({
@@ -31,6 +34,7 @@ const theme = { fg: (_: string, text: string) => text, bg: (_: string, text: str
 const panel = new BraidPanel(jobs, { requestRender() {}, terminal: { rows: 38 } } as never, theme, () => {});
 const lines = panel.render(106).map(line => line.replace(job.jobId, "demo-job (deterministic offline fixture)").replace(/\d+(?:\.\d+)?ms/g, "<1ms"));
 panel.dispose(); jobs.dispose();
+await rm(cwd, { recursive: true, force: true });
 const escape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="${lines.length * 20 + 90}" viewBox="0 0 1120 ${lines.length * 20 + 90}" role="img" aria-labelledby="title desc">
 <title id="title">Braid Pi flow panel</title><desc id="desc">Actual panel renderer with a completed three-node offline review graph.</desc>

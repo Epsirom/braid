@@ -6,16 +6,16 @@
   "rounds": 7,
   "outputBytesPerNode": 2,
   "gcBeforeEachRun": true,
-  "note": "One warm-up per case. Heap deltas are allocation observations, not peak RSS. No network or model cost.",
+  "note": "One warm-up per case in a temporary non-Git directory. Heap deltas are allocation observations, not peak RSS. No network or model cost.",
   "measurements": [
     {
       "shape": "chain",
       "nodes": 10,
       "edges": 9,
       "concurrency": 1,
-      "medianMs": 0.247,
-      "maxMs": 0.357,
-      "maxHeapDeltaMiB": 0.297,
+      "medianMs": 0.453,
+      "maxMs": 0.599,
+      "maxHeapDeltaMiB": 0.387,
       "events": 60
     },
     {
@@ -23,9 +23,9 @@
       "nodes": 10,
       "edges": 9,
       "concurrency": 4,
-      "medianMs": 0.231,
-      "maxMs": 0.267,
-      "maxHeapDeltaMiB": 0.256,
+      "medianMs": 0.374,
+      "maxMs": 0.408,
+      "maxHeapDeltaMiB": 0.597,
       "events": 60
     },
     {
@@ -33,9 +33,9 @@
       "nodes": 10,
       "edges": 9,
       "concurrency": 16,
-      "medianMs": 0.227,
-      "maxMs": 0.247,
-      "maxHeapDeltaMiB": 0.263,
+      "medianMs": 0.35,
+      "maxMs": 0.395,
+      "maxHeapDeltaMiB": 0.333,
       "events": 60
     },
     {
@@ -43,9 +43,9 @@
       "nodes": 100,
       "edges": 99,
       "concurrency": 1,
-      "medianMs": 2.103,
-      "maxMs": 2.424,
-      "maxHeapDeltaMiB": 4.019,
+      "medianMs": 2.063,
+      "maxMs": 2.508,
+      "maxHeapDeltaMiB": 4.262,
       "events": 600
     },
     {
@@ -53,9 +53,9 @@
       "nodes": 100,
       "edges": 99,
       "concurrency": 4,
-      "medianMs": 2.246,
-      "maxMs": 2.465,
-      "maxHeapDeltaMiB": 3.865,
+      "medianMs": 2.039,
+      "maxMs": 2.178,
+      "maxHeapDeltaMiB": 4.24,
       "events": 600
     },
     {
@@ -63,9 +63,9 @@
       "nodes": 100,
       "edges": 99,
       "concurrency": 16,
-      "medianMs": 2.187,
-      "maxMs": 2.455,
-      "maxHeapDeltaMiB": 4.008,
+      "medianMs": 1.804,
+      "maxMs": 1.861,
+      "maxHeapDeltaMiB": 3.554,
       "events": 600
     },
     {
@@ -73,9 +73,9 @@
       "nodes": 1000,
       "edges": 999,
       "concurrency": 1,
-      "medianMs": 37.419,
-      "maxMs": 47.674,
-      "maxHeapDeltaMiB": 25.832,
+      "medianMs": 41.94,
+      "maxMs": 47.9,
+      "maxHeapDeltaMiB": 31.133,
       "events": 6000
     },
     {
@@ -83,9 +83,9 @@
       "nodes": 1000,
       "edges": 999,
       "concurrency": 4,
-      "medianMs": 53.9,
-      "maxMs": 58.977,
-      "maxHeapDeltaMiB": 58.475,
+      "medianMs": 39.575,
+      "maxMs": 53.982,
+      "maxHeapDeltaMiB": 56.839,
       "events": 6000
     },
     {
@@ -93,9 +93,9 @@
       "nodes": 1000,
       "edges": 999,
       "concurrency": 16,
-      "medianMs": 50.56,
-      "maxMs": 53.416,
-      "maxHeapDeltaMiB": 56.899,
+      "medianMs": 39.549,
+      "maxMs": 52.655,
+      "maxHeapDeltaMiB": 57.444,
       "events": 6000
     },
     {
@@ -103,9 +103,9 @@
       "nodes": 10,
       "edges": 16,
       "concurrency": 1,
-      "medianMs": 0.269,
-      "maxMs": 0.297,
-      "maxHeapDeltaMiB": 0.243,
+      "medianMs": 0.365,
+      "maxMs": 0.446,
+      "maxHeapDeltaMiB": 0.388,
       "events": 74
     },
     {
@@ -113,9 +113,9 @@
       "nodes": 10,
       "edges": 16,
       "concurrency": 4,
-      "medianMs": 0.247,
-      "maxMs": 0.286,
-      "maxHeapDeltaMiB": 0.232,
+      "medianMs": 0.338,
+      "maxMs": 0.356,
+      "maxHeapDeltaMiB": 0.303,
       "events": 74
     },
     {
@@ -123,9 +123,9 @@
       "nodes": 10,
       "edges": 16,
       "concurrency": 16,
-      "medianMs": 0.246,
-      "maxMs": 0.301,
-      "maxHeapDeltaMiB": 0.23,
+      "medianMs": 0.337,
+      "maxMs": 0.342,
+      "maxHeapDeltaMiB": 0.304,
       "events": 74
     },
     {
@@ -133,9 +133,9 @@
       "nodes": 100,
       "edges": 196,
       "concurrency": 1,
-      "medianMs": 2.347,
-      "maxMs": 2.517,
-      "maxHeapDeltaMiB": 3.214,
+      "medianMs": 2.192,
+      "maxMs": 2.233,
+      "maxHeapDeltaMiB": 3.224,
       "events": 794
     },
     {
@@ -143,9 +143,9 @@
       "nodes": 100,
       "edges": 196,
       "concurrency": 4,
-      "medianMs": 1.983,
-      "maxMs": 2.403,
-      "maxHeapDeltaMiB": 2.537,
+      "medianMs": 1.866,
+      "maxMs": 1.928,
+      "maxHeapDeltaMiB": 2.787,
       "events": 794
     },
     {
@@ -153,9 +153,9 @@
       "nodes": 100,
       "edges": 196,
       "concurrency": 16,
-      "medianMs": 1.793,
-      "maxMs": 1.83,
-      "maxHeapDeltaMiB": 2.371,
+      "medianMs": 1.878,
+      "maxMs": 1.97,
+      "maxHeapDeltaMiB": 2.735,
       "events": 794
     },
     {
@@ -163,9 +163,9 @@
       "nodes": 1000,
       "edges": 1996,
       "concurrency": 1,
-      "medianMs": 38.193,
-      "maxMs": 51.825,
-      "maxHeapDeltaMiB": 52.885,
+      "medianMs": 35.054,
+      "maxMs": 47.335,
+      "maxHeapDeltaMiB": 53.93,
       "events": 7994
     },
     {
@@ -173,9 +173,9 @@
       "nodes": 1000,
       "edges": 1996,
       "concurrency": 4,
-      "medianMs": 24.567,
-      "maxMs": 26.487,
-      "maxHeapDeltaMiB": 38.05,
+      "medianMs": 24.574,
+      "maxMs": 29.259,
+      "maxHeapDeltaMiB": 37.812,
       "events": 7994
     },
     {
@@ -183,9 +183,9 @@
       "nodes": 1000,
       "edges": 1996,
       "concurrency": 16,
-      "medianMs": 17.619,
-      "maxMs": 19.445,
-      "maxHeapDeltaMiB": 28.579,
+      "medianMs": 33.785,
+      "maxMs": 35.425,
+      "maxHeapDeltaMiB": 29.416,
       "events": 7994
     }
   ]

@@ -5,7 +5,7 @@
 | Core runtime | Node.js 22+, ESM imports, TypeScript declarations, no runtime dependencies |
 | Pi package | Node.js 22.19+, Pi 0.85.1 is the pinned validation target |
 | CI | Core minimum Node 22.0; both packages on Node 22.19 and 24 on Linux, macOS, Windows |
-| OpenAI-compatible runner | Chat Completions text and function-tool calls; decisions require strict function calling |
+| OpenAI-compatible runner | Chat Completions text and function-tool calls; decisions and merge nodes require tool calling |
 | Browsers / CommonJS | No supported browser build or CommonJS entry point in 0.1 |
 
 The CI matrix describes configured checks; see actual workflow results for each
@@ -19,6 +19,9 @@ The wildcard is a loader/distribution convention, **not a claim that every Pi
 version works**. Test the whole Pi suite before updating the supported target.
 The Pi npm package compiles and includes the same core source as the matching
 core release, so it does not need another installed copy of Braid or a checkout.
+
+Git must be installed for workspace execution inside a Git checkout. Non-Git
+text-only runs do not require Git workspace management.
 
 ## Versioning
 

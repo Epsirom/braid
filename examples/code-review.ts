@@ -1,4 +1,5 @@
 import { braid, type BraidInput, type ModelRunner } from "../src/index.js";
+import { inTemporaryDirectory } from "./support.js";
 
 // Supply an actual diff as graph data. Core workers have no filesystem access.
 const diff = "- return cache[key];\n+ return cache[key] ?? await load(key);";
@@ -18,6 +19,6 @@ const runner: ModelRunner = async ({ node, predecessors }) => ({
       ? "Test an existing value, null, concurrent misses, and a rejected load."
       : predecessors.map(p => `${p.nodeId}: ${p.output}`).join("\n"),
 });
-const result = await braid(graph, { runner, maxConcurrency: 2 });
+const result = await inTemporaryDirectory(cwd => braid(graph, { cwd, runner, maxConcurrency: 2 }));
 if (result.status !== "completed") throw new Error(result.error?.message);
 console.log(result.terminalOutputs.review!.output);

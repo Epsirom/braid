@@ -43,20 +43,33 @@ Save this as `example.mjs` and run `node example.mjs` (no API key needed):
 
 ```js
 import { braid } from "braid";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const result = await braid({
-  goal: "Try one isolated invocation.",
-  nodes: [{ type: "execute", id: "answer", prompt: "Say hello." }],
-  edges: [],
-}, {
-  runner: async () => ({ output: "Hello from Braid." }),
-});
-console.log(result.terminalOutputs.answer.output);
-// Hello from Braid.
+// A non-Git directory keeps this text-only example outside workspace management.
+const cwd = await mkdtemp(join(tmpdir(), "braid-hello-"));
+try {
+  const result = await braid({
+    goal: "Try one isolated invocation.",
+    nodes: [{ type: "execute", id: "answer", prompt: "Say hello." }],
+    edges: [],
+  }, {
+    cwd,
+    runner: async () => ({ output: "Hello from Braid." }),
+  });
+  console.log(result.terminalOutputs.answer.output);
+  // Hello from Braid.
+} finally {
+  await rm(cwd, { recursive: true, force: true });
+}
 ```
 
 For a live provider, use the adapter in the API example below. Installation and
-running the example above do not make model requests.
+running the example above do not make model requests. In a Git checkout, Braid
+creates node worktrees and may append a merge agent that can integrate changes
+into the source checkout. Read [workspace behavior](#worktrees-and-merge-agents)
+before running a custom adapter against a repository.
 
 ## Install in Pi
 

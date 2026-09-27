@@ -12,7 +12,7 @@ validator's deep-graph tests as a production capacity guarantee.
 | Node timeout (starts at admission) | 60 seconds | Unlimited |
 | Graph timeout (includes queueing) | 5 minutes | Unlimited |
 | Caller cancellation | `AbortSignal` | `braid_cancel` / panel `c` |
-| Worker tool loop | None in included HTTP runner | 12 rounds or 32 read-only calls per node |
+| Worker tool loop | Decision continuation / merge Git-tool loop, bounded by deadlines | Unlimited by default; optional `maxToolRounds` and `maxToolCalls` |
 | Result preview | Full result | 50 KB / 2,000 lines, then temporary full-result file |
 | Token / monetary budget | Not enforced | Not enforced |
 
@@ -20,7 +20,7 @@ Pi keeps unlimited timeouts for interactive background work. For bounded work,
 submit explicit `options`, for example:
 
 ```json
-{ "maxConcurrency": 2, "nodeTimeoutMs": 30000, "graphTimeoutMs": 120000 }
+{ "maxConcurrency": 2, "nodeTimeoutMs": 30000, "graphTimeoutMs": 120000, "maxToolRounds": 12, "maxToolCalls": 32 }
 ```
 
 The concurrency limit belongs to each graph, not to the process or provider
@@ -41,7 +41,13 @@ use. Pi retains completed jobs for its session lifetime and full temporary resul
 files until the host/user removes them. Limit the length of sessions or reload
 after exporting needed results. Reloading also cancels outstanding work.
 
+Git worktree preparation, checkpointing, tracked writes, and cleanup add disk,
+Git-process, and elapsed-time overhead. Cleanup may extend wall time beyond a
+model deadline. Automatically appended merge agents are additional model calls
+and share the graph's remaining time. Benchmark results measured outside Git do
+not include this lifecycle. Recoverable refs retain Git objects until removed.
+
 An aborted runtime slot can be reused even if an uncooperative provider continues
 working. Runners must forward `signal`; neither Braid nor JavaScript can forcibly
-stop that remote work. Read-only tools are not a security sandbox. See
+stop that remote work. Workspace and tool guards are not a security sandbox. See
 [SECURITY.md](../SECURITY.md) before exposing a runner to untrusted input.

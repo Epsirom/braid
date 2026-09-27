@@ -6,7 +6,8 @@ comparing machines. [Raw sample measurements](benchmark-results.json) are includ
 
 The benchmark covers chains and fan-out/join graphs at 10, 100, and 1,000 nodes,
 with concurrency 1, 4, and 16. Every case has one warm-up and seven measured runs.
-The runner immediately returns two bytes of text; no network, provider latency,
+The runner executes in a temporary non-Git directory and immediately returns two
+bytes of text; no Git worktrees, network, provider latency,
 tool loop, or model billing is involved. Node is started with `--expose-gc` and
 garbage collection is requested before each run. Deadlines are disabled.
 
@@ -17,12 +18,12 @@ The following subset uses concurrency 4:
 
 | Graph | Nodes | Concurrency | Median elapsed ms | Largest observed heap delta MiB |
 | --- | ---: | ---: | ---: | ---: |
-| chain | 10 | 4 | 0.231 | 0.256 |
-| chain | 100 | 4 | 2.246 | 3.865 |
-| chain | 1000 | 4 | 53.900 | 58.475 |
-| fan-out/join | 10 | 4 | 0.247 | 0.232 |
-| fan-out/join | 100 | 4 | 1.983 | 2.537 |
-| fan-out/join | 1000 | 4 | 24.567 | 38.050 |
+| chain | 10 | 4 | 0.374 | 0.597 |
+| chain | 100 | 4 | 2.039 | 4.240 |
+| chain | 1000 | 4 | 39.575 | 56.839 |
+| fan-out/join | 10 | 4 | 0.338 | 0.303 |
+| fan-out/join | 100 | 4 | 1.866 | 2.787 |
+| fan-out/join | 1000 | 4 | 24.574 | 37.812 |
 
 Elapsed time covers validation, scheduling, context snapshots, events, and result
 construction. Heap delta is the change in `heapUsed` across a run, not peak RSS,

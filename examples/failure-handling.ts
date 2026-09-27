@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { braid } from "../src/index.js";
+import { inTemporaryDirectory } from "./support.js";
 
-const result = await braid({
+const result = await inTemporaryDirectory(cwd => braid({
   goal: "Retain independent findings when one provider fails.",
   nodes: [
     { type: "execute", id: "offline", prompt: "Summarize known local facts." },
@@ -10,15 +11,19 @@ const result = await braid({
   ],
   edges: [{ from: "offline", to: "join" }, { from: "remote", to: "join" }],
 }, {
-  runner: async ({ node }) => {
+  cwd,
+  runner: async ({ node, predecessors }) => {
     if (node.id === "remote") throw new Error("Demo provider unavailable");
+    if (node.id === "join") return {
+      output: predecessors.map(p => `${p.nodeId}: ${p.error ? `unavailable (${p.error.code})` : p.output}`).join("\n"),
+    };
     return { output: "Known local facts are still available." };
   },
-});
+}));
 assert.equal(result.status, "failed");
-assert.equal(result.nodes.join!.skipReason, "upstream_failed");
-// A successful node with an active outgoing edge is not an execution terminal,
-// even if its successor fails. Inspect nodes to retrieve these partial findings.
-assert.deepEqual(Object.keys(result.terminalOutputs), []);
-console.log(`status: ${result.status}; join: ${result.nodes.join!.skipReason}`);
-console.log(`partial finding: ${result.nodes.offline!.output}`);
+assert.equal(result.nodes.join!.status, "completed");
+assert.match(result.terminalOutputs.join!.output, /remote: unavailable \(MODEL_ERROR\)/);
+// Unconditional successors receive failed predecessors as explicit error context.
+// A recovered answer does not erase the graph's original failure status.
+console.log(`status: ${result.status}; join: ${result.nodes.join!.status}`);
+console.log(result.terminalOutputs.join!.output);

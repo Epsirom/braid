@@ -8,6 +8,7 @@ This is a direction for discussion, not a delivery schedule.
 
 - [x] Deterministic validation, scheduling, decisions, cancellation, and events.
 - [x] OpenAI-compatible runner and Pi background-job integration.
+- [x] Core-managed worktrees, recovery refs, merge agents, and Pi tool budgets.
 - [x] Clean builds and standalone package installation checks.
 - [x] CI configuration, contribution policies, examples, and compatibility docs.
 - [x] Reproducible scheduler benchmark and explicit resource limits.

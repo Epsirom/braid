@@ -8,11 +8,12 @@ Replace a runner with the documented provider adapter for live use.
 | --- | --- | --- |
 | [Design comparison](../examples/basic.ts) | `npm run demo` | Decision chooses comparison, benefits/risks run concurrently, answer synthesizes them; brief branch skips |
 | [Code review](../examples/code-review.ts) | `npx tsx examples/code-review.ts` | Correctness and test reviews run independently; final review lists both findings |
-| [Failure handling](../examples/failure-handling.ts) | `npx tsx examples/failure-handling.ts` | `failed`; join skips with `upstream_failed`; successful local findings remain in `nodes.offline` |
+| [Failure handling](../examples/failure-handling.ts) | `npx tsx examples/failure-handling.ts` | `failed`; join completes with local findings and explicit `remote` error context |
 | [Custom runner](../examples/custom-runner.ts) | `npx tsx examples/custom-runner.ts` | `Received direct predecessors: route` |
 
-The core cannot inspect your checkout. The code-review example supplies a short
-diff in `goal`. Pi nodes can instead use their explicit read-only capabilities.
+These text-only examples use temporary non-Git directories. The code-review
+example supplies a short diff in `goal`. In a real Git checkout, core manages
+worktrees and merge agents; Pi can inspect and edit its assigned workspaces.
 Fake responses illustrate control flow; they do not demonstrate model quality.
 
 ## Live comparison
