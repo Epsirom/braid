@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: npm
+    directory: /integrations/pi
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      pi:
+        patterns: ['@earendil-works/*']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

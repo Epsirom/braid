@@ -1,4 +1,4 @@
-# Braid Pi adapter
+# Braid for Pi (`pi-braid`)
 
 This optional Pi integration runs Braid graphs as background jobs. It registers:
 
@@ -88,25 +88,40 @@ and previews, plus the source checkout's dirty status. The model-facing `git`
 tool has a role-specific `command` enum and separate `args`; `finish_merge` lists
 only the current source IDs and diagnoses missing, duplicate or unexpected IDs.
 
+## Install from npm
+
+Requires Node.js 22.19+ and Pi 0.85.1 (the tested version):
+
+```sh
+pi install npm:pi-braid
+```
+
+Add `-l` for a project-local installation. Run `/reload` after installation.
+The package includes compiled Braid core code from the matching release; it does
+not depend on a source checkout. Pi supplies its core peer packages at runtime.
+Their wildcard ranges follow Pi's packaging convention, not universal version
+compatibility. Development and CI pin Pi 0.85.1.
+
 ## Install this local checkout in Pi
 
 From the repository root:
 
 ```sh
 npm ci
-npm run build
-pi install /home/chenhuarong/repo/github/Epsirom/braid/integrations/pi
+npm ci --prefix integrations/pi
+npm run build:pi
+pi install ./integrations/pi
 ```
 
-The absolute path avoids ambiguity. To install for only one project instead of
-all Pi sessions, add `-l`:
+Run these commands from the repository root. To install for only one project,
+add `-l`:
 
 ```sh
-pi install -l /home/chenhuarong/repo/github/Epsirom/braid/integrations/pi
+pi install -l ./integrations/pi
 ```
 
-The package is local-path based, so edits in this checkout are picked up after a
-Pi reload. In Pi, run `/reload`. Restart Pi if the package was installed into an
+For local installations, rebuild with `npm run build:pi` after source edits,
+then reload Pi. In Pi, run `/reload`. Restart Pi if the package was installed into an
 already running process and the tool does not appear. Inspect installation with:
 
 ```sh
@@ -114,15 +129,15 @@ pi list
 pi config
 ```
 
-The extension imports the checked-out `dist/` build and the Pi package dependencies
-from `integrations/pi/node_modules`. Run `npm install --prefix integrations/pi`
-after changing Pi dependency versions. The adapter uses the `grok-mermaid` terminal renderer for Mermaid flowcharts.
+The extension loads its own compiled `dist/` and the Pi host dependencies.
+`npm ci --prefix integrations/pi` installs the pinned development environment;
+use `npm install --prefix integrations/pi` when intentionally updating its lockfile. The adapter uses the `grok-mermaid` terminal renderer for Mermaid flowcharts.
 The local install is trusted code: Pi extensions execute with the process's full
 permissions.
 
 ## Test the adapter without spending money
 
-First verify the core and adapter compile and run their deterministic tests:
+After both `npm ci` commands above, verify the core and adapter:
 
 ```sh
 npm run check

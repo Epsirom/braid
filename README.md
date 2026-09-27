@@ -6,12 +6,80 @@ routing and dependencies, runs independent nodes concurrently, and returns the
 successful execution-terminal outputs. It is an agent primitive, not a workflow
 builder.
 
-**v0.1:** TypeScript, Node.js 22+, no runtime dependencies. The core has no Pi,
-provider SDK, or framework dependency. The package is currently private/unpublished.
+[![CI](https://github.com/Epsirom/braid/actions/workflows/ci.yml/badge.svg)](https://github.com/Epsirom/braid/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Run locally
+**v0.1:** Experimental, TypeScript, Node.js 22+, ESM, no runtime dependencies.
+The core has no Pi, provider SDK, or framework dependency.
+
+## Why Braid?
+
+For a code review, run correctness and test-coverage analysis independently,
+then pass both results to a synthesis node. Add a decision when some tasks need
+only a brief answer. Braid handles dependency readiness, conditional skips,
+failed joins, per-node context, cancellation, and accounting around those calls.
+
+```mermaid
+flowchart LR
+    route{Choose depth} -->|detailed| correctness[Correctness]
+    route -->|detailed| tests[Test coverage]
+    correctness --> review[Final review]
+    tests --> review
+    route -->|brief| brief[Short answer]
+```
+
+Use it when independent reasoning branches and explicit handoffs help. A direct
+model call or `Promise.all` is enough for a simple answer or independent calls
+without routing or joins. Braid adds no persistence, workflow editor, or agent
+framework. [Runnable examples](docs/examples.md) show the tradeoffs.
+
+## Install in your application
 
 ```sh
+npm install braid
+```
+
+Save this as `example.mjs` and run `node example.mjs` (no API key needed):
+
+```js
+import { braid } from "braid";
+
+const result = await braid({
+  goal: "Try one isolated invocation.",
+  nodes: [{ type: "execute", id: "answer", prompt: "Say hello." }],
+  edges: [],
+}, {
+  runner: async () => ({ output: "Hello from Braid." }),
+});
+console.log(result.terminalOutputs.answer.output);
+// Hello from Braid.
+```
+
+For a live provider, use the adapter in the API example below. Installation and
+running the example above do not make model requests.
+
+## Install in Pi
+
+With Pi 0.85.1 and Node.js 22.19+:
+
+```sh
+pi install npm:pi-braid
+```
+
+Run `/reload`, ask Pi to analyze a task with Braid, and open `/braid` to inspect
+the job. The extension includes the matching core runtime; no checkout is needed.
+
+![Braid Pi flow panel with an offline example](docs/assets/pi-panel.svg)
+
+This snapshot uses the actual panel renderer and fake responses. See the
+[Pi guide](integrations/pi/README.md) for background jobs, cancellation, and local
+installation, and [compatibility](docs/compatibility.md) for the tested versions.
+
+## Develop from source
+
+```sh
+git clone https://github.com/Epsirom/braid.git
+cd braid
 npm ci
 npm run check
 npm test
@@ -34,7 +102,7 @@ is needed for the test suite; its HTTP requests are intercepted in tests.
 
 ## API
 
-Local package imports work after `npm run build`. Submit the graph in one call;
+After installing the package, submit the graph in one call;
 configuration and the trusted provider adapter are separate from the graph data:
 
 ```ts
@@ -322,7 +390,7 @@ After reviewing them, remove a particular ref with `git update-ref -d <ref>`.
 They preserve recoverable Git objects without retaining worktree directories.
 
 **The adapter is a trust boundary, not a security sandbox.** It must avoid shared
-conversation state, expose no other tools, and forward `signal` to its provider.
+conversation state, expose only its declared capabilities, and forward `signal` to its provider.
 The core never gives the model arbitrary code execution or a recursive Braid
 tool. An optional Pi adapter translates this same contract without changing the
 runtime; the core v0.1 package does not depend on Pi. See
@@ -413,6 +481,16 @@ scheduler event bus.
 Out of scope: loops, arbitrary code nodes, persistent workflows, saved templates,
 resuming saved runs, human approval, editing UI, user-directed graph mutation,
 and recursive Braid calls from model nodes.
+
+## Contributing and project status
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for setup and verification,
+[ROADMAP.md](ROADMAP.md) for scope, and [CHANGELOG.md](CHANGELOG.md) for changes.
+See [compatibility](docs/compatibility.md), [resource limits](docs/resource-limits.md),
+and [scheduler benchmarks](docs/benchmark.md) before adopting Braid for a service.
+Questions and bugs belong in [GitHub issues](https://github.com/Epsirom/braid/issues);
+report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+Participation follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

@@ -20,7 +20,7 @@ function renderResult(
     theme,
   );
 }
-import type { BraidResult, ExecutionEvent } from "../../../dist/index.js";
+import type { BraidResult, ExecutionEvent } from "../../../src/index.js";
 
 const theme = {
   fg: (color: string, value: string) => `<${color}>${value}</${color}>`,

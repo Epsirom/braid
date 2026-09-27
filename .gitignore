@@ -2,3 +2,7 @@ node_modules/
 dist/
 .env
 coverage/
+*.tgz
+integrations/pi/LICENSE
+.env.*
+!.env.example

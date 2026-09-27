@@ -13,10 +13,10 @@ import {
 import {
   type ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
-import type { ModelRunner } from "../../dist/index.js";
-import { formatBudgetReminder } from "../../dist/budgets.js";
+import type { ModelRunner } from "../../src/index.js";
+import { formatBudgetReminder } from "../../src/budgets.js";
 import type { PiNodeWorkspace } from "./workspaces.js";
-import { gitToolDefinition, finishMergeToolDefinition, mergeInstructions, parseGitToolArguments, parseFinishMergeArguments } from "../../dist/merge-tools.js";
+import { gitToolDefinition, finishMergeToolDefinition, mergeInstructions, parseGitToolArguments, parseFinishMergeArguments } from "../../src/merge-tools.js";
 import { createWorktreeWriteTools } from "./write-tools.js";
 import { createAvailableReadTools } from "./read-tools.js";
 

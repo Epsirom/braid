@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import type { Context, ToolCall } from "@earendil-works/pi-ai";
-import type { MergeSource, ModelRequest, SourceCheckoutStatus } from "../../../dist/index.js";
+import type { MergeSource, ModelRequest, SourceCheckoutStatus } from "../../../src/index.js";
 import { createPiRunner } from "../runner.js";
 import { PiWorkspaces, type PiNodeWorkspace } from "../workspaces.js";
 import { createWorktreeWriteTools } from "../write-tools.js";

@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible runtime, adapter, or installation problem
+body:
+  - type: markdown
+    attributes:
+      value: For vulnerabilities, use the private Security reporting link. Remove credentials and confidential graph content.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions and environment
+      description: Braid, Node, OS, and Pi/provider if relevant
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include a small graph or commands; prefer a fake runner when possible.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted errors or logs
