@@ -31,7 +31,8 @@ upgrade. Before the first release, report issues against the current main branch
   untrusted. Do not execute generated text or grant additional capabilities based
   solely on a model answer.
 - Results and event logs retain full output. The Pi adapter may write a complete
-  result to a mode-600 temporary file when the preview is truncated. These files
+  result to a temporary file (mode 600 on POSIX; inherited ACLs on Windows) when
+  the preview is truncated. These files
   are not automatically deleted by Braid. Redact exports and remove temporary
   results when no longer needed; filesystem permissions vary by platform.
 - Cancellation and timeout cannot stop synchronous JavaScript or remote work

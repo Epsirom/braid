@@ -318,7 +318,8 @@ writes already made. Core waits for tracked writes, preserves checkpoints, and
 removes worker worktrees before completing cancellation.
 
 The tool output is capped at 50KB/2000 lines to protect Pi context. When exceeded,
-the adapter writes a mode-600 full JSON result to a temporary file and includes
+the adapter writes a full JSON result to a temporary file (mode 600 on POSIX;
+inherited ACLs on Windows) and includes
 its path in the tool output.
 
 For a test of proactive selection, start a fresh Pi turn with a task such as:

@@ -17,6 +17,7 @@ async function repository(t: TestContext) {
   await git(cwd, "config", "user.name", "Braid test");
   await git(cwd, "config", "user.email", "test@localhost");
   await git(cwd, "config", "commit.gpgsign", "false");
+  await git(cwd, "config", "core.autocrlf", "false");
   await writeFile(join(cwd, "file.txt"), "original\n");
   await writeFile(join(cwd, ".gitignore"), "ignored.txt\n");
   await git(cwd, "add", ".");

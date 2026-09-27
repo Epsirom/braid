@@ -28,6 +28,8 @@ async function repository(t: TestContext, unborn = false) {
   await git(root, "config", "user.name", "Braid test");
   await git(root, "config", "user.email", "test@localhost");
   await git(root, "config", "commit.gpgsign", "false");
+  // These fixtures assert exact LF bytes, independent of the host's Git defaults.
+  await git(root, "config", "core.autocrlf", "false");
   await mkdir(join(root, "src"));
   await writeFile(join(root, "src", "file.txt"), "original\n");
   await writeFile(join(root, "deleted.txt"), "delete me\n");
@@ -261,7 +263,8 @@ for (const failure of ["error", "cancel"] as const) {
     assert.equal(workspace.state, "archived");
     assert.equal(await git(fixture.root, "show", `${workspace.checkpointRef}:partial.txt`), "keep this work");
     await assert.rejects(readFile(join(workspace.worktreeRoot!, "partial.txt")), { code: "ENOENT" });
-    assert.ok(JSON.stringify(status.content).includes(workspace.worktreeRoot!));
+    assert.ok(status.content.some(part => part.type === "text" &&
+      part.text.includes(JSON.stringify(workspace.worktreeRoot!))));
     await assert.rejects(readFile(join(fixture.root, "partial.txt")), { code: "ENOENT" });
   });
 }

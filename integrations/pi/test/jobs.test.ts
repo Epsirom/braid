@@ -225,7 +225,9 @@ test(
     await jobs.wait(job.jobId);
     const saved = jobs.get(job.jobId)!;
     t.after(() => rm(dirname(saved.fullOutputPath!), { recursive: true }));
-    assert.equal((await stat(saved.fullOutputPath!)).mode & 0o777, 0o600);
+    // Windows uses ACLs and does not implement POSIX owner/group mode bits.
+    if (process.platform !== "win32")
+      assert.equal((await stat(saved.fullOutputPath!)).mode & 0o777, 0o600);
     assert.equal(
       JSON.parse(await readFile(saved.fullOutputPath!, "utf8")).terminalOutputs
         .a.output.length,
