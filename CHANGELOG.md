@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Make Pi depend on the exact `@chrok/braid` version instead of bundling core.
+  Export shared model-adapter helpers from the existing root entry point.
+- Use one npm workspace lockfile and a development-only local core link; test
+  Pi-only installation against the unpublished core tarball outside the checkout.
+- Wait for core registry metadata and tarball availability before publishing Pi.
+
 ## 0.1.1 — 2026-09-27
 
 - Validate the Pi integration against Pi 0.87.1; update GitHub Actions and tsx.

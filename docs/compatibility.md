@@ -23,8 +23,9 @@ exactly one automatic continuation when a job finishes during `agent_settled`.
 This covers the Pi 0.86/0.87 transcript and settling changes without provider
 credentials or network model calls. Version 0.1.0 was originally validated with
 Pi 0.85.1; the current checkout's pinned validation target is 0.87.1.
-The Pi npm package compiles and includes the same core source as the matching
-core release, so it does not need another installed copy of Braid or a checkout.
+The Pi npm package declares an exact dependency on the matching `@chrok/braid`
+release. npm installs the core automatically; Pi does not bundle another copy of
+its runtime and does not need a source checkout.
 
 Git must be installed for workspace execution inside a Git checkout. Non-Git
 text-only runs do not require Git workspace management.
@@ -36,8 +37,13 @@ preserve documented behavior; breaking API or semantic changes require a minor
 version bump, a changelog entry, and migration guidance. New optional fields or
 fixes that restore the documented contract may ship in a patch.
 
-Supported core entry points are `@chrok/braid` and `@chrok/braid/adapters/openai`. Internal
-files and Pi helper classes are not stable public APIs. Documented result/error
+Supported core entry points are `@chrok/braid` and `@chrok/braid/adapters/openai`.
+The root `@chrok/braid` entry point also exports adapter helpers:
+`formatBudgetReminder`, `gitToolDefinition`, `finishMergeToolDefinition`,
+`mergeInstructions`, `parseGitToolArguments`, and `parseFinishMergeArguments`.
+These helpers share the core's compatibility policy; Git workspace implementation
+classes remain internal. Internal files and Pi helper classes are not stable
+public APIs. Documented result/error
 fields, routing behavior, `ModelRunner`, and existing event meanings are part of
 the public contract. Consumers should ignore new diagnostic fields and provide a
 fallback for new event types; event sequence numbers order events within a run,

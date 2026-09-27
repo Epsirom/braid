@@ -11,9 +11,9 @@ import type {
   BraidResult,
   ExecutionEvent,
   NodeResult,
-} from "../../src/index.js";
+  NodeWorkspace as PiNodeWorkspace,
+} from "@chrok/braid";
 import type { PiNodeProgress } from "./runner.js";
-import type { PiNodeWorkspace } from "./workspaces.js";
 
 export const MAX_VISIBLE_EVENTS = 80;
 export const MAX_VISIBLE_NODES = 80;

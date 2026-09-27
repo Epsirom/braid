@@ -27,3 +27,13 @@ export type {
   PredecessorOutput,
   TokenUsage,
 } from "./types.js";
+
+// Shared helpers for model adapters, including the Pi integration.
+export { formatBudgetReminder } from "./budgets.js";
+export {
+  gitToolDefinition,
+  finishMergeToolDefinition,
+  mergeInstructions,
+  parseGitToolArguments,
+  parseFinishMergeArguments,
+} from "./merge-tools.js";

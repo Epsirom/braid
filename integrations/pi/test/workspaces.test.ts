@@ -6,9 +6,9 @@ import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import type { Context, ToolCall } from "@earendil-works/pi-ai";
-import type { MergeSource, ModelRequest, SourceCheckoutStatus } from "../../../src/index.js";
+import type { MergeSource, SourceCheckoutStatus } from "@chrok/braid";
 import { createPiRunner } from "../runner.js";
-import { PiWorkspaces, type PiNodeWorkspace } from "../workspaces.js";
+import { braid, type NodeWorkspace as PiNodeWorkspace } from "@chrok/braid";
 import { createWorktreeWriteTools } from "../write-tools.js";
 import { BraidJobs } from "../jobs.js";
 import { createBraidTools } from "../index.js";
@@ -53,13 +53,6 @@ async function repository(t: TestContext, unborn = false) {
   return { directory, root, workspaces, onWorkspace };
 }
 
-function request(id: string, signal = new AbortController().signal, runId = "run"): ModelRequest {
-  return {
-    goal: "Edit independently", node: { type: "execute", id, prompt: "Edit the file" },
-    model: "fake/model", predecessors: [], execution: { runId, rootRunId: runId }, signal,
-  };
-}
-
 function toolResponse(...calls: ToolCall[]) {
   return { ...response(), stopReason: "toolUse" as const, content: calls };
 }
@@ -85,7 +78,7 @@ test("parallel Git nodes write and edit separate worktrees from the same dirty s
     };
     const turn = turns.get(payload.nodeId) ?? 0;
     turns.set(payload.nodeId, turn + 1);
-    assert.deepEqual(worker.tools!.map(tool => tool.name), [...(await createAvailableReadTools(fixture.root)).tools.map(tool => tool.name), "write", "edit"]);
+    assert.deepEqual(worker.tools!.map(tool => tool.name), [...(await createAvailableReadTools(fixture.root)).tools.map(tool => tool.name), "write", "edit", "git"]);
     assert.match(worker.systemPrompt!, /own isolated Git worktree/);
     assert.match(worker.systemPrompt!, /cannot run shell commands/);
     if (turn === 0) {
@@ -109,21 +102,28 @@ test("parallel Git nodes write and edit separate worktrees from the same dirty s
   const runner = createPiRunner(ctx.modelRegistry, {
     cwd: join(fixture.root, "src"), onWorkspace: fixture.onWorkspace,
   });
-  const manager = new PiWorkspaces(join(fixture.root, "src"), fixture.onWorkspace);
-  const outputs = await Promise.all(["left", "right"].map(async id => {
-    const invocation = request(id);
-    invocation.workspace = await manager.prepare(invocation);
-    return runner(invocation);
-  }));
+  const result = await braid({
+    goal: "Edit independently", nodes: ["left", "right"].map(id => ({ type: "execute" as const, id, prompt: "Edit the file" })), edges: [],
+  }, {
+    cwd: join(fixture.root, "src"), defaultModel: "fake/model",
+    runner: async invocation => {
+      if (invocation.merge) {
+        await invocation.merge.finish(invocation.merge.sources.map(source => ({ nodeId: source.nodeId, disposition: "discarded", reason: "Test only" })));
+        return { output: "Discarded test changes" };
+      }
+      const output = await runner(invocation);
+      const workspace = invocation.workspace!;
+      assert.equal(workspace.baseCommit, head);
+      assert.equal(await readFile(join(workspace.workingDirectory, "file.txt"), "utf8"), `${workspace.nodeId}\n`);
+      assert.equal(await readFile(join(workspace.workingDirectory, "created.txt"), "utf8"), workspace.nodeId);
+      assert.equal(output.output, `Completed ${workspace.nodeId}`);
+      return output;
+    },
+  });
+  assert.equal(result.status, "completed", JSON.stringify(result));
   assert.equal(fixture.workspaces.size, 2);
   const snapshots = [...fixture.workspaces.values()];
   assert.equal(snapshots[0]!.snapshotCommit, snapshots[1]!.snapshotCommit);
-  for (const workspace of snapshots) {
-    assert.equal(workspace.baseCommit, head);
-    assert.equal(await readFile(join(workspace.workingDirectory, "file.txt"), "utf8"), `${workspace.nodeId}\n`);
-    assert.equal(await readFile(join(workspace.workingDirectory, "created.txt"), "utf8"), workspace.nodeId);
-    assert.ok(outputs.some(output => output.output === `Completed ${workspace.nodeId}`));
-  }
   assert.equal(await readFile(join(fixture.root, "src", "file.txt"), "utf8"), "unstaged\n");
   await assert.rejects(readFile(join(fixture.root, "src", "created.txt")), { code: "ENOENT" });
   assert.deepEqual(await readFile(join(fixture.root, ".git", "index")), index);
@@ -133,9 +133,15 @@ test("parallel Git nodes write and edit separate worktrees from the same dirty s
 test("write tools reject escapes, Git metadata, symlinks, hard links, and writes after cancellation", async (t) => {
   const fixture = await repository(t);
   const signal = new AbortController();
-  const workspaces = new PiWorkspaces(fixture.root, fixture.onWorkspace);
-  const workspace = await workspaces.prepare(request("safe", signal.signal));
-  const sibling = await workspaces.prepare(request("sibling"));
+  // Exercise Pi's write boundary with real Git worktrees, without reaching into core internals.
+  const checkout = async (nodeId: string): Promise<PiNodeWorkspace> => {
+    const worktreeRoot = join(fixture.directory, nodeId);
+    await git(fixture.root, "worktree", "add", "--detach", worktreeRoot, "HEAD");
+    t.after(() => git(fixture.root, "worktree", "remove", "--force", worktreeRoot).catch(() => {}));
+    return { nodeId, mode: "worktree", state: "ready", workingDirectory: worktreeRoot, worktreeRoot };
+  };
+  const workspace = await checkout("safe");
+  const sibling = await checkout("sibling");
   const outside = join(fixture.directory, "outside.txt");
   await writeFile(outside, "untouched");
   await symlink(fixture.directory, join(workspace.worktreeRoot!, "linked-dir"));
@@ -165,73 +171,6 @@ test("write tools reject escapes, Git metadata, symlinks, hard links, and writes
   signal.abort();
   await assert.rejects(write.execute("late", { path: "late.txt", content: "late" }, signal.signal));
   await assert.rejects(readFile(join(workspace.worktreeRoot!, "late.txt")), { code: "ENOENT" });
-});
-
-test("worktree checkout does not run hooks and a reused runner snapshots each graph separately", async (t) => {
-  const fixture = await repository(t);
-  const hook = join(fixture.root, ".git", "hooks", "post-checkout");
-  await writeFile(hook, "#!/bin/sh\nprintf ran > hook-ran\n", { mode: 0o755 });
-  const workspaces = new PiWorkspaces(fixture.root, fixture.onWorkspace);
-  const first = await workspaces.prepare(request("first"));
-  await assert.rejects(readFile(join(first.worktreeRoot!, "hook-ran")), { code: "ENOENT" });
-  await writeFile(join(fixture.root, "new-run.txt"), "later");
-  const sameRun = await workspaces.prepare(request("same"));
-  await assert.rejects(readFile(join(sameRun.worktreeRoot!, "new-run.txt")), { code: "ENOENT" });
-  const nextRun = await workspaces.prepare(request("next", undefined, "next-run"));
-  assert.equal(await readFile(join(nextRun.worktreeRoot!, "new-run.txt"), "utf8"), "later");
-});
-
-test("an initialized Git repository without commits still gets an isolated writable worktree", async (t) => {
-  const fixture = await repository(t, true);
-  const workspace = await new PiWorkspaces(fixture.root, fixture.onWorkspace).prepare(request("initial"));
-  assert.equal(workspace.mode, "worktree");
-  assert.equal(workspace.baseCommit, undefined);
-  assert.equal(await readFile(join(workspace.worktreeRoot!, "src/file.txt"), "utf8"), "original\n");
-  await assert.rejects(git(fixture.root, "rev-parse", "--verify", "HEAD"));
-});
-
-test("a linked worktree can be the source without modifying its index or working files", async (t) => {
-  const fixture = await repository(t);
-  const linked = join(fixture.directory, "linked");
-  await git(fixture.root, "worktree", "add", "--detach", linked, "HEAD");
-  await writeFile(join(linked, "src/file.txt"), "linked changes\n");
-  const workspace = await new PiWorkspaces(join(linked, "src"), fixture.onWorkspace).prepare(request("linked"));
-  assert.equal(await readFile(join(workspace.workingDirectory, "file.txt"), "utf8"), "linked changes\n");
-  assert.equal(await readFile(join(fixture.root, "src/file.txt"), "utf8"), "original\n");
-  assert.equal(await readFile(join(linked, "src/file.txt"), "utf8"), "linked changes\n");
-  await git(fixture.root, "worktree", "remove", "--force", linked);
-});
-
-test("a source split index is preserved while snapshotting its working changes", async (t) => {
-  const fixture = await repository(t);
-  await git(fixture.root, "update-index", "--split-index");
-  await writeFile(join(fixture.root, "src/file.txt"), "split index changes\n");
-  const index = await readFile(join(fixture.root, ".git/index"));
-  const workspace = await new PiWorkspaces(fixture.root, fixture.onWorkspace).prepare(request("split"));
-  assert.equal(await readFile(join(workspace.worktreeRoot!, "src/file.txt"), "utf8"), "split index changes\n");
-  assert.deepEqual(await readFile(join(fixture.root, ".git/index")), index);
-});
-
-test("a worktree creation error fails closed and reports the attempted workspace", async (t) => {
-  const fixture = await repository(t);
-  let attempted: PiNodeWorkspace | undefined;
-  const manager = new PiWorkspaces(fixture.root, workspace => {
-    fixture.onWorkspace(workspace);
-    attempted = workspace;
-  });
-  // Break repository configuration after snapshot capture to exercise a real
-  // worktree creation failure without mocking Git or touching the source files.
-  const first = await manager.prepare(request("first"));
-  const config = join(fixture.root, ".git", "config");
-  const original = await readFile(config, "utf8");
-  await writeFile(config, "this is not valid Git config\n");
-  try {
-    await assert.rejects(manager.prepare(request("blocked")), /Cannot prepare isolated node worktree/);
-    assert.equal(attempted!.state, "failed");
-    assert.notEqual(attempted!.worktreeRoot, first.worktreeRoot);
-  } finally {
-    await writeFile(config, original);
-  }
 });
 
 for (const failure of ["error", "cancel"] as const) {
