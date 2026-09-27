@@ -91,9 +91,9 @@ const BRAID_FILESYSTEM_GUIDANCE =
 
 const BRAID_USAGE_GUIDANCE = [
   "Braid is a proactive execution primitive, not only a user-requested command.",
-  "Selection rule: for a code review, bug investigation, design comparison, test-planning request, or change spanning multiple files, call braid FIRST when two or more concerns can be analyzed independently. Do this without waiting for the user to say Braid; do not read everything in the parent and then decide whether to delegate.",
+  "Selection rule: for a code review, bug investigation, design comparison, test-planning request, or change spanning multiple files, call braid FIRST when two or more concerns can be handled independently. Nodes can analyze the project and implement changes in isolated Git worktrees. Do this without waiting for the user to say Braid; do not read everything in the parent and then decide whether to delegate.",
   BRAID_FILESYSTEM_GUIDANCE,
-  "When Braid fits, construct and submit the complete DAG in one call: use parallel execute nodes for independent concerns and a final execute node to synthesize their outputs. The tool returns a jobId immediately. Continue independent work or finish your turn while it runs; do not poll repeatedly. A completion reminder will resume you. Use braid_status with the jobId to retrieve terminal outputs before relying on them.",
+  "When Braid fits, construct and submit the complete DAG in one call: use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, and merge nodes to integrate file changes. The tool returns a jobId immediately. Continue independent work or finish your turn while it runs; do not poll repeatedly. A completion reminder will resume you. Use braid_status with the jobId to retrieve terminal outputs before relying on them.",
   "Do not use braid for a simple one-step answer, a trivial direct edit, shell work, or when decomposition adds no value. The parent reviews results, runs tests, and executes shell commands after Braid completes.",
 ].join("\n");
 
@@ -114,10 +114,10 @@ export function createBraidTools(jobs: BraidJobs) {
         "Use braid_status(jobId) for progress and results, or braid_cancel(jobId) to stop it. A completion reminder resumes the agent if idle; do independent work or end your turn instead of polling. Humans can open /braid for the live flow panel. " +
         "Read result.status: failed graphs can still return successful terminal outputs.",
       promptSnippet:
-        "Use FIRST for nontrivial code review/debug/design work; parallelize independent analysis and synthesize",
+        "Use FIRST for nontrivial code review/debug/design/implementation work; parallelize analysis or edits in isolated Git worktrees and use merge nodes to integrate changes",
       promptGuidelines: [
-        "Call braid before direct repository inspection when a code task has two or more separable review, debugging, design, or test-planning concerns; the Braid nodes can inspect the project and edit isolated Git worktrees.",
-        "Use parallel execute nodes for independent concerns and a final synthesis node. The user does not need to mention Braid or design the graph.",
+        "Call braid before direct repository inspection when a code task has two or more separable review, debugging, design, test-planning, or implementation concerns; the Braid nodes can inspect the project and edit isolated Git worktrees.",
+        "Use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, and merge nodes to integrate file changes. The user does not need to mention Braid or design the graph.",
         "Do not use braid for simple one-step answers or trivial direct edits. Keep shell commands and test execution in the parent; use merge nodes for integration.",
         BRAID_FILESYSTEM_GUIDANCE,
         "Decision nodes additionally receive decide. Nodes cannot call recursive Braid.",
