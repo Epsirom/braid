@@ -75,7 +75,7 @@ test("explicit merge agents integrate failed predecessors; core never applies th
     return { output: "Agent integrated both checkpoints" };
   } });
   assert.equal(result.status, "failed"); // The original failure remains visible.
-  assert.equal(result.nodes.integrate!.status, "completed");
+  assert.equal(result.nodes.integrate!.status, "completed", JSON.stringify(result.nodes.integrate!.error));
   assert.equal(await readFile(join(cwd, "left.txt"), "utf8"), "left");
   assert.equal(await readFile(join(cwd, "right.txt"), "utf8"), "right");
   assert.equal(result.workspaces!.right!.state, "integrated");
@@ -248,7 +248,7 @@ test("unresolved conflicts after finish_merge still fail and archive both source
     assert.notEqual((await request.git!(["cherry-pick", right!.checkpointRef!])).exitCode, 0);
     return { output: "a conflict appeared after the finish call" };
   } });
-  assert.equal(result.nodes.__braid_merge__!.error!.code, "MERGE_FAILED");
+  assert.equal(result.nodes.__braid_merge__!.error!.code, "MERGE_FAILED", JSON.stringify(result.nodes.__braid_merge__!.error));
   assert.equal(result.workspaces!.left!.state, "archived");
   assert.equal(result.workspaces!.right!.state, "archived");
   assert.equal(await git(cwd, "show", `${result.workspaces!.__braid_merge__!.backupRef}:file.txt`), "original");

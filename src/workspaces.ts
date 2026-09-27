@@ -275,7 +275,8 @@ export class GitWorkspaces {
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         const registrations = await git(location.sourceRoot, ["worktree", "list", "--porcelain", "-z"]);
-        if (registrations.split("\0").includes(`worktree ${workspace.worktreeRoot}`))
+        if (registrations.split("\0").some(field => field.startsWith("worktree ") &&
+          resolve(field.slice("worktree ".length)) === resolve(workspace.worktreeRoot!)))
           await git(location.sourceRoot, ["worktree", "remove", "--force", workspace.worktreeRoot!]);
         workspace.state = "archived";
         workspace.reason = "Worktree creation failed before a directory was available; no node changes to archive";
@@ -306,8 +307,11 @@ export class GitWorkspaces {
     await Promise.allSettled(this.snapshots.values());
     const errors: unknown[] = [];
     for (const snapshot of this.allocated) {
+      // Ownership is explicit; a POSIX path prefix would miss retained Windows
+      // worktrees and recursively delete data after checkpoint/cleanup failure.
       const live = [...this.records.values()].some(workspace =>
-        workspace.worktreeRoot?.startsWith(`${snapshot.directory}/`) && ["ready", "preparing", "failed"].includes(workspace.state));
+        workspace.mode === "worktree" && this.locations.get(workspace.nodeId) === snapshot &&
+        ["ready", "preparing", "failed"].includes(workspace.state));
       if (!live) {
         try { await rm(snapshot.directory, { recursive: true, force: true }); }
         catch (error) { errors.push(error); }
