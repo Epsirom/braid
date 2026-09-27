@@ -18,6 +18,11 @@ source so its installed extension never reaches outside its own package.
 
 ## First publication
 
+Enable two-factor authentication in the npm account's web settings before the
+first publish. An emailed login code does not replace enrolling a security key
+or passkey for publishing. Complete credential enrollment yourself and keep
+recovery codes private.
+
 Log in locally with `npm login --registry=https://registry.npmjs.org`; confirm the
 account with `npm whoami`. Publish the core with `npm publish --access public`,
 then run `npm publish --access public` from `integrations/pi`. Complete npm's
@@ -25,7 +30,12 @@ interactive account/2FA checks if requested. Never put credentials in source,
 issues, shell history, or CI logs. An npm registration alone does not guarantee
 ownership of a previously used package name.
 
-After publication, install the registry versions in a fresh project and verify
+New packages may temporarily return `E404` after a successful publish while npm
+runs its [publish-time scan](https://github.blog/changelog/2026-07-28-npm-publish-time-malware-scanning-and-dual-use-metadata/).
+Allow time for the exact versions to become available through `npm view`; do not
+republish or bump versions just to work around this delay.
+
+After availability is confirmed, install the registry versions in a fresh project and verify
 both exported core entry points and the Pi extension. Add the actual publication
 date to the changelog and create the corresponding GitHub release.
 
@@ -38,6 +48,15 @@ For **each** package, configure an npm GitHub trusted publisher:
 - Workflow filename: `release.yml`
 - Environment: leave blank (this workflow does not declare one)
 - Allow direct `npm publish`
+
+With npm 11.20 or later, the equivalent CLI setup is:
+
+```sh
+npm trust github @chrok/braid --file release.yml --repo Epsirom/braid --allow-publish
+npm trust github @chrok/pi-braid --file release.yml --repo Epsirom/braid --allow-publish
+npm trust list @chrok/braid
+npm trust list @chrok/pi-braid
+```
 
 Publishing a non-prerelease GitHub release triggers `.github/workflows/release.yml`.
 It validates the tag/version relationship, repeats all checks, and publishes
