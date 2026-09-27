@@ -54,11 +54,30 @@ try {
     import extension from ${JSON.stringify(piManifest.name)};
     assert.equal(typeof createOpenAICompatibleRunner(), 'function');
     const tools = new Map();
-    extension({ registerTool: t => tools.set(t.name, t), registerCommand() {}, on() {} });
+    const handlers = new Map();
+    let finished;
+    const completion = new Promise(resolve => { finished = resolve; });
+    extension({ registerTool: t => tools.set(t.name, t), registerCommand() {}, on: (event, handler) => handlers.set(event, handler), sendMessage: finished });
     assert.deepEqual([...tools.keys()].sort(), ['braid', 'braid_cancel', 'braid_status']);
     const result = await braid({ goal: 'smoke', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] }, { runner: async () => ({ output: 'PASS' }) });
     assert.equal(result.terminalOutputs.a.output, 'PASS');
     assert.equal(result.status, 'completed');
+    const model = { provider: 'fake', id: 'model', contextWindow: 10000 };
+    const context = { cwd: process.cwd(), model, modelRegistry: {
+      find: () => model,
+      complete: async () => ({ role: 'assistant', api: 'fake', provider: 'fake', model: 'model',
+        content: [{ type: 'text', text: 'PI PASS' }], stopReason: 'stop', timestamp: 0,
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }),
+    } };
+    const submitted = await tools.get('braid').execute('smoke', { goal: 'smoke', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] }, undefined, undefined, context);
+    let timer;
+    try {
+      await Promise.race([completion, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Packaged Pi job did not finish')), 10000); })]);
+      const final = await tools.get('braid_status').execute('status', { jobId: submitted.details.jobId });
+      assert.equal(final.details.result.status, 'completed');
+      assert.equal(final.details.result.terminalOutputs.a.output, 'PI PASS');
+    } finally { clearTimeout(timer); handlers.get('session_shutdown')(); }
   `);
   run([join(consumer, "check.mjs")], consumer);
   writeFileSync(join(consumer, "check.mts"), `
@@ -69,7 +88,7 @@ try {
     void braid(input, { runner });
   `);
   run([join(root, "node_modules/typescript/bin/tsc"), "--noEmit", "--strict", "--skipLibCheck", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "check.mts"], consumer);
-  console.log(`Package smoke passed: ${core.id} (${core.entryCount} files), ${pi.id} (${pi.entryCount} files). Public imports, types, Pi registration, and clean builds verified outside the checkout.`);
+  console.log(`Package smoke passed: ${core.id} (${core.entryCount} files), ${pi.id} (${pi.entryCount} files). Public imports, types, a Pi background job, and clean builds verified outside the checkout.`);
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
