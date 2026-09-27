@@ -12,7 +12,9 @@ This is a direction for discussion, not a delivery schedule.
 - [x] Clean builds and standalone package installation checks.
 - [x] CI configuration, contribution policies, examples, and compatibility docs.
 - [x] Reproducible scheduler benchmark and explicit resource limits.
-- [ ] Confirm first public npm releases and hosted CI results.
+- [x] Confirm hosted CI on Linux, macOS, Windows, and the minimum Node version.
+
+Published versions are listed in [GitHub releases](https://github.com/Epsirom/braid/releases).
 
 ## Next candidates
 

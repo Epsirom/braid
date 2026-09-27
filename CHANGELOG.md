@@ -4,9 +4,9 @@
 
 No changes yet.
 
-## 0.1.0
+## 0.1.0 — 2026-09-27
 
-Initial public release candidate. Publication is tracked in
+Initial public release. Publication is tracked in
 [GitHub releases](https://github.com/Epsirom/braid/releases).
 
 - Framework-independent DAG runtime with conditional decisions, bounded
