@@ -10,6 +10,22 @@ import { gitCommands, unavailableGitCommand, validateMergeDispositions } from ".
 const exec = promisify(execFile);
 
 const mergeLocks = new Map<string, Promise<void>>();
+const worktreeLocks = new Map<string, Promise<void>>();
+
+/** Git worktree add/remove expose intermediate shared registration files. */
+async function withWorktreeLock<T>(commonDirectory: string, operation: () => Promise<T>): Promise<T> {
+  const previous = worktreeLocks.get(commonDirectory) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const tail = previous.then(() => gate);
+  worktreeLocks.set(commonDirectory, tail);
+  await previous;
+  try { return await operation(); }
+  finally {
+    release();
+    if (worktreeLocks.get(commonDirectory) === tail) worktreeLocks.delete(commonDirectory);
+  }
+}
 
 async function lock(root: string, signal: AbortSignal): Promise<() => void> {
   const previous = mergeLocks.get(root) ?? Promise.resolve();
@@ -36,6 +52,7 @@ async function lock(root: string, signal: AbortSignal): Promise<() => void> {
 
 interface Snapshot {
   directory: string;
+  commonDirectory: string;
   sourceRoot: string;
   cwdSuffix: string;
   baseCommit?: string;
@@ -126,6 +143,7 @@ export class GitWorkspaces {
       throw error;
     }
     sourceRoot = await realpath(sourceRoot);
+    const commonDirectory = await realpath(resolve(sourceRoot, await git(sourceRoot, ["rev-parse", "--git-common-dir"])));
     const cwdSuffix = relative(sourceRoot, await realpath(this.cwd));
     // Git records canonical worktree paths. In particular, Windows tmpdir()
     // can contain an 8.3 alias that Git later rejects for lock/remove commands.
@@ -165,7 +183,7 @@ export class GitWorkspaces {
         "-m", "Braid isolated workspace snapshot",
       ], options);
       const snapshot: Snapshot = {
-        directory, sourceRoot, cwdSuffix, snapshotCommit, hooksDirectory,
+        directory, commonDirectory, sourceRoot, cwdSuffix, snapshotCommit, hooksDirectory,
         ...(baseCommit ? { baseCommit } : {}),
       };
       this.allocated.add(snapshot);
@@ -209,8 +227,11 @@ export class GitWorkspaces {
     try {
       // Finish registration even if cancellation arrives during creation. Report
       // the retained path before observing cancellation, so it can be recovered.
-      await git(snapshot.sourceRoot, ["worktree", "add", "--detach", worktreeRoot, snapshot.snapshotCommit], {
-        hooksDirectory: snapshot.hooksDirectory,
+      await withWorktreeLock(snapshot.commonDirectory, async () => {
+        request.signal.throwIfAborted();
+        await git(snapshot.sourceRoot, ["worktree", "add", "--detach", worktreeRoot, snapshot.snapshotCommit], {
+          hooksDirectory: snapshot.hooksDirectory,
+        });
       });
       // The original cwd may be an empty or ignored directory absent from Git.
       await mkdir(workspace.workingDirectory, { recursive: true });
@@ -274,10 +295,12 @@ export class GitWorkspaces {
       try { await access(workspace.worktreeRoot!); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        const registrations = await git(location.sourceRoot, ["worktree", "list", "--porcelain", "-z"]);
-        if (registrations.split("\0").some(field => field.startsWith("worktree ") &&
-          resolve(field.slice("worktree ".length)) === resolve(workspace.worktreeRoot!)))
-          await git(location.sourceRoot, ["worktree", "remove", "--force", workspace.worktreeRoot!]);
+        await withWorktreeLock(location.commonDirectory, async () => {
+          const registrations = await git(location.sourceRoot, ["worktree", "list", "--porcelain", "-z"]);
+          if (registrations.split("\0").some(field => field.startsWith("worktree ") &&
+            relative(field.slice("worktree ".length), workspace.worktreeRoot!) === ""))
+            await git(location.sourceRoot, ["worktree", "remove", "--force", workspace.worktreeRoot!]);
+        });
         workspace.state = "archived";
         workspace.reason = "Worktree creation failed before a directory was available; no node changes to archive";
         this.report(workspace);
@@ -285,9 +308,9 @@ export class GitWorkspaces {
       }
     }
     await this.checkpoint(workspace);
-    await git(location.sourceRoot, ["worktree", "remove", "--force", workspace.worktreeRoot!], {
+    await withWorktreeLock(location.commonDirectory, () => git(location.sourceRoot, ["worktree", "remove", "--force", workspace.worktreeRoot!], {
       hooksDirectory: location.hooksDirectory,
-    });
+    }));
     workspace.state = disposition;
     workspace.reason = reason;
     this.report(workspace);

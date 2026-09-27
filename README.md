@@ -484,7 +484,10 @@ uncancelled provider work after timeout can outlive a slot.
 - [`test/`](test/): deterministic scheduling, execution-event, and intercepted HTTP/tool tests.
 
 There is one in-memory execution context per run, plus a process-local mutex
-per source checkout for merge agents. `rootRunId` equals `runId` in v0.1. Centralized invocation admission and
+per source checkout for merge agents. Worktree registration and removal are
+serialized per common Git directory within the process; model calls remain
+concurrent. These locks do not coordinate other processes. `rootRunId` equals
+`runId` in v0.1. Centralized invocation admission and
 usage aggregation leave places to thread a shared root budget in a future
 nested-run implementation; **nested runs and shared budget enforcement are not
 implemented**. The current scheduler deliberately rescans a small DAG after

@@ -49,6 +49,26 @@ async function noWorktrees(cwd: string, result: BraidResult) {
   }
 }
 
+test("concurrent graphs safely register and remove worktrees in one Git repository", { timeout: 30_000 }, async t => {
+  const cwd = await repository(t);
+  const results = await Promise.all([0, 1].map(run => braid(
+    graph(Array.from({ length: 4 }, (_, i) => execute(`run-${run}-${i}`))),
+    { cwd, maxConcurrency: 4, runner: async request => {
+      if (request.merge) {
+        await applySources(request, "discarded");
+      } else {
+        await request.withWorkspaceWrite!(() => writeFile(join(request.workspace!.worktreeRoot!, "result.txt"), request.node.id));
+      }
+      return { output: "done" };
+    } },
+  )));
+  for (const result of results) {
+    assert.equal(result.status, "completed", JSON.stringify(result.nodes));
+    await noWorktrees(cwd, result);
+  }
+  assert.equal(await readFile(join(cwd, "file.txt"), "utf8"), "original\n");
+});
+
 test("explicit merge agents integrate failed predecessors; core never applies their changes first", async (t) => {
   const cwd = await repository(t);
   await writeFile(join(cwd, "user.txt"), "user uncommitted work");
