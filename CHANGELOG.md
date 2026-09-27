@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Validate the Pi integration against Pi 0.87.1; update GitHub Actions and tsx.
+- Group routine dependency updates and reserve Node/TypeScript major upgrades
+  for deliberate compatibility changes across both packages.
 - Trim OpenAI-compatible base URL trailing slashes in linear time, avoiding
   excessive regular-expression backtracking on long internal slash sequences.
 - Protect the main branch and version tags; document repository governance,

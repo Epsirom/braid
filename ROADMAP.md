@@ -18,6 +18,10 @@ Published versions are listed in [GitHub releases](https://github.com/Epsirom/br
 
 ## Next candidates
 
+- Migrate both packages from TypeScript 5 to 7 in one dedicated change. Explicitly
+  load Node types, review compiler default changes, and validate public declaration
+  consumption, package builds, and the complete Node/platform matrix. Keep Node
+  declarations on 22.x while Node 22 remains the minimum supported runtime.
 - Measure real applications before changing scheduler data structures.
 - Discuss optional per-run node/output limits and host-wide admission controls.
 - Define budget semantics that account for missing usage and in-flight calls
