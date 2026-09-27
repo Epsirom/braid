@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.2 — 2026-09-27
+
 - Make Pi depend on the exact `@chrok/braid` version instead of bundling core.
   Export shared model-adapter helpers from the existing root entry point.
 - Use one npm workspace lockfile and a development-only local core link; test
