@@ -1,9 +1,8 @@
 {
-  "name": "braid-pi-adapter",
+  "name": "pi-braid",
   "version": "0.1.0",
-  "private": true,
   "license": "MIT",
-  "description": "Local Pi adapter for the Braid DAG runtime",
+  "description": "Pi extension for Braid: background DAG jobs and a live flow panel",
   "type": "module",
   "dependencies": {
     "grok-mermaid": "^0.2.2"
@@ -16,11 +15,50 @@
   "devDependencies": {
     "@earendil-works/pi-ai": "0.85.1",
     "@earendil-works/pi-tui": "0.85.1",
-    "@earendil-works/pi-coding-agent": "0.85.1"
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "typescript": "^5.0.0",
+    "tsx": "^4.0.0",
+    "@types/node": "^22.0.0"
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "build": "node ../../scripts/build.mjs pi",
+    "prepack": "npm run build"
   },
-  "pi": { "extensions": ["./index.ts"] }
+  "pi": {
+    "extensions": [
+      "./dist/integrations/pi/index.js"
+    ]
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Epsirom/braid.git",
+    "directory": "integrations/pi"
+  },
+  "homepage": "https://github.com/Epsirom/braid/tree/main/integrations/pi#readme",
+  "bugs": {
+    "url": "https://github.com/Epsirom/braid/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "llm",
+    "agents",
+    "dag"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": "./dist/integrations/pi/index.js"
+  }
 }

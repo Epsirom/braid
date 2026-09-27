@@ -12,7 +12,7 @@ import {
   validateGraph,
   type BraidInput,
   type BraidResult,
-} from "../../dist/index.js";
+} from "../../src/index.js";
 import {
   applyEvent,
   applyProgress,

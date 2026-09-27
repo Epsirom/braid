@@ -3,7 +3,7 @@ import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Context } from "@earendil-works/pi-ai";
-import type { BraidResult } from "../../../dist/index.js";
+import type { BraidResult } from "../../../src/index.js";
 import { createBraidTools } from "../index.js";
 import { BraidJobs } from "../jobs.js";
 import { readOnlyCwd } from "./helpers.js";

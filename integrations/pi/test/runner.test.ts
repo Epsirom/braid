@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createPiRunner, sumPiUsage } from "../runner.js";
-import type { ModelRequest } from "../../../dist/index.js";
+import type { ModelRequest } from "../../../src/index.js";
 import type { AssistantMessage, Context, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { createAvailableReadTools } from "../read-tools.js";

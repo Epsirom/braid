@@ -1,0 +1,192 @@
+{
+  "node": "v25.9.0",
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpu": "Apple M5",
+  "rounds": 7,
+  "outputBytesPerNode": 2,
+  "gcBeforeEachRun": true,
+  "note": "One warm-up per case in a temporary non-Git directory. Heap deltas are allocation observations, not peak RSS. No network or model cost.",
+  "measurements": [
+    {
+      "shape": "chain",
+      "nodes": 10,
+      "edges": 9,
+      "concurrency": 1,
+      "medianMs": 0.453,
+      "maxMs": 0.599,
+      "maxHeapDeltaMiB": 0.387,
+      "events": 60
+    },
+    {
+      "shape": "chain",
+      "nodes": 10,
+      "edges": 9,
+      "concurrency": 4,
+      "medianMs": 0.374,
+      "maxMs": 0.408,
+      "maxHeapDeltaMiB": 0.597,
+      "events": 60
+    },
+    {
+      "shape": "chain",
+      "nodes": 10,
+      "edges": 9,
+      "concurrency": 16,
+      "medianMs": 0.35,
+      "maxMs": 0.395,
+      "maxHeapDeltaMiB": 0.333,
+      "events": 60
+    },
+    {
+      "shape": "chain",
+      "nodes": 100,
+      "edges": 99,
+      "concurrency": 1,
+      "medianMs": 2.063,
+      "maxMs": 2.508,
+      "maxHeapDeltaMiB": 4.262,
+      "events": 600
+    },
+    {
+      "shape": "chain",
+      "nodes": 100,
+      "edges": 99,
+      "concurrency": 4,
+      "medianMs": 2.039,
+      "maxMs": 2.178,
+      "maxHeapDeltaMiB": 4.24,
+      "events": 600
+    },
+    {
+      "shape": "chain",
+      "nodes": 100,
+      "edges": 99,
+      "concurrency": 16,
+      "medianMs": 1.804,
+      "maxMs": 1.861,
+      "maxHeapDeltaMiB": 3.554,
+      "events": 600
+    },
+    {
+      "shape": "chain",
+      "nodes": 1000,
+      "edges": 999,
+      "concurrency": 1,
+      "medianMs": 41.94,
+      "maxMs": 47.9,
+      "maxHeapDeltaMiB": 31.133,
+      "events": 6000
+    },
+    {
+      "shape": "chain",
+      "nodes": 1000,
+      "edges": 999,
+      "concurrency": 4,
+      "medianMs": 39.575,
+      "maxMs": 53.982,
+      "maxHeapDeltaMiB": 56.839,
+      "events": 6000
+    },
+    {
+      "shape": "chain",
+      "nodes": 1000,
+      "edges": 999,
+      "concurrency": 16,
+      "medianMs": 39.549,
+      "maxMs": 52.655,
+      "maxHeapDeltaMiB": 57.444,
+      "events": 6000
+    },
+    {
+      "shape": "fan-out/join",
+      "nodes": 10,
+      "edges": 16,
+      "concurrency": 1,
+      "medianMs": 0.365,
+      "maxMs": 0.446,
+      "maxHeapDeltaMiB": 0.388,
+      "events": 74
+    },
+    {
+      "shape": "fan-out/join",
+      "nodes": 10,
+      "edges": 16,
+      "concurrency": 4,
+      "medianMs": 0.338,
+      "maxMs": 0.356,
+      "maxHeapDeltaMiB": 0.303,
+      "events": 74
+    },
+    {
+      "shape": "fan-out/join",
+      "nodes": 10,
+      "edges": 16,
+      "concurrency": 16,
+      "medianMs": 0.337,
+      "maxMs": 0.342,
+      "maxHeapDeltaMiB": 0.304,
+      "events": 74
+    },
+    {
+      "shape": "fan-out/join",
+      "nodes": 100,
+      "edges": 196,
+      "concurrency": 1,
+      "medianMs": 2.192,
+      "maxMs": 2.233,
+      "maxHeapDeltaMiB": 3.224,
+      "events": 794
+    },
+    {
+      "shape": "fan-out/join",
+      "nodes": 100,
+      "edges": 196,
+      "concurrency": 4,
+      "medianMs": 1.866,
+      "maxMs": 1.928,
+      "maxHeapDeltaMiB": 2.787,
+      "events": 794
+    },
+    {
+      "shape": "fan-out/join",
+      "nodes": 100,
+      "edges": 196,
+      "concurrency": 16,
+      "medianMs": 1.878,
+      "maxMs": 1.97,
+      "maxHeapDeltaMiB": 2.735,
+      "events": 794
+    },
+    {
+      "shape": "fan-out/join",
+      "nodes": 1000,
+      "edges": 1996,
+      "concurrency": 1,
+      "medianMs": 35.054,
+      "maxMs": 47.335,
+      "maxHeapDeltaMiB": 53.93,
+      "events": 7994
+    },
+    {
+      "shape": "fan-out/join",
+      "nodes": 1000,
+      "edges": 1996,
+      "concurrency": 4,
+      "medianMs": 24.574,
+      "maxMs": 29.259,
+      "maxHeapDeltaMiB": 37.812,
+      "events": 7994
+    },
+    {
+      "shape": "fan-out/join",
+      "nodes": 1000,
+      "edges": 1996,
+      "concurrency": 16,
+      "medianMs": 33.785,
+      "maxMs": 35.425,
+      "maxHeapDeltaMiB": 29.416,
+      "events": 7994
+    }
+  ]
+}

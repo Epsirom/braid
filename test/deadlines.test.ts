@@ -58,25 +58,21 @@ for (const scope of ["node", "graph"] as const) {
   });
 }
 
-// Deliberately starve timer callbacks to test clock checks at invocation boundaries.
-function blockEventLoop(ms: number): void {
-  const until = performance.now() + ms;
-  while (performance.now() < until) {
-    /* bounded synchronous provider stand-in */
-  }
-}
-
+// Advance the monotonic clock without letting a timer callback run. Generous
+// real timers keep filesystem preparation on loaded CI hosts out of the test.
 test("no runner invocation begins after a graph deadline, even when timers are starved", {
   timeout: 2_000,
-}, async () => {
+}, async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
   const calls: string[] = [];
   const result = await braid(graph([execute("a"), execute("b")]), {
     maxConcurrency: 2,
-    graphTimeoutMs: 10,
-    nodeTimeoutMs: 1_000,
+    graphTimeoutMs: 10_000,
+    nodeTimeoutMs: 100_000,
     runner: async (request) => {
       calls.push(request.node.id);
-      if (request.node.id === "a") blockEventLoop(30);
+      if (request.node.id === "a") now += 30_000;
       return { output: request.node.id };
     },
   });
@@ -88,18 +84,20 @@ test("no runner invocation begins after a graph deadline, even when timers are s
 
 test("no runner invocation begins after its admitted node deadline", {
   timeout: 2_000,
-}, async () => {
+}, async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
   const calls: string[] = [];
   let first!: ModelRequest;
   const result = await braid(graph([execute("a"), execute("b")]), {
     maxConcurrency: 2,
-    graphTimeoutMs: 1_000,
-    nodeTimeoutMs: 10,
+    graphTimeoutMs: 100_000,
+    nodeTimeoutMs: 10_000,
     runner: async (request) => {
       calls.push(request.node.id);
       if (request.node.id === "a") {
         first = request;
-        blockEventLoop(30);
+        now += 30_000;
       }
       return { output: request.node.id };
     },
@@ -112,15 +110,17 @@ test("no runner invocation begins after its admitted node deadline", {
 
 test("queued nodes receive a fresh node deadline when admitted", {
   timeout: 2_000,
-}, async () => {
+}, async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
   const calls: string[] = [];
   const result = await braid(graph([execute("a"), execute("b")]), {
     maxConcurrency: 1,
-    graphTimeoutMs: 1_000,
-    nodeTimeoutMs: 10,
+    graphTimeoutMs: 100_000,
+    nodeTimeoutMs: 10_000,
     runner: async (request) => {
       calls.push(request.node.id);
-      if (request.node.id === "a") blockEventLoop(30);
+      if (request.node.id === "a") now += 30_000;
       return { output: request.node.id };
     },
   });

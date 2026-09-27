@@ -144,7 +144,7 @@ export interface ModelResponse {
   usage?: TokenUsage;
 }
 
-/** Each call must start a fresh model conversation and expose no other tools. */
+/** Each call starts a fresh conversation and exposes only the adapter’s declared capabilities. */
 export type ModelRunner = (request: ModelRequest) => Promise<ModelResponse>;
 
 /** Frozen snapshots in emission order. Creation means admission of the submitted DAG, not mutation. */

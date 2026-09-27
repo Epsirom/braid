@@ -1,0 +1,17 @@
+name: Feature request
+description: Propose an improvement within Braid's scope
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the use case and current workaround.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior and alternatives
+      description: Explain why this belongs in the core or an adapter, and note compatibility implications.
+    validations:
+      required: true

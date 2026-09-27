@@ -17,6 +17,7 @@ async function repository(t: TestContext) {
   await git(cwd, "config", "user.name", "Braid test");
   await git(cwd, "config", "user.email", "test@localhost");
   await git(cwd, "config", "commit.gpgsign", "false");
+  await git(cwd, "config", "core.autocrlf", "false");
   await writeFile(join(cwd, "file.txt"), "original\n");
   await writeFile(join(cwd, ".gitignore"), "ignored.txt\n");
   await git(cwd, "add", ".");
@@ -48,6 +49,26 @@ async function noWorktrees(cwd: string, result: BraidResult) {
   }
 }
 
+test("concurrent graphs safely register and remove worktrees in one Git repository", { timeout: 30_000 }, async t => {
+  const cwd = await repository(t);
+  const results = await Promise.all([0, 1].map(run => braid(
+    graph(Array.from({ length: 4 }, (_, i) => execute(`run-${run}-${i}`))),
+    { cwd, maxConcurrency: 4, runner: async request => {
+      if (request.merge) {
+        await applySources(request, "discarded");
+      } else {
+        await request.withWorkspaceWrite!(() => writeFile(join(request.workspace!.worktreeRoot!, "result.txt"), request.node.id));
+      }
+      return { output: "done" };
+    } },
+  )));
+  for (const result of results) {
+    assert.equal(result.status, "completed", JSON.stringify(result.nodes));
+    await noWorktrees(cwd, result);
+  }
+  assert.equal(await readFile(join(cwd, "file.txt"), "utf8"), "original\n");
+});
+
 test("explicit merge agents integrate failed predecessors; core never applies their changes first", async (t) => {
   const cwd = await repository(t);
   await writeFile(join(cwd, "user.txt"), "user uncommitted work");
@@ -75,7 +96,7 @@ test("explicit merge agents integrate failed predecessors; core never applies th
     return { output: "Agent integrated both checkpoints" };
   } });
   assert.equal(result.status, "failed"); // The original failure remains visible.
-  assert.equal(result.nodes.integrate!.status, "completed");
+  assert.equal(result.nodes.integrate!.status, "completed", JSON.stringify(result.nodes.integrate!.error));
   assert.equal(await readFile(join(cwd, "left.txt"), "utf8"), "left");
   assert.equal(await readFile(join(cwd, "right.txt"), "utf8"), "right");
   assert.equal(result.workspaces!.right!.state, "integrated");
@@ -248,7 +269,7 @@ test("unresolved conflicts after finish_merge still fail and archive both source
     assert.notEqual((await request.git!(["cherry-pick", right!.checkpointRef!])).exitCode, 0);
     return { output: "a conflict appeared after the finish call" };
   } });
-  assert.equal(result.nodes.__braid_merge__!.error!.code, "MERGE_FAILED");
+  assert.equal(result.nodes.__braid_merge__!.error!.code, "MERGE_FAILED", JSON.stringify(result.nodes.__braid_merge__!.error));
   assert.equal(result.workspaces!.left!.state, "archived");
   assert.equal(result.workspaces!.right!.state, "archived");
   assert.equal(await git(cwd, "show", `${result.workspaces!.__braid_merge__!.backupRef}:file.txt`), "original");

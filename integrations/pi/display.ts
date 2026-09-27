@@ -11,7 +11,7 @@ import type {
   BraidResult,
   ExecutionEvent,
   NodeResult,
-} from "../../dist/index.js";
+} from "../../src/index.js";
 import type { PiNodeProgress } from "./runner.js";
 import type { PiNodeWorkspace } from "./workspaces.js";
 
