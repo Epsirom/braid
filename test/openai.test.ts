@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { type BraidInput } from "../src/index.js";
 import { createOpenAICompatibleRunner } from "../src/adapters/openai.js";
-import { braid, decision, execute, graph } from "./helpers.js";
+import { braid, decision, deferred, execute, graph } from "./helpers.js";
+import { mockClock } from "./clock.js";
 
 type WireMessage = {
   role: string;
@@ -100,14 +101,13 @@ test("OpenAI base URLs preserve internal slashes and remove only trailing slashe
 });
 
 test("OpenAI time reminders refresh on the decision continuation", async (t) => {
-  let now = 0;
-  t.mock.method(performance, "now", () => now);
+  const clock = mockClock(t);
   const fake = queuedFetch([completion(null, [toolCall()]), completion("Done")]);
   const runner = createOpenAICompatibleRunner({
     defaultModel: "fake",
     fetch: async (...args) => {
       const response = await fake.fetch(...args);
-      now += 50;
+      clock.advance(50);
       return response;
     },
   });
@@ -374,7 +374,9 @@ test("adapter fails before HTTP if no model is configured", async () => {
   assert.equal(mock.calls.length, 0);
 });
 
-test("adapter forwards cancellation to fetch", { timeout: 2_000 }, async () => {
+test("adapter forwards cancellation to fetch", { timeout: 2_000 }, async (t) => {
+  const clock = mockClock(t);
+  const started = deferred();
   let aborted = false;
   const fetch: typeof globalThis.fetch = async (_url, init) =>
     new Promise((_resolve, reject) => {
@@ -387,11 +389,17 @@ test("adapter forwards cancellation to fetch", { timeout: 2_000 }, async () => {
         },
         { once: true },
       );
+      started.resolve();
     });
-  const result = await braid(graph([execute("a")]), {
+  const run = braid(graph([execute("a")]), {
     runner: createOpenAICompatibleRunner({ fetch, defaultModel: "test" }),
     nodeTimeoutMs: 20,
   });
+  await started.promise;
+  clock.advance(19);
+  assert.equal(aborted, false);
+  clock.advance(1);
+  const result = await run;
   assert.equal(result.nodes.a!.error!.code, "NODE_TIMEOUT");
   assert.equal(aborted, true);
 });
