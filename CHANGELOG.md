@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Prevent Pi TUI crashes in narrow terminals by truncating the flowchart fallback
+  message to the terminal width.
+
 ## 0.1.2 — 2026-09-27
 
 - Make Pi depend on the exact `@chrok/braid` version instead of bundling core.
