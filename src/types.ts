@@ -3,6 +3,8 @@ export interface ExecuteNode {
   id: string;
   prompt: string;
   model?: string;
+  /** Read the live cwd without a worktree; defaults to worktree in Git, read-only elsewhere. */
+  workspace?: "read-only" | "worktree";
 }
 
 export interface DecisionNode {
@@ -11,6 +13,8 @@ export interface DecisionNode {
   prompt: string;
   choices: readonly string[];
   model?: string;
+  /** Read the live cwd without a worktree; defaults to worktree in Git, read-only elsewhere. */
+  workspace?: "read-only" | "worktree";
 }
 
 export interface MergeNode {
@@ -123,7 +127,7 @@ export interface ModelRequest {
   /** Finite deadlines on the performance.now() clock; absent scopes are unlimited. */
   deadlines?: { node?: number; graph?: number };
   workspace?: NodeWorkspace;
-  /** Adapters must wrap mutating file tools so cancellation and cleanup wait for in-flight writes. */
+  /** Rejects read-only writes; adapters must wrap mutating file tools so cleanup waits for in-flight writes. */
   withWorkspaceWrite?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Local Git operations: inspection for workers, integration commands for merge nodes. */
   git?: (args: string[], input?: string) => Promise<GitResult>;
@@ -201,7 +205,7 @@ export type ExecutionEvent = Readonly<
 export interface BraidOptions {
   runner: ModelRunner;
   defaultModel?: string;
-  /** Source checkout. Git workspace management is automatic; outside Git, nodes are read-only. */
+  /** Source checkout. Nodes may opt into live read-only access; outside Git, all nodes are read-only. */
   cwd?: string;
   /** Positive integer. Defaults to 4. */
   maxConcurrency?: number;

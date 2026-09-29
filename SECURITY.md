@@ -22,6 +22,10 @@ upgrade. Before the first release, report issues against the current main branch
   changes into the source checkout; they are not restricted to read-only analysis.
   Outside Git, Pi file tools stay read-only. Read paths can expose files outside
   the checkout and disclose content to a model provider.
+- Execute/decision nodes can request `workspace: "read-only"` inside Git. Pi
+  omits write/edit tools, and core rejects write-barrier operations. Git inspection
+  remains available. These nodes read the live source directory, not an isolated
+  snapshot; custom runners must honor this capability themselves.
 - Guarded write tools reject external paths, Git metadata, symlinks, hard links,
   and special files, but are not an OS sandbox against concurrent filesystem
   attacks. Avoid concurrent external source edits while merge agents run. A

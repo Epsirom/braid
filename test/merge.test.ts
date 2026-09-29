@@ -49,6 +49,97 @@ async function noWorktrees(cwd: string, result: BraidResult) {
   }
 }
 
+test("explicit read-only workers inspect the live checkout without snapshots, worktrees, or merge", async t => {
+  const cwd = await repository(t);
+  await mkdir(join(cwd, "nested"));
+  await writeFile(join(cwd, "file.txt"), "live edit\n");
+  const index = await readFile(join(cwd, ".git/index"));
+  const objects = await git(cwd, "count-objects", "-v");
+  const result = await braid(graph([
+    { ...execute("review"), workspace: "read-only" },
+    { ...decision("route", ["done"]), workspace: "read-only" },
+  ], [{ from: "review", to: "route" }]), { cwd: join(cwd, "nested"), runner: async request => {
+    assert.equal(request.workspace!.mode, "read-only");
+    assert.equal(request.workspace!.workingDirectory, join(cwd, "nested"));
+    assert.equal(request.workspace!.worktreeRoot, undefined);
+    assert.equal(request.workspace!.snapshotCommit, undefined);
+    assert.equal((await git(cwd, "worktree", "list", "--porcelain")).match(/^worktree /gm)!.length, 1);
+    const status = await request.git!(["status", "--porcelain"]);
+    assert.equal(status.exitCode, 0);
+    assert.match(status.stdout, /file.txt/);
+    const diff = await request.git!(["diff", "--", "../file.txt"]);
+    assert.equal(diff.exitCode, 0);
+    assert.match(diff.stdout, /live edit/);
+    assert.match((await request.git!(["show", "HEAD:file.txt"])).stdout, /original/);
+    await assert.rejects(request.git!(["add", "."]), /unavailable/);
+    await assert.rejects(request.withWorkspaceWrite!(async () => assert.fail("write ran")), /read-only/);
+    if (request.decide) {
+      assert.equal(request.predecessors[0]!.workspace!.mode, "read-only");
+      assert.equal(await readFile(join(cwd, "file.txt"), "utf8"), "live edit\nupdated\n");
+      request.decide("done");
+    } else await writeFile(join(cwd, "file.txt"), "live edit\nupdated\n"); // Simulate a parent edit.
+    return { output: "reviewed" };
+  } });
+  assert.equal(result.status, "completed", result.error?.message);
+  assert.deepEqual(Object.keys(result.nodes), ["review", "route"]);
+  assert.equal(result.terminalOutputs.route!.decision, "done");
+  assert.deepEqual(Object.keys(result.workspaces!), ["review", "route"]);
+  assert.equal(result.events.filter(event => event.type === "workspace_updated").length, 2);
+  assert.equal(await git(cwd, "count-objects", "-v"), objects);
+  assert.equal(await git(cwd, "for-each-ref", "--format=%(refname)", "refs/braid/"), "");
+  assert.deepEqual(await readFile(join(cwd, ".git/index")), index);
+});
+
+for (const explicitMerge of [false, true]) {
+  test(`mixed read-only and writable nodes pass only worktrees to ${explicitMerge ? "explicit" : "automatic"} merge`, async t => {
+    const cwd = await repository(t);
+    const result = await braid(graph([
+      { ...execute("analysis"), workspace: "read-only" },
+      { ...execute("implementation"), workspace: "worktree" },
+      ...(explicitMerge ? [{ type: "merge" as const, id: "integrate" },
+        { ...execute("after"), workspace: "read-only" as const }] : []),
+    ], explicitMerge ? [
+      { from: "analysis", to: "integrate" }, { from: "implementation", to: "integrate" },
+      { from: "integrate", to: "after" },
+    ] : []), { cwd, runner: async request => {
+      if (request.merge) {
+        assert.deepEqual(request.merge.sources.map(source => source.nodeId), ["implementation"]);
+        await applySources(request);
+      } else if (request.node.id === "implementation") {
+        assert.equal(request.workspace!.mode, "worktree");
+        await request.withWorkspaceWrite!(() => writeFile(join(request.workspace!.worktreeRoot!, "file.txt"), "implemented\n"));
+      } else {
+        assert.equal(request.workspace!.mode, "read-only");
+        if (request.node.id === "after")
+          assert.match((await request.git!(["diff"])).stdout, /implemented/);
+      }
+      return { output: "done" };
+    } });
+    assert.equal(result.status, "completed", result.error?.message);
+    assert.equal(result.workspaces!.analysis!.state, "ready");
+    assert.equal(result.workspaces!.analysis!.checkpointRef, undefined);
+    assert.equal(result.workspaces!.implementation!.state, "integrated");
+    assert.equal(await readFile(join(cwd, "file.txt"), "utf8"), "implemented\n");
+    await noWorktrees(cwd, result);
+  });
+}
+
+test("explicit workspace modes preserve non-Git read-only behavior", async t => {
+  const cwd = await mkdtemp(join(tmpdir(), "braid-read-only-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const result = await braid(graph([
+    { ...execute("readonly"), workspace: "read-only" },
+    { ...execute("writable"), workspace: "worktree" },
+  ]), { cwd, runner: async request => {
+    assert.equal(request.workspace!.mode, "read-only");
+    assert.equal(request.git, undefined);
+    return { output: "done" };
+  } });
+  assert.equal(result.status, "completed", result.error?.message);
+  assert.equal(result.nodes.readonly!.workspace!.mode, "read-only");
+  assert.equal(result.nodes.writable!.workspace, undefined);
+});
+
 for (const baseline of ["clean", "dirty", "unborn"] as const) {
   test(`analysis-only graphs skip automatic merge with ${baseline} snapshots`, async t => {
     const cwd = await repository(t);

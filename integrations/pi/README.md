@@ -57,8 +57,8 @@ an explicit per-turn planning policy to Pi's system prompt and tool metadata:
 
 - for code reviews, bug investigations, design comparisons, test planning, or
   changes spanning multiple files, call Braid first when two or more concerns
-  can be handled independently; nodes can inspect the project and edit isolated
-  worktrees in Git repositories;
+  can be handled independently; use `workspace: "read-only"` for analysis,
+  review, routing, and synthesis, and worktrees for implementation;
 - do not use Braid for simple one-step answers, trivial direct edits, or shell
   work; keep tests and shell commands in the parent agent;
 - the user does not need to say “Braid” or design the graph;
@@ -164,15 +164,41 @@ They make no provider requests.
 
 Core owns workspace preparation, checkpointing, serialization, and cleanup for
 all integrations. Pi exposes `read` and `ls` in all directories, plus search tools whose local dependencies are available.
-In Git, execute and decision nodes also get `write`/`edit` restricted to their own
-detached worktree, plus local Git inspection. Outside Git, filesystem tools stay
-read-only. Nodes never receive shell commands or a test runner.
+In Git, execute and decision nodes default to `write`/`edit` restricted to their
+own detached worktree, plus local Git inspection. Set `workspace: "read-only"`
+to keep read tools and Git inspection without write/edit tools or a worktree.
+Omit `workspace` or use `"worktree"` for implementation or a fixed snapshot.
+Outside Git, both modes remain read-only. Nodes never receive shell commands or
+a test runner. The `workspace` field is forbidden on merge nodes.
+
+Read-only nodes inspect the live source directory at the original `cwd`, including
+accessible ignored files. They create no snapshot, checkpoint, or merge source.
+Parent edits and concurrent merges may change what they read during execution.
+Implementation changes reach the source only through integration; a downstream
+review can inspect a predecessor worktree/checkpoint explicitly, or run after a
+merge to review the integrated source. Use a read-only execute node to summarize
+findings, and a merge node to integrate file changes.
+
+For example, this graph reviews two concerns before implementing a fix. Core
+invokes an automatic merge only if the implementation leaves file changes:
+
+```json
+{
+  "goal": "Review the cache and fix confirmed problems.",
+  "nodes": [
+    { "type": "execute", "id": "correctness", "workspace": "read-only", "prompt": "Review cache correctness." },
+    { "type": "execute", "id": "tests", "workspace": "read-only", "prompt": "Inspect test coverage and identify missing cases; do not run tests." },
+    { "type": "execute", "id": "fix", "prompt": "Implement confirmed fixes and regression tests from both reviews." }
+  ],
+  "edges": [{ "from": "correctness", "to": "fix" }, { "from": "tests", "to": "fix" }]
+}
+```
 
 The initial snapshot includes tracked staged/unstaged changes, deletions, and
 non-ignored untracked files. It preserves the source index and files. Ignored
 files are not copied; submodules are not initialized or recursively snapshotted,
 and Pi rejects writes inside them to keep checkpoint recovery complete.
-Every worker shares that baseline until a merge ends, after which new workers
+Workers using worktrees share that baseline until a merge ends, after which new workers
 snapshot the current source checkout. Uncommitted predecessor changes are not
 implicitly applied to downstream workers. Their paths and checkpoint refs are
 available as context for inspection.
@@ -204,6 +230,8 @@ worktrees from cleaned workspaces. Worktrees use
 recoverable from `refs/braid/checkpoints/*`. Use `git show <checkpointRef>:<path>`
 or `git diff <snapshotCommit> <checkpointRef>` to inspect archived changes.
 Remove individual recovery refs with `git update-ref -d <ref>` once reviewed.
+Explicit read-only nodes appear with mode `read-only` and state `ready`, without
+checkpoint or backup refs; their files stay in the source directory.
 
 A failed merge does not reset partial changes or conflict state in the source
 checkout. Its `backupRef` preserves the pre-agent snapshot. Cleanup errors report

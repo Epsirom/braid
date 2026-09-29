@@ -102,7 +102,7 @@ async function gitPreview(cwd: string, args: string[], limit: number): Promise<G
   return { text: output.slice(0, limit), truncated: overflow || output.length > limit };
 }
 
-/** One source snapshot per graph; every invoked node gets its own detached worktree. */
+/** Writable workers share a snapshot; explicit read-only workers inspect the live cwd. */
 export class GitWorkspaces {
   private snapshots = new Map<string, Promise<Snapshot | undefined>>();
   private records = new Map<string, NodeWorkspace>();
@@ -123,7 +123,7 @@ export class GitWorkspaces {
     }
   }
 
-  private async snapshot(): Promise<Snapshot | undefined> {
+  private async sourceRoot(): Promise<string | undefined> {
     let ancestor = resolve(this.cwd);
     while (true) {
       try { await access(join(ancestor, ".git")); break; }
@@ -143,7 +143,12 @@ export class GitWorkspaces {
         return undefined;
       throw error;
     }
-    sourceRoot = await realpath(sourceRoot);
+    return realpath(sourceRoot);
+  }
+
+  private async snapshot(): Promise<Snapshot | undefined> {
+    const sourceRoot = await this.sourceRoot();
+    if (!sourceRoot) return undefined;
     const commonDirectory = await realpath(resolve(sourceRoot, await git(sourceRoot, ["rev-parse", "--git-common-dir"])));
     const cwdSuffix = relative(sourceRoot, await realpath(this.cwd));
     // Git records canonical worktree paths. In particular, Windows tmpdir()
@@ -200,6 +205,16 @@ export class GitWorkspaces {
 
   async prepare(request: ModelRequest): Promise<NodeWorkspace> {
     request.signal.throwIfAborted();
+    if (request.node.type !== "merge" && request.node.workspace === "read-only") {
+      const sourceRoot = await this.sourceRoot();
+      request.signal.throwIfAborted();
+      const workspace: NodeWorkspace = {
+        nodeId: request.node.id, mode: "read-only", workingDirectory: this.cwd, state: "ready",
+        ...(sourceRoot ? { sourceRoot } : {}),
+      };
+      this.report(workspace);
+      return workspace;
+    }
     let pending = this.snapshots.get(request.execution.runId);
     if (!pending) {
       // Do not bind the shared snapshot to one node's cancellation signal.
@@ -380,15 +395,18 @@ export class GitWorkspaces {
     }))
       throw new Error("Git arguments cannot override filesystem boundaries, execute external helpers, or select external strategies");
     const workspace = request.workspace!;
-    const cwd = workspace.mode === "merge" ? workspace.sourceRoot! : workspace.worktreeRoot!;
-    const location = this.locations.get(request.node.id)!;
+    const cwd = workspace.mode === "read-only" ? workspace.workingDirectory
+      : workspace.mode === "merge" ? workspace.sourceRoot! : workspace.worktreeRoot!;
+    const location = this.locations.get(request.node.id);
     const actualArgs = [command,
       ...(["diff", "show", "log"].includes(command) ? ["--no-ext-diff", "--no-textconv"] : []),
       ...args.slice(1),
     ];
     const execute = () => new Promise<GitResult>((resolve, reject) => {
       const child = execFile("git", [
-        "-c", `core.hooksPath=${location.hooksDirectory}`, "-c", "commit.gpgsign=false",
+        ...(location ? ["-c", `core.hooksPath=${location.hooksDirectory}`] : []),
+        ...(workspace.mode === "read-only" ? ["--no-optional-locks"] : []),
+        "-c", "commit.gpgsign=false",
         "-c", "core.fsmonitor=false", "--no-pager", "-C", cwd, ...actualArgs,
       ], {
         env: { ...gitEnvironment(), GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true", GIT_MERGE_AUTOEDIT: "no" },

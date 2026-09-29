@@ -29,6 +29,11 @@ its runtime and does not need a source checkout.
 
 Git must be installed for workspace execution inside a Git checkout. Non-Git
 text-only runs do not require Git workspace management.
+Execute/decision nodes can opt into `workspace: "read-only"`; omitted or
+`"worktree"` values preserve the existing allocation behavior. Merge nodes reject
+this field. Explicit read-only nodes report workspace metadata/events even when
+the entire run is read-only; implicit non-Git runs keep their existing shapes.
+Older versions reject the new field during validation.
 
 ## Versioning
 

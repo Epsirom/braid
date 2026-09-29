@@ -164,9 +164,10 @@ output. The graph has no special fork, branch, or join nodes.
 
 ```ts
 type BraidNode =
-  | { type: "execute"; id: string; prompt: string; model?: string }
+  | { type: "execute"; id: string; prompt: string; model?: string;
+      workspace?: "read-only" | "worktree" }
   | { type: "decision"; id: string; prompt: string;
-      choices: readonly string[]; model?: string }
+      choices: readonly string[]; model?: string; workspace?: "read-only" | "worktree" }
   | { type: "merge"; id: string; prompt?: string; model?: string };
 
 type Edge = { from: string; to: string; choice?: string };
@@ -175,6 +176,11 @@ type BraidInput = { goal: string; nodes: readonly BraidNode[]; edges: readonly E
 
 IDs are unique, non-empty strings. Prompts, goals, models, and choices must be
 non-empty strings when present. Decision choices must be non-empty and unique.
+`workspace` is optional on execute/decision nodes and forbidden on merge nodes.
+Use `"read-only"` for analysis, review, routing, and synthesis. Omit it or use
+`"worktree"` for the existing behavior: an isolated writable worktree in Git,
+read-only access outside Git. Explicit read-only nodes read the live source
+directory, not a fixed snapshot; see [workspace semantics](#worktrees-and-merge-agents).
 Unknown fields, unsupported node types, missing references, duplicate exact
 edges, and cycles are rejected. Cycles are rejected even if a decision might
 make them inactive. Disconnected components are allowed; every root runs.
@@ -259,7 +265,8 @@ The event sequence includes:
 - `graph_created`, `node_created`, and `edge_created` when the submitted DAG is
   admitted; an appended final merge emits its own node/edge creation events.
 - `node_runnable` and `node_started` when scheduling admits a node.
-- `workspace_updated` for Git workspace preparation, checkpointing, and cleanup.
+- `workspace_updated` for Git workspace preparation, checkpointing, cleanup, and
+  explicitly requested read-only workspaces.
 - `handoff` for every direct predecessor output passed to a downstream node,
   including the upstream decision when present.
 - `node_completed`, `node_skipped`, and `node_failed`, including output,
@@ -281,8 +288,9 @@ render live topology, handoffs, failures, and active nodes without reconstructin
 scheduler state from final results. Tool selection remains the responsibility of
 the host agent; the optional Pi adapter supplies explicit proactive-use guidance
 so Braid is considered for complex multi-branch reasoning without forcing it for
-every prompt. In the Pi adapter, Git nodes can inspect and edit individual
-worktrees; nodes outside Git stay read-only. Merge agents handle integration; the parent reviews results and runs shell commands and tests.
+every prompt. In the Pi adapter, nodes can inspect the live source read-only or
+edit individual Git worktrees; nodes outside Git stay read-only. Merge agents
+handle integration; the parent reviews results and runs shell commands and tests.
 
 ## Context isolation and model runners
 
@@ -308,7 +316,8 @@ merge agents. Adapters must enforce workspace capabilities and wrap mutating
 file tools in `request.withWorkspaceWrite(operation)`, so cleanup waits for
 in-flight writes and rejects later writes. Core Git mutations use this barrier.
 The included Pi adapter provides guarded `write`/`edit` alongside its read tools.
-Outside Git, adapters must provide read-only capabilities. Pi never provides
+For read-only workspaces, adapters must omit mutating tools; the core write
+barrier also rejects writes. This includes all nodes outside Git. Pi never provides
 `bash`, `powershell`, or a test runner to nodes.
 
 `request.predecessors` contains direct active predecessors in incoming-edge
@@ -327,16 +336,38 @@ Read tools follow the host filesystem permissions and are not a security sandbox
 
 ### Worktrees and merge agents
 
-In a Git checkout, execute and decision nodes receive detached worktrees under
-`os.tmpdir()/braid-workspaces-*/<unique-id>`. The first node captures tracked
+By default, execute and decision nodes in a Git checkout receive detached worktrees
+under `os.tmpdir()/braid-workspaces-*/<unique-id>`. The first writable node captures tracked
 staged/unstaged changes, deletions, and non-ignored untracked files with a temporary
 index. Snapshot creation preserves the source index, branch, and files. Ignored
 files are not copied, and submodules are not initialized or recursively captured.
 Pi rejects writes inside submodules. If a custom runner populates one, core
 reports cleanup failure and retains the worktree rather than losing those files.
-Empty repositories are supported. Nodes share this baseline until a merge ends;
-subsequent nodes snapshot the current source checkout. Relative working directories
+Empty repositories are supported. Worktree nodes share this baseline until a merge
+ends; subsequent worktree nodes snapshot the current source checkout. Relative working directories
 are preserved. Code changes do not implicitly flow into successor worktrees.
+
+Set `workspace: "read-only"` on execute/decision nodes that only inspect or reason
+about files. They read the original `cwd`, including ignored files accessible to
+the adapter, without creating a snapshot, worktree, checkpoint, or merge source.
+In Git they retain inspection commands (`status`, `diff`, `show`, `log`,
+`ls-files`, `rev-parse`), with optional Git index writes disabled. Relative paths
+use the original `cwd`, including when it is a subdirectory of the repository.
+These reads observe the live checkout: parent edits or concurrent merge nodes
+may change files during execution. Use worktree mode when a fixed snapshot is
+needed. Predecessor edits are visible in the source only after integration;
+their worktrees/checkpoints can still be inspected explicitly.
+
+Explicit read-only allocations appear in `workspace_updated`, node/predecessor
+workspace metadata, and `result.workspaces` with mode `read-only` and state
+`ready`. They have no cleanup lifecycle or recovery refs. Implicit non-Git
+read-only runs retain their existing event/result behavior. A custom runner is
+trusted code and must honor the workspace capability; this is not an OS sandbox.
+
+For a mixed graph, give review branches `workspace: "read-only"` and leave
+implementation branches in worktree mode. Use a read-only execute node to
+summarize findings; a merge node integrates file changes and does not accept
+the `workspace` field.
 
 Add `{ type: "merge", id: "integrate" }` with incoming edges from any number of
 sources. The merge agent receives predecessor errors, workspace paths, and Git

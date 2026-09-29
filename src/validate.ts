@@ -64,8 +64,10 @@ export function compileGraph(input: BraidInput): Graph {
     fields(
       node,
       node.type === "decision"
-        ? ["type", "id", "prompt", "model", "choices"]
-        : ["type", "id", "prompt", "model"],
+        ? ["type", "id", "prompt", "model", "choices", "workspace"]
+        : node.type === "execute"
+          ? ["type", "id", "prompt", "model", "workspace"]
+          : ["type", "id", "prompt", "model"],
       "Node",
     );
     requireValid(text(node.id), "Node id must be a non-empty string");
@@ -78,10 +80,16 @@ export function compileGraph(input: BraidInput): Graph {
       node.model === undefined || text(node.model),
       `Invalid model on '${node.id}'`,
     );
+    const workspace = node.type === "merge" ? undefined : node.workspace;
+    requireValid(
+      workspace === undefined || workspace === "read-only" || workspace === "worktree",
+      `Invalid workspace on '${node.id}'`,
+    );
     const common = {
       id: node.id,
       prompt: node.prompt ?? "Review all predecessor changes, decide how to integrate them into the source repository, and account for every source with finish_merge.",
       ...(node.model !== undefined ? { model: node.model } : {}),
+      ...(workspace !== undefined ? { workspace } as const : {}),
     };
     if (node.type === "decision") {
       requireValid(

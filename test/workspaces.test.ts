@@ -53,6 +53,29 @@ function request(id: string, signal = new AbortController().signal, runId = "run
   };
 }
 
+for (const source of ["unborn", "linked"] as const) {
+  test(`read-only allocation supports a ${source} checkout without capturing a snapshot`, async t => {
+    const fixture = await repository(t, source === "unborn");
+    const cwd = source === "linked" ? join(fixture.directory, "linked") : fixture.root;
+    if (source === "linked") {
+      await git(fixture.root, "worktree", "add", "--detach", cwd, "HEAD");
+      t.after(() => git(fixture.root, "worktree", "remove", "--force", cwd).catch(() => {}));
+    }
+    const before = await git(cwd, "count-objects", "-v");
+    const manager = new GitWorkspaces(cwd);
+    const invocation = request("review");
+    invocation.node = { type: "execute", id: "review", prompt: "Review", workspace: "read-only" };
+    invocation.workspace = await manager.prepare(invocation);
+    assert.equal(invocation.workspace.mode, "read-only");
+    assert.equal(invocation.workspace.snapshotCommit, undefined);
+    assert.deepEqual(manager.pending(), []);
+    assert.equal((await manager.git(invocation, ["status", "--porcelain"])).exitCode, 0);
+    await manager.close();
+    assert.equal(await git(cwd, "count-objects", "-v"), before);
+    assert.equal(await readFile(join(cwd, "src/file.txt"), "utf8"), "original\n");
+  });
+}
+
 test("worktree checkout does not run hooks and a reused runner snapshots each graph separately", async (t) => {
   const fixture = await repository(t);
   const hook = join(fixture.root, ".git", "hooks", "post-checkout");
@@ -119,4 +142,3 @@ test("a worktree creation error fails closed and reports the attempted workspace
     await writeFile(config, original);
   }
 });
-
