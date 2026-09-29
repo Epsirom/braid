@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.3 — 2026-09-29
+
 - Add per-node `workspace: "read-only" | "worktree"` for execute/decision nodes.
   Read-only nodes inspect the live source directory with Git inspection, without
   writable tools, snapshots, worktrees, or merge sources. Existing defaults are
