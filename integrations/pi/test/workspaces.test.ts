@@ -57,6 +57,33 @@ function toolResponse(...calls: ToolCall[]) {
   return { ...response(), stopReason: "toolUse" as const, content: calls };
 }
 
+test("Pi analysis-only graphs finish without a merge model invocation", async t => {
+  const fixture = await repository(t);
+  const calls: string[] = [];
+  const ctx = context(async () => response());
+  t.mock.method(ctx.modelRegistry, "complete", async (_model: unknown, worker: Context) => {
+    const payload = JSON.parse(worker.messages[0]!.content as string) as { nodeId: string };
+    calls.push(payload.nodeId);
+    return response(`Reviewed ${payload.nodeId}`);
+  });
+  const result = await braid({
+    goal: "Review without edits",
+    nodes: ["analysis", "summary"].map(id => ({ type: "execute", id, prompt: "Review only" })),
+    edges: [{ from: "analysis", to: "summary" }],
+  }, {
+    cwd: fixture.root, defaultModel: "fake/model",
+    runner: createPiRunner(ctx.modelRegistry, { cwd: fixture.root, onWorkspace: fixture.onWorkspace }),
+  });
+  assert.equal(result.status, "completed", result.error?.message);
+  assert.deepEqual(calls, ["analysis", "summary"]);
+  assert.equal(result.terminalOutputs.summary!.output, "Reviewed summary");
+  for (const workspace of Object.values(result.workspaces!)) {
+    assert.equal(workspace.state, "discarded");
+    assert.equal(await git(fixture.root, "show", `${workspace.checkpointRef}:src/file.txt`), "original");
+    await assert.rejects(readFile(join(workspace.worktreeRoot!, ".git")), { code: "ENOENT" });
+  }
+});
+
 test("parallel Git nodes write and edit separate worktrees from the same dirty snapshot", async (t) => {
   const fixture = await repository(t);
   await writeFile(join(fixture.root, "src", "file.txt"), "staged\n");

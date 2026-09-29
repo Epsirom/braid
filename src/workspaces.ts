@@ -56,6 +56,7 @@ interface Snapshot {
   sourceRoot: string;
   cwdSuffix: string;
   baseCommit?: string;
+  snapshotTree: string;
   snapshotCommit: string;
   hooksDirectory: string;
 }
@@ -183,7 +184,7 @@ export class GitWorkspaces {
         "-m", "Braid isolated workspace snapshot",
       ], options);
       const snapshot: Snapshot = {
-        directory, commonDirectory, sourceRoot, cwdSuffix, snapshotCommit, hooksDirectory,
+        directory, commonDirectory, sourceRoot, cwdSuffix, snapshotTree: tree, snapshotCommit, hooksDirectory,
         ...(baseCommit ? { baseCommit } : {}),
       };
       this.allocated.add(snapshot);
@@ -276,7 +277,7 @@ export class GitWorkspaces {
     }
     await git(cwd, ["add", "--force", "--all", "--", "."], options);
     const tree = await git(cwd, ["write-tree"], options);
-    const commit = await git(cwd, [
+    const commit = tree === location.snapshotTree ? workspace.snapshotCommit! : await git(cwd, [
       "-c", "user.name=Braid", "-c", "user.email=braid@localhost", "-c", "commit.gpgsign=false",
       "commit-tree", tree, "-p", workspace.snapshotCommit!, "-m", `Braid node checkpoint: ${workspace.nodeId}`,
     ], options);
@@ -286,6 +287,23 @@ export class GitWorkspaces {
     workspace.checkpointCommit = commit;
     workspace.checkpointRef = ref;
     this.report(workspace);
+  }
+
+  /** Run only after declared nodes settle, so consumers retain their source paths. */
+  async discardUnchanged(): Promise<void> {
+    const errors: unknown[] = [];
+    for (const id of this.pending()) {
+      const workspace = this.records.get(id)!;
+      // Incomplete preparation must follow the existing failure/recovery path.
+      // A failed invocation with a successfully prepared workspace is still ready.
+      if (workspace.state !== "ready") continue;
+      try {
+        await this.checkpoint(workspace);
+        if (workspace.checkpointCommit === workspace.snapshotCommit)
+          await this.release(id, "discarded", "No changes from snapshot");
+      } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, "Some workspaces could not be checked or removed; their paths are retained in workspaces");
   }
 
   private async release(id: string, disposition: MergeDisposition["disposition"], reason: string): Promise<void> {

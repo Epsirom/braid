@@ -44,8 +44,10 @@ after exporting needed results. Reloading also cancels outstanding work.
 Git worktree preparation, checkpointing, tracked writes, and cleanup add disk,
 Git-process, and elapsed-time overhead. Cleanup may extend wall time beyond a
 model deadline. Automatically appended merge agents are additional model calls
-and share the graph's remaining time. Benchmark results measured outside Git do
-not include this lifecycle. Recoverable refs retain Git objects until removed.
+and share the graph's remaining time; unchanged worktrees are released without
+an automatic merge call, but still incur workspace and checkpoint overhead.
+Benchmark results measured outside Git do not include this lifecycle. Recoverable
+refs retain Git objects until removed.
 
 An aborted runtime slot can be reused even if an uncooperative provider continues
 working. Runners must forward `signal`; neither Braid nor JavaScript can forcibly

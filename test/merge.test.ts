@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { braid, type BraidResult, type ModelRequest, type MergeDisposition } from "../src/index.js";
-import { deferred, execute, graph } from "./helpers.js";
+import { decision, deferred, execute, graph } from "./helpers.js";
 
 const exec = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) => (await exec("git", ["-C", cwd, ...args])).stdout.trim();
@@ -48,6 +48,150 @@ async function noWorktrees(cwd: string, result: BraidResult) {
     if (workspace.worktreeRoot) await assert.rejects(readFile(join(workspace.worktreeRoot, ".git")), { code: "ENOENT" });
   }
 }
+
+for (const baseline of ["clean", "dirty", "unborn"] as const) {
+  test(`analysis-only graphs skip automatic merge with ${baseline} snapshots`, async t => {
+    const cwd = await repository(t);
+    if (baseline === "dirty") {
+      await writeFile(join(cwd, "file.txt"), "staged\n");
+      await git(cwd, "add", "file.txt");
+      await writeFile(join(cwd, "file.txt"), "unstaged\n");
+      await writeFile(join(cwd, "user.txt"), "untracked\n");
+    } else if (baseline === "unborn") {
+      await git(cwd, "update-ref", "-d", "refs/heads/main");
+    }
+    const index = await readFile(join(cwd, ".git/index"));
+    const status = await git(cwd, "status", "--porcelain");
+    const calls: string[] = [];
+    const result = await braid(graph(
+      [execute("correctness"), decision("tests", ["reviewed"]), execute("review")],
+      [{ from: "correctness", to: "review" }, { from: "tests", to: "review" }],
+    ), { cwd, runner: async request => {
+      calls.push(request.node.id);
+      if (request.node.type === "decision") request.decide!("reviewed");
+      if (request.merge) await applySources(request, "discarded");
+      if (request.node.id === "review") {
+        for (const predecessor of request.predecessors)
+          assert.ok(await readFile(join(predecessor.workspace!.worktreeRoot!, ".git")));
+      }
+      return { output: request.node.id, usage: { inputTokens: 1, outputTokens: 1 } };
+    } });
+    assert.equal(result.status, "completed", result.error?.message);
+    assert.deepEqual(calls.sort(), ["correctness", "review", "tests"]);
+    assert.deepEqual(Object.keys(result.terminalOutputs), ["review"]);
+    assert.equal(result.terminalOutputs.review!.output, "review");
+    assert.deepEqual(result.metadata.usage, { inputTokens: 3, outputTokens: 3 });
+    assert.equal(result.metadata.usageReportedNodes, 3);
+    assert.ok(!result.events.some(event => event.type === "node_created" && event.nodeType === "merge"));
+    for (const workspace of Object.values(result.workspaces!)) {
+      assert.equal(workspace.state, "discarded");
+      assert.equal(workspace.reason, "No changes from snapshot");
+      assert.equal(workspace.checkpointCommit, workspace.snapshotCommit);
+      assert.equal(await git(cwd, "rev-parse", workspace.checkpointRef!), workspace.snapshotCommit);
+      assert.equal(await git(cwd, "show", `${workspace.checkpointRef}:file.txt`), baseline === "dirty" ? "unstaged" : "original");
+      assert.ok(result.events.some(event => event.type === "workspace_updated" &&
+        event.workspace.nodeId === workspace.nodeId && event.workspace.state === "discarded"));
+    }
+    assert.deepEqual(await readFile(join(cwd, ".git/index")), index);
+    assert.equal(await git(cwd, "status", "--porcelain"), status);
+    assert.equal(await git(cwd, "for-each-ref", "--format=%(refname)", "refs/braid/merge-backups/"), "");
+    await noWorktrees(cwd, result);
+  });
+}
+
+test("failed nodes without changes skip automatic merge and preserve errors for consumers", async t => {
+  const cwd = await repository(t);
+  const calls: string[] = [];
+  const result = await braid(graph([execute("work"), execute("review")], [{ from: "work", to: "review" }]), {
+    cwd, runner: async request => {
+      calls.push(request.node.id);
+      if (request.node.id === "work") throw new Error("analysis failed");
+      assert.equal(request.predecessors[0]!.error!.message, "analysis failed");
+      return { output: "Failure explained" };
+    },
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.nodes.work!.error!.message, "analysis failed");
+  assert.deepEqual(calls, ["work", "review"]);
+  assert.equal(result.terminalOutputs.review!.output, "Failure explained");
+  assert.equal(result.workspaces!.work!.state, "discarded");
+  await noWorktrees(cwd, result);
+});
+
+test("automatic merge receives only changed sources, including ignored output from failed nodes", async t => {
+  const cwd = await repository(t);
+  let sources: string[] = [];
+  const result = await braid(graph([execute("unchanged"), execute("changed")]), { cwd, runner: async request => {
+    if (request.merge) {
+      sources = request.merge.sources.map(source => source.nodeId);
+      assert.deepEqual(request.merge.sources[0]!.changes!.files, ["ignored.txt"]);
+      await applySources(request);
+      return { output: "Recovered partial work" };
+    }
+    await request.withWorkspaceWrite!(async () => {
+      if (request.node.id === "changed") await writeFile(join(request.workspace!.worktreeRoot!, "ignored.txt"), "partial work");
+      else {
+        await writeFile(join(request.workspace!.worktreeRoot!, "file.txt"), "temporary edit\n");
+        await writeFile(join(request.workspace!.worktreeRoot!, "file.txt"), "original\n");
+      }
+    });
+    if (request.node.id === "changed") throw new Error("failed after writing");
+    return { output: "Analysis complete" };
+  } });
+  assert.deepEqual(sources, ["changed"]);
+  assert.equal(result.status, "failed");
+  assert.equal(result.nodes.__braid_merge__!.status, "completed");
+  assert.equal(result.workspaces!.unchanged!.state, "discarded");
+  assert.equal(result.workspaces!.changed!.state, "integrated");
+  assert.equal(await readFile(join(cwd, "ignored.txt"), "utf8"), "partial work");
+  await noWorktrees(cwd, result);
+});
+
+test("explicit merge still runs for unchanged sources with recoverable snapshot refs", async t => {
+  const cwd = await repository(t);
+  const calls: string[] = [];
+  const result = await braid(graph([execute("work"), { type: "merge", id: "explicit" }], [{ from: "work", to: "explicit" }]), {
+    cwd, runner: async request => {
+      calls.push(request.node.id);
+      if (request.merge) {
+        assert.deepEqual(request.merge.sources.map(source => source.nodeId), ["work"]);
+        assert.equal(request.merge.sources[0]!.changes!.diff.text, "");
+        await applySources(request, "discarded");
+      }
+      return { output: request.node.id };
+    },
+  });
+  assert.equal(result.status, "completed", result.error?.message);
+  assert.deepEqual(calls, ["work", "explicit"]);
+  const workspace = result.workspaces!.work!;
+  assert.equal(workspace.checkpointCommit, workspace.snapshotCommit);
+  assert.equal(await git(cwd, "show", `${workspace.checkpointRef}:file.txt`), "original");
+  assert.deepEqual(Object.keys(result.terminalOutputs), ["explicit"]);
+  await noWorktrees(cwd, result);
+});
+
+test("cancellation during the unchanged check prevents automatic merge admission", async t => {
+  const cwd = await repository(t);
+  const controller = new AbortController();
+  const calls: string[] = [];
+  const result = await braid(graph([execute("work")]), {
+    cwd, signal: controller.signal,
+    onEvent: event => {
+      if (event.type === "workspace_updated" && event.workspace.checkpointRef) controller.abort();
+    },
+    runner: async request => {
+      calls.push(request.node.id);
+      await request.withWorkspaceWrite!(() => writeFile(join(request.workspace!.worktreeRoot!, "partial.txt"), "recover me"));
+      return { output: "done" };
+    },
+  });
+  assert.equal(result.error!.code, "CANCELLED");
+  assert.deepEqual(calls, ["work"]);
+  assert.ok(!result.events.some(event => event.type === "node_created" && event.nodeType === "merge"));
+  assert.equal(result.workspaces!.work!.state, "archived");
+  assert.equal(await git(cwd, "show", `${result.workspaces!.work!.checkpointRef}:partial.txt`), "recover me");
+  await noWorktrees(cwd, result);
+});
 
 test("concurrent graphs safely register and remove worktrees in one Git repository", { timeout: 30_000 }, async t => {
   const cwd = await repository(t);
