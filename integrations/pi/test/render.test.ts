@@ -6,6 +6,7 @@ import {
   type BraidToolDetails,
 } from "../display.js";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 function renderResult(
   result: { content: unknown[]; details: BraidToolDetails },
@@ -268,4 +269,43 @@ test("partial renderer remains compact before Braid has result details", () => {
     ),
   );
   assert.match(rendered, /Braid is running…/);
+});
+
+test("flowchart fallback message is truncated to terminal width", () => {
+  const longId = "a-very-long-node-identifier-that-widens-the-chart";
+  const { error: _error, ...base } = result;
+  const wide: BraidResult = {
+    ...base,
+    terminalOutputs: {},
+    events: [],
+    nodes: {
+      [longId]: {
+        id: longId,
+        status: "completed",
+        output: "x",
+        model: "fake/model",
+        latencyMs: 0,
+      },
+      [`${longId}-two`]: {
+        id: `${longId}-two`,
+        status: "completed",
+        output: "x",
+        model: "fake/model",
+        latencyMs: 0,
+      },
+    },
+  };
+  const width = 40;
+  const component = renderGraphResult(wide, false, false, theme);
+  const rendered = component.render(width);
+  assert.ok(
+    rendered.some((line) => line.includes("Flowchart needs")),
+    "expected the narrow-terminal fallback message",
+  );
+  for (const line of rendered) {
+    assert.ok(
+      visibleWidth(line) <= width,
+      `rendered line exceeds ${width} columns: ${line}`,
+    );
+  }
 });

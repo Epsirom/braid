@@ -57,7 +57,11 @@ class FixedLines implements Component {
       chartWidth <= width
         ? chart
         : [
-            `[Flowchart needs ${chartWidth} columns; terminal width is ${width}. Expand your terminal to see it.]`,
+            truncateToWidth(
+              `[Flowchart needs ${chartWidth} columns; terminal width is ${width}. Expand your terminal to see it.]`,
+              width,
+              "",
+            ),
           ];
     const output: string[] = [];
     let chartInserted = false;

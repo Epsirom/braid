@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Prevent Pi TUI crashes in narrow terminals by truncating the flowchart fallback
+  message to the terminal width.
 - Scan fork pull requests with CodeQL advanced setup so external contributions
   can satisfy the required security checks.
 
