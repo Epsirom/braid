@@ -57,8 +57,13 @@ Use a new version for a correction. See [the release guide](releasing.md).
   before using it.
 - Workflows from all external fork contributors require maintainer approval
   before running. Inspect workflow and code changes before approving a run.
-- CodeQL default setup scans GitHub Actions and JavaScript/TypeScript with the
-  default query suite and remote threat model, including its weekly schedule.
+- CodeQL advanced setup in [.github/workflows/codeql.yml](../.github/workflows/codeql.yml)
+  scans GitHub Actions and JavaScript/TypeScript with the default query suite and
+  remote threat model. It runs on pushes to `main`, pull requests targeting
+  `main` (including forks), and a weekly schedule, with a manual trigger available.
+  Default setup must remain disabled because it skips fork pull requests and
+  prevents advanced-setup analysis uploads. Fork PR scans use `pull_request`
+  and remain subject to the contributor approval policy above.
 - Dependabot alerts/security updates, secret scanning, secret push protection,
   and private vulnerability reporting are enabled. Dependency updates remain
   configured in [.github/dependabot.yml](../.github/dependabot.yml).
