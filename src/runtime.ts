@@ -526,6 +526,15 @@ export async function braid(
         running.set(node.id, task);
       }
       if (running.size === 0) {
+        if (!automaticMergeAdded) {
+          try { await workspaces.discardUnchanged(); }
+          catch (error) {
+            cleanupError = { code: "CLEANUP_FAILED", message: error instanceof Error ? error.message : String(error) };
+            break;
+          }
+          // Checkpointing/cleanup can outlast the deadline or trigger cancellation.
+          if (controller.signal.aborted || performance.now() >= graphDeadline) continue;
+        }
         const pending = workspaces.pending();
         if (!automaticMergeAdded && pending.length) {
           automaticMergeAdded = true;

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Skip the automatic merge agent when all remaining workspaces match their
+  snapshots, preserving analysis-only terminal outputs and original node errors.
+  Mixed runs pass only changed sources to the automatic merge. Unchanged sources
+  retain recovery refs pointing to their snapshots without empty checkpoint
+  commits; explicit merge nodes still run even for unchanged sources (#21).
 - Prevent Pi TUI crashes in narrow terminals by truncating the flowchart fallback
   message to the terminal width.
 - Scan fork pull requests with CodeQL advanced setup so external contributions

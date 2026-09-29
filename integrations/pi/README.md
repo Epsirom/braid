@@ -186,8 +186,12 @@ Core never automatically merges or cherry-picks. The agent must call
 source. Tool errors and conflicts go back to the agent for recovery. Failed
 predecessors pass errors and partial work along unconditional edges.
 
-Core removes processed source worktrees after the merge agent finishes. If any
-worktrees remain after declared nodes settle, core appends a final merge agent.
+Core removes processed source worktrees after the merge agent finishes. After
+declared nodes settle, unchanged worktrees are released as `discarded` with reason
+`No changes from snapshot`, retaining recovery refs. Only remaining worktrees
+with changes trigger a final merge agent, so analysis-only graphs keep their
+declared terminal outputs without an extra model call. Explicit merge nodes run
+even for unchanged sources.
 Its model, tool calls, budgets, events, and usage behave like any other node.
 Missing finish calls, unresolved conflicts, or archived sources fail the merge.
 Cancellation, timeout, and failure archive remaining changes and clean worktrees;

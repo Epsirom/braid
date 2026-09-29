@@ -376,12 +376,23 @@ including intentionally discarded changes and ignored node output files. A
 later consumer can inspect a removed source through `git show <checkpointRef>`.
 Core also records `backupRef` for the source checkout before each merge agent.
 
-When declared nodes settle and worktrees remain, core appends an ordinary merge
+When declared nodes settle, core releases worktrees whose contents match their
+own snapshot, including those from failed nodes, as `discarded` with reason
+`No changes from snapshot`. Their checkpoint refs point to the snapshot commit
+without creating empty checkpoint commits; original node errors remain visible.
+This comparison includes ignored output files. Explicit merge nodes still run
+even when their sources have no changes.
+
+When worktrees with changes remain, core appends an ordinary merge
 agent named `__braid_merge__` (with a suffix if needed), using the run's default
 model. It appears in results, events, usage, and terminal outputs. Merge nodes
 are exclusive within a graph and serialized per source checkout across runs in
 the same process. Avoid concurrent external edits to that checkout while merging;
 this lock does not coordinate other processes or the parent editor.
+
+Analysis-only graphs therefore keep their declared terminal outputs and do not
+incur an automatic merge model call. Consumers should not assume that every Git
+run includes `__braid_merge__`; use `terminalOutputs` for the completed endpoints.
 
 Cancellation or graph timeout prevents new merge agents from starting. Core waits
 for tracked writes, archives remaining work, and removes its worktrees. Merge
