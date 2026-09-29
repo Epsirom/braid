@@ -31,6 +31,13 @@ const invalid: [string, unknown][] = [
     { goal: "x", nodes: [{ type: "execute", id: "a" }], edges: [] },
   ],
   ["blank model", graph([{ ...execute("a"), model: " " }])],
+  ...[null, false, "", "readonly", "merge", {}].map(value => [
+    `invalid workspace ${JSON.stringify(value)}`,
+    { goal: "x", nodes: [{ ...execute("a"), workspace: value }], edges: [] },
+  ] as [string, unknown]),
+  ["workspace on merge node", {
+    goal: "x", nodes: [{ type: "merge", id: "merge", workspace: "read-only" }], edges: [],
+  }],
   ["empty choices", graph([decision("a", [])])],
   ["duplicate choices", graph([decision("a", ["same", "same"])])],
   ["blank choice", graph([decision("a", [""])])],

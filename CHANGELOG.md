@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add per-node `workspace: "read-only" | "worktree"` for execute/decision nodes.
+  Read-only nodes inspect the live source directory with Git inspection, without
+  writable tools, snapshots, worktrees, or merge sources. Existing defaults are
+  preserved. Pi's braid tool guides analysis/review/routing/synthesis to read-only
+  nodes and implementation to worktrees; explicit read-only workspace metadata
+  is included in results and events (#22).
 - Skip the automatic merge agent when all remaining workspaces match their
   snapshots, preserving analysis-only terminal outputs and original node errors.
   Mixed runs pass only changed sources to the automatic merge. Unchanged sources

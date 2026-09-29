@@ -57,6 +57,67 @@ function toolResponse(...calls: ToolCall[]) {
   return { ...response(), stopReason: "toolUse" as const, content: calls };
 }
 
+test("Pi braid tool submits read-only review and decision nodes with Git inspection but no write tools", async t => {
+  const fixture = await repository(t);
+  await writeFile(join(fixture.root, "src/file.txt"), "parent change\n");
+  const ctx = context(async () => response());
+  ctx.cwd = join(fixture.root, "src");
+  const turns = new Map<string, number>();
+  t.mock.method(ctx.modelRegistry, "complete", async (_model: unknown, worker: Context) => {
+    const { nodeId, workspace } = JSON.parse(worker.messages[0]!.content as string) as {
+      nodeId: string; workspace: PiNodeWorkspace;
+    };
+    assert.equal(workspace.mode, "read-only");
+    assert.equal(workspace.workingDirectory, ctx.cwd);
+    assert.equal(workspace.worktreeRoot, undefined);
+    assert.match(worker.systemPrompt!, /filesystem tools are read-only/);
+    assert.match(worker.systemPrompt!, /live directory, not an isolated snapshot/);
+    const turn = turns.get(nodeId) ?? 0;
+    turns.set(nodeId, turn + 1);
+    assert.deepEqual(worker.tools!.map(tool => tool.name), [
+      ...(await createAvailableReadTools(ctx.cwd)).tools.map(tool => tool.name), "git",
+      ...(nodeId === "route" && turn === 0 ? ["decide"] : []),
+    ]);
+    if (turn === 0) {
+      if (nodeId === "route") return toolResponse({
+        type: "toolCall", id: "decide", name: "decide", arguments: { choice: "done" },
+      });
+      return toolResponse(
+        { type: "toolCall", id: "read", name: "read", arguments: { path: "file.txt" } },
+        { type: "toolCall", id: "diff", name: "git", arguments: { command: "diff", args: [] } },
+        { type: "toolCall", id: "write", name: "write", arguments: { path: "file.txt", content: "bad" } },
+        { type: "toolCall", id: "edit", name: "edit", arguments: { path: "file.txt", edits: [{ oldText: "parent", newText: "bad" }] } },
+        { type: "toolCall", id: "add", name: "git", arguments: { command: "add", args: ["."] } },
+      );
+    }
+    const results = worker.messages.filter(message => message.role === "toolResult");
+    if (nodeId === "review") {
+      assert.deepEqual(results.map(result => result.isError), [false, false, true, true, true]);
+      assert.match(JSON.stringify(results[0]!.content), /parent change/);
+      assert.match(JSON.stringify(results[1]!.content), /parent change/);
+    } else assert.equal(results[0]!.isError, false);
+    return response("Reviewed");
+  });
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const { braidTool, statusTool } = createBraidTools(jobs);
+  const submitted = await braidTool.execute("submit", {
+    goal: "Review only", nodes: [
+      { type: "execute", id: "review", prompt: "Review", workspace: "read-only" },
+      { type: "decision", id: "route", prompt: "Decide", choices: ["done"], workspace: "read-only" },
+    ], edges: [{ from: "review", to: "route" }],
+  }, undefined, undefined, ctx);
+  await jobs.wait(submitted.details!.jobId);
+  const status = await statusTool.execute("status", { jobId: submitted.details!.jobId }, undefined, undefined, ctx);
+  assert.equal(status.details!.status, "completed", status.details!.result?.error?.message ?? status.details!.error);
+  assert.deepEqual([...turns.keys()], ["review", "route"]);
+  assert.equal(status.details!.result!.terminalOutputs.route!.decision, "done");
+  assert.equal(status.details!.workspaces!.review!.mode, "read-only");
+  assert.equal(status.details!.workspaces!.route!.mode, "read-only");
+  assert.equal(await readFile(join(ctx.cwd, "file.txt"), "utf8"), "parent change\n");
+  assert.equal(await git(fixture.root, "for-each-ref", "--format=%(refname)", "refs/braid/"), "");
+});
+
 test("Pi analysis-only graphs finish without a merge model invocation", async t => {
   const fixture = await repository(t);
   const calls: string[] = [];

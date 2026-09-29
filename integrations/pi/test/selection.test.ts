@@ -57,6 +57,15 @@ test("extension registers background tools, a panel command, and guidance to wai
   assert.match(prompt.systemPrompt, /individual writable worktree/);
   assert.match(prompt.systemPrompt, /Outside Git, nodes have read and ls, plus grep\/find when their local dependencies are available/);
   assert.match(prompt.systemPrompt, /Merge nodes operate in the source checkout/);
+  const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
+  assert.deepEqual(tool.parameters.properties.nodes.items.properties.workspace.enum, ["read-only", "worktree"]);
+  for (const guidance of [prompt.systemPrompt, tool.description, tool.promptGuidelines!.join("\n")]) {
+    assert.match(guidance, /workspace=read-only/);
+    assert.match(guidance, /live source directory/);
+    assert.match(guidance, /read-only execute node to summarize/);
+    assert.match(guidance, /Do not set workspace on merge nodes/);
+    assert.match(guidance, /only for remaining changed worktrees/);
+  }
   assert.match(
     prompt.systemPrompt,
     /Completion reminders refer to existing jobs/,
