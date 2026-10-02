@@ -1,6 +1,6 @@
 {
   "name": "@chrok/braid",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "A small, framework-agnostic DAG runtime for isolated model invocations",
   "type": "module",
@@ -32,12 +32,12 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts",
+    "test": "tsx --test test/*.test.ts test/*.test.mjs",
     "demo": "tsx examples/basic.ts",
-    "check:pi": "npm --prefix integrations/pi run check",
-    "test:pi": "npm --prefix integrations/pi test",
+    "check:pi": "npm run build && npm run check --workspace @chrok/pi-braid",
+    "test:pi": "npm run build && npm test --workspace @chrok/pi-braid",
     "prepack": "npm run build",
-    "build:pi": "npm --prefix integrations/pi run build",
+    "build:pi": "npm run build --workspace @chrok/pi-braid",
     "test:package": "node scripts/package-smoke.mjs",
     "verify": "npm run check && npm test && npm run check:pi && npm run test:pi && npm run examples && npm run test:package",
     "examples": "tsx examples/basic.ts && tsx examples/code-review.ts && tsx examples/failure-handling.ts && tsx examples/custom-runner.ts",
@@ -48,7 +48,8 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.23.15",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "@chrok/braid": "file:."
   },
   "repository": {
     "type": "git",
@@ -68,5 +69,8 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"
-  }
+  },
+  "workspaces": [
+    "integrations/pi"
+  ]
 }

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { braid, type BraidResult, type ModelRequest, type MergeDisposition } from "../src/index.js";
-import { deferred, execute, graph } from "./helpers.js";
+import { decision, deferred, execute, graph } from "./helpers.js";
 
 const exec = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) => (await exec("git", ["-C", cwd, ...args])).stdout.trim();
@@ -48,6 +48,241 @@ async function noWorktrees(cwd: string, result: BraidResult) {
     if (workspace.worktreeRoot) await assert.rejects(readFile(join(workspace.worktreeRoot, ".git")), { code: "ENOENT" });
   }
 }
+
+test("explicit read-only workers inspect the live checkout without snapshots, worktrees, or merge", async t => {
+  const cwd = await repository(t);
+  await mkdir(join(cwd, "nested"));
+  await writeFile(join(cwd, "file.txt"), "live edit\n");
+  const index = await readFile(join(cwd, ".git/index"));
+  const objects = await git(cwd, "count-objects", "-v");
+  const result = await braid(graph([
+    { ...execute("review"), workspace: "read-only" },
+    { ...decision("route", ["done"]), workspace: "read-only" },
+  ], [{ from: "review", to: "route" }]), { cwd: join(cwd, "nested"), runner: async request => {
+    assert.equal(request.workspace!.mode, "read-only");
+    assert.equal(request.workspace!.workingDirectory, join(cwd, "nested"));
+    assert.equal(request.workspace!.worktreeRoot, undefined);
+    assert.equal(request.workspace!.snapshotCommit, undefined);
+    assert.equal((await git(cwd, "worktree", "list", "--porcelain")).match(/^worktree /gm)!.length, 1);
+    const status = await request.git!(["status", "--porcelain"]);
+    assert.equal(status.exitCode, 0);
+    assert.match(status.stdout, /file.txt/);
+    const diff = await request.git!(["diff", "--", "../file.txt"]);
+    assert.equal(diff.exitCode, 0);
+    assert.match(diff.stdout, /live edit/);
+    assert.match((await request.git!(["show", "HEAD:file.txt"])).stdout, /original/);
+    await assert.rejects(request.git!(["add", "."]), /unavailable/);
+    await assert.rejects(request.withWorkspaceWrite!(async () => assert.fail("write ran")), /read-only/);
+    if (request.decide) {
+      assert.equal(request.predecessors[0]!.workspace!.mode, "read-only");
+      assert.equal(await readFile(join(cwd, "file.txt"), "utf8"), "live edit\nupdated\n");
+      request.decide("done");
+    } else await writeFile(join(cwd, "file.txt"), "live edit\nupdated\n"); // Simulate a parent edit.
+    return { output: "reviewed" };
+  } });
+  assert.equal(result.status, "completed", result.error?.message);
+  assert.deepEqual(Object.keys(result.nodes), ["review", "route"]);
+  assert.equal(result.terminalOutputs.route!.decision, "done");
+  assert.deepEqual(Object.keys(result.workspaces!), ["review", "route"]);
+  assert.equal(result.events.filter(event => event.type === "workspace_updated").length, 2);
+  assert.equal(await git(cwd, "count-objects", "-v"), objects);
+  assert.equal(await git(cwd, "for-each-ref", "--format=%(refname)", "refs/braid/"), "");
+  assert.deepEqual(await readFile(join(cwd, ".git/index")), index);
+});
+
+for (const explicitMerge of [false, true]) {
+  test(`mixed read-only and writable nodes pass only worktrees to ${explicitMerge ? "explicit" : "automatic"} merge`, async t => {
+    const cwd = await repository(t);
+    const result = await braid(graph([
+      { ...execute("analysis"), workspace: "read-only" },
+      { ...execute("implementation"), workspace: "worktree" },
+      ...(explicitMerge ? [{ type: "merge" as const, id: "integrate" },
+        { ...execute("after"), workspace: "read-only" as const }] : []),
+    ], explicitMerge ? [
+      { from: "analysis", to: "integrate" }, { from: "implementation", to: "integrate" },
+      { from: "integrate", to: "after" },
+    ] : []), { cwd, runner: async request => {
+      if (request.merge) {
+        assert.deepEqual(request.merge.sources.map(source => source.nodeId), ["implementation"]);
+        await applySources(request);
+      } else if (request.node.id === "implementation") {
+        assert.equal(request.workspace!.mode, "worktree");
+        await request.withWorkspaceWrite!(() => writeFile(join(request.workspace!.worktreeRoot!, "file.txt"), "implemented\n"));
+      } else {
+        assert.equal(request.workspace!.mode, "read-only");
+        if (request.node.id === "after")
+          assert.match((await request.git!(["diff"])).stdout, /implemented/);
+      }
+      return { output: "done" };
+    } });
+    assert.equal(result.status, "completed", result.error?.message);
+    assert.equal(result.workspaces!.analysis!.state, "ready");
+    assert.equal(result.workspaces!.analysis!.checkpointRef, undefined);
+    assert.equal(result.workspaces!.implementation!.state, "integrated");
+    assert.equal(await readFile(join(cwd, "file.txt"), "utf8"), "implemented\n");
+    await noWorktrees(cwd, result);
+  });
+}
+
+test("explicit workspace modes preserve non-Git read-only behavior", async t => {
+  const cwd = await mkdtemp(join(tmpdir(), "braid-read-only-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const result = await braid(graph([
+    { ...execute("readonly"), workspace: "read-only" },
+    { ...execute("writable"), workspace: "worktree" },
+  ]), { cwd, runner: async request => {
+    assert.equal(request.workspace!.mode, "read-only");
+    assert.equal(request.git, undefined);
+    return { output: "done" };
+  } });
+  assert.equal(result.status, "completed", result.error?.message);
+  assert.equal(result.nodes.readonly!.workspace!.mode, "read-only");
+  assert.equal(result.nodes.writable!.workspace, undefined);
+});
+
+for (const baseline of ["clean", "dirty", "unborn"] as const) {
+  test(`analysis-only graphs skip automatic merge with ${baseline} snapshots`, async t => {
+    const cwd = await repository(t);
+    if (baseline === "dirty") {
+      await writeFile(join(cwd, "file.txt"), "staged\n");
+      await git(cwd, "add", "file.txt");
+      await writeFile(join(cwd, "file.txt"), "unstaged\n");
+      await writeFile(join(cwd, "user.txt"), "untracked\n");
+    } else if (baseline === "unborn") {
+      await git(cwd, "update-ref", "-d", "refs/heads/main");
+    }
+    const index = await readFile(join(cwd, ".git/index"));
+    const status = await git(cwd, "status", "--porcelain");
+    const calls: string[] = [];
+    const result = await braid(graph(
+      [execute("correctness"), decision("tests", ["reviewed"]), execute("review")],
+      [{ from: "correctness", to: "review" }, { from: "tests", to: "review" }],
+    ), { cwd, runner: async request => {
+      calls.push(request.node.id);
+      if (request.node.type === "decision") request.decide!("reviewed");
+      if (request.merge) await applySources(request, "discarded");
+      if (request.node.id === "review") {
+        for (const predecessor of request.predecessors)
+          assert.ok(await readFile(join(predecessor.workspace!.worktreeRoot!, ".git")));
+      }
+      return { output: request.node.id, usage: { inputTokens: 1, outputTokens: 1 } };
+    } });
+    assert.equal(result.status, "completed", result.error?.message);
+    assert.deepEqual(calls.sort(), ["correctness", "review", "tests"]);
+    assert.deepEqual(Object.keys(result.terminalOutputs), ["review"]);
+    assert.equal(result.terminalOutputs.review!.output, "review");
+    assert.deepEqual(result.metadata.usage, { inputTokens: 3, outputTokens: 3 });
+    assert.equal(result.metadata.usageReportedNodes, 3);
+    assert.ok(!result.events.some(event => event.type === "node_created" && event.nodeType === "merge"));
+    for (const workspace of Object.values(result.workspaces!)) {
+      assert.equal(workspace.state, "discarded");
+      assert.equal(workspace.reason, "No changes from snapshot");
+      assert.equal(workspace.checkpointCommit, workspace.snapshotCommit);
+      assert.equal(await git(cwd, "rev-parse", workspace.checkpointRef!), workspace.snapshotCommit);
+      assert.equal(await git(cwd, "show", `${workspace.checkpointRef}:file.txt`), baseline === "dirty" ? "unstaged" : "original");
+      assert.ok(result.events.some(event => event.type === "workspace_updated" &&
+        event.workspace.nodeId === workspace.nodeId && event.workspace.state === "discarded"));
+    }
+    assert.deepEqual(await readFile(join(cwd, ".git/index")), index);
+    assert.equal(await git(cwd, "status", "--porcelain"), status);
+    assert.equal(await git(cwd, "for-each-ref", "--format=%(refname)", "refs/braid/merge-backups/"), "");
+    await noWorktrees(cwd, result);
+  });
+}
+
+test("failed nodes without changes skip automatic merge and preserve errors for consumers", async t => {
+  const cwd = await repository(t);
+  const calls: string[] = [];
+  const result = await braid(graph([execute("work"), execute("review")], [{ from: "work", to: "review" }]), {
+    cwd, runner: async request => {
+      calls.push(request.node.id);
+      if (request.node.id === "work") throw new Error("analysis failed");
+      assert.equal(request.predecessors[0]!.error!.message, "analysis failed");
+      return { output: "Failure explained" };
+    },
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.nodes.work!.error!.message, "analysis failed");
+  assert.deepEqual(calls, ["work", "review"]);
+  assert.equal(result.terminalOutputs.review!.output, "Failure explained");
+  assert.equal(result.workspaces!.work!.state, "discarded");
+  await noWorktrees(cwd, result);
+});
+
+test("automatic merge receives only changed sources, including ignored output from failed nodes", async t => {
+  const cwd = await repository(t);
+  let sources: string[] = [];
+  const result = await braid(graph([execute("unchanged"), execute("changed")]), { cwd, runner: async request => {
+    if (request.merge) {
+      sources = request.merge.sources.map(source => source.nodeId);
+      assert.deepEqual(request.merge.sources[0]!.changes!.files, ["ignored.txt"]);
+      await applySources(request);
+      return { output: "Recovered partial work" };
+    }
+    await request.withWorkspaceWrite!(async () => {
+      if (request.node.id === "changed") await writeFile(join(request.workspace!.worktreeRoot!, "ignored.txt"), "partial work");
+      else {
+        await writeFile(join(request.workspace!.worktreeRoot!, "file.txt"), "temporary edit\n");
+        await writeFile(join(request.workspace!.worktreeRoot!, "file.txt"), "original\n");
+      }
+    });
+    if (request.node.id === "changed") throw new Error("failed after writing");
+    return { output: "Analysis complete" };
+  } });
+  assert.deepEqual(sources, ["changed"]);
+  assert.equal(result.status, "failed");
+  assert.equal(result.nodes.__braid_merge__!.status, "completed");
+  assert.equal(result.workspaces!.unchanged!.state, "discarded");
+  assert.equal(result.workspaces!.changed!.state, "integrated");
+  assert.equal(await readFile(join(cwd, "ignored.txt"), "utf8"), "partial work");
+  await noWorktrees(cwd, result);
+});
+
+test("explicit merge still runs for unchanged sources with recoverable snapshot refs", async t => {
+  const cwd = await repository(t);
+  const calls: string[] = [];
+  const result = await braid(graph([execute("work"), { type: "merge", id: "explicit" }], [{ from: "work", to: "explicit" }]), {
+    cwd, runner: async request => {
+      calls.push(request.node.id);
+      if (request.merge) {
+        assert.deepEqual(request.merge.sources.map(source => source.nodeId), ["work"]);
+        assert.equal(request.merge.sources[0]!.changes!.diff.text, "");
+        await applySources(request, "discarded");
+      }
+      return { output: request.node.id };
+    },
+  });
+  assert.equal(result.status, "completed", result.error?.message);
+  assert.deepEqual(calls, ["work", "explicit"]);
+  const workspace = result.workspaces!.work!;
+  assert.equal(workspace.checkpointCommit, workspace.snapshotCommit);
+  assert.equal(await git(cwd, "show", `${workspace.checkpointRef}:file.txt`), "original");
+  assert.deepEqual(Object.keys(result.terminalOutputs), ["explicit"]);
+  await noWorktrees(cwd, result);
+});
+
+test("cancellation during the unchanged check prevents automatic merge admission", async t => {
+  const cwd = await repository(t);
+  const controller = new AbortController();
+  const calls: string[] = [];
+  const result = await braid(graph([execute("work")]), {
+    cwd, signal: controller.signal,
+    onEvent: event => {
+      if (event.type === "workspace_updated" && event.workspace.checkpointRef) controller.abort();
+    },
+    runner: async request => {
+      calls.push(request.node.id);
+      await request.withWorkspaceWrite!(() => writeFile(join(request.workspace!.worktreeRoot!, "partial.txt"), "recover me"));
+      return { output: "done" };
+    },
+  });
+  assert.equal(result.error!.code, "CANCELLED");
+  assert.deepEqual(calls, ["work"]);
+  assert.ok(!result.events.some(event => event.type === "node_created" && event.nodeType === "merge"));
+  assert.equal(result.workspaces!.work!.state, "archived");
+  assert.equal(await git(cwd, "show", `${result.workspaces!.work!.checkpointRef}:partial.txt`), "recover me");
+  await noWorktrees(cwd, result);
+});
 
 test("concurrent graphs safely register and remove worktrees in one Git repository", { timeout: 30_000 }, async t => {
   const cwd = await repository(t);

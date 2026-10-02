@@ -7,6 +7,7 @@ import {
   type ModelRunner,
 } from "../src/index.js";
 import { braid, decision, deferred, execute, graph } from "./helpers.js";
+import { mockClock } from "./clock.js";
 
 const bounds = { timeout: 2_000 };
 const echo: ModelRunner = async (request) => ({ output: request.node.id });
@@ -652,16 +653,23 @@ test(
 test(
   "node timeout aborts its signal, passes the failure onward, and ignores a late response",
   bounds,
-  async () => {
+  async (t) => {
+    const clock = mockClock(t);
+    const started = deferred();
+    const goodCompleted = deferred();
     const late = deferred<ModelResponse>();
     let request!: ModelRequest;
-    const result = await braid(
+    const run = braid(
       graph(
         [decision(), execute("child"), execute("good")],
         [{ from: "route", to: "child" }],
       ),
       {
         nodeTimeoutMs: 25,
+        onEvent: (event) => {
+          if (event.type === "node_completed" && event.nodeId === "good")
+            goodCompleted.resolve();
+        },
         runner: async (invocation) => {
           if (invocation.node.id === "good") return { output: "good" };
           if (invocation.node.id === "child") {
@@ -669,10 +677,16 @@ test(
             return { output: "Recovered" };
           }
           request = invocation;
+          started.resolve();
           return late.promise; // Deliberately ignores the abort signal.
         },
       },
     );
+    await Promise.all([started.promise, goodCompleted.promise]);
+    clock.advance(24);
+    assert.equal(request.signal.aborted, false);
+    clock.advance(1);
+    const result = await run;
     assert.equal(result.status, "failed");
     assert.equal(result.nodes.route!.error!.code, "NODE_TIMEOUT");
     assert.equal(request.signal.aborted, true);
@@ -692,12 +706,20 @@ test(
 test(
   "late runner rejections after a timeout are observed",
   bounds,
-  async () => {
+  async (t) => {
+    const clock = mockClock(t);
+    const started = deferred();
     const late = deferred<ModelResponse>();
-    const result = await braid(graph([execute("late")]), {
-      runner: () => late.promise,
+    const run = braid(graph([execute("late")]), {
+      runner: () => {
+        started.resolve();
+        return late.promise;
+      },
       nodeTimeoutMs: 10,
     });
+    await started.promise;
+    clock.advance(10);
+    const result = await run;
     assert.equal(result.nodes.late!.error!.code, "NODE_TIMEOUT");
     late.reject(new Error("late failure"));
     await tick(); // node:test would fail on an unhandled rejection.
@@ -707,10 +729,12 @@ test(
 test(
   "graph timeout aborts running calls, skips queued work, and retains earlier terminal outputs",
   bounds,
-  async () => {
+  async (t) => {
+    const clock = mockClock(t);
+    const started = deferred();
     const signals: AbortSignal[] = [];
     const calls: string[] = [];
-    const result = await braid(
+    const run = braid(
       graph(
         [execute("done"), execute("hang"), execute("queued"), execute("child")],
         [{ from: "hang", to: "child" }],
@@ -723,10 +747,16 @@ test(
           calls.push(request.node.id);
           if (request.node.id === "done") return { output: "saved" };
           signals.push(request.signal);
+          started.resolve();
           return new Promise(() => {});
         },
       },
     );
+    await started.promise;
+    clock.advance(29);
+    assert.equal(signals[0]!.aborted, false);
+    clock.advance(1);
+    const result = await run;
     assert.deepEqual(calls, ["done", "hang"]);
     assert.equal(result.status, "failed");
     assert.equal(result.error!.code, "GRAPH_TIMEOUT");
@@ -742,9 +772,11 @@ test(
 test(
   "graph timeout cancels every concurrently running invocation",
   bounds,
-  async () => {
+  async (t) => {
+    const clock = mockClock(t);
+    const started = deferred();
     const signals: AbortSignal[] = [];
-    const result = await braid(
+    const run = braid(
       graph([execute("a"), execute("b"), execute("c")]),
       {
         maxConcurrency: 2,
@@ -752,10 +784,16 @@ test(
         graphTimeoutMs: 20,
         runner: async (request) => {
           signals.push(request.signal);
+          if (signals.length === 2) started.resolve();
           return new Promise(() => {});
         },
       },
     );
+    await started.promise;
+    clock.advance(19);
+    assert.ok(signals.every((signal) => !signal.aborted));
+    clock.advance(1);
+    const result = await run;
     assert.equal(signals.length, 2);
     assert.ok(signals.every((signal) => signal.aborted));
     assert.equal(result.nodes.a!.error!.code, "GRAPH_TIMEOUT");

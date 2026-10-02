@@ -4,7 +4,7 @@ import {
   truncateHead,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import type { BraidInput } from "../../src/index.js";
+import type { BraidInput } from "@chrok/braid";
 import { Text } from "@earendil-works/pi-tui";
 import { BraidJobs, type JobSnapshot } from "./jobs.js";
 import { registerBraidCommand } from "./command.js";
@@ -44,11 +44,14 @@ const braidParameters = Type.Object(
                 "Exact provider/modelId; default is the current Pi model",
             }),
           ),
+          workspace: Type.Optional(StringEnum(["read-only", "worktree"], {
+            description: "Execute/decision only; forbidden on merge nodes. Use read-only for analysis, review, routing, and synthesis: reads the live source directory with Git inspection, no writes or worktree. Omit or use worktree for implementation or a fixed snapshot in Git. Outside Git, both modes are read-only.",
+          })),
           choices: Type.Optional(
             Type.Array(text(), {
               minItems: 1,
               description:
-                "Required on decision nodes; forbidden on execute nodes",
+                "Required on decision nodes; forbidden on execute and merge nodes",
             }),
           ),
         },
@@ -83,9 +86,10 @@ const braidParameters = Type.Object(
 );
 
 const BRAID_FILESYSTEM_GUIDANCE =
-  "In a Git repository, execute and decision nodes get individual writable worktrees with read, ls, write, edit, and Git inspection. Search tools grep/find are exposed only when their local rg/fd dependencies are available. " +
+  "Set workspace=read-only on execute/decision nodes for analysis, review, routing, and synthesis that do not need file edits. These nodes read the live source directory with read, ls, and Git inspection in Git repositories; they get no write/edit tools, snapshot, worktree, or merge source. Reads can observe parent edits or concurrent merges. " +
+  "Omit workspace or use workspace=worktree for implementation or when a fixed snapshot is needed. In a Git repository, these execute and decision nodes get individual writable worktrees with read, ls, write, edit, and Git inspection. Search tools grep/find are exposed only when their local rg/fd dependencies are available. " +
   "Worktrees include tracked changes and non-ignored untracked files. Merge nodes operate in the source checkout and decide whether to merge, cherry-pick, apply, or discard predecessor changes; core never makes that choice. " +
-  "Merge agents must call finish_merge for every source; core checkpoints changes and removes processed worktrees. Core appends a final merge agent for remaining worktrees. Failed predecessors pass their errors and partial work along unconditional edges. " +
+  "Do not set workspace on merge nodes. Use a read-only execute node to summarize findings; use a merge node only to integrate file changes. Merge agents must call finish_merge for every source; core checkpoints changes and removes processed worktrees. Core releases unchanged worktrees and appends a final merge agent only for remaining changed worktrees; explicit merge nodes always run. Failed predecessors pass their errors and partial work along unconditional edges. " +
   "Outside Git, nodes have read and ls, plus grep/find when their local dependencies are available. Shell commands and tests remain unavailable in all nodes. " +
   "Inspect braid_status for integration outcomes and recovery checkpoint refs, then run tests in the parent. Avoid concurrent parent edits while a merge agent owns the source checkout.";
 
@@ -114,7 +118,7 @@ export function createBraidTools(jobs: BraidJobs) {
         "Use braid_status(jobId) for progress and results, or braid_cancel(jobId) to stop it. A completion reminder resumes the agent if idle; do independent work or end your turn instead of polling. Humans can open /braid for the live flow panel. " +
         "Read result.status: failed graphs can still return successful terminal outputs.",
       promptSnippet:
-        "Use FIRST for nontrivial code review/debug/design/implementation work; parallelize analysis or edits in isolated Git worktrees and use merge nodes to integrate changes",
+        "Use FIRST for nontrivial code review/debug/design/implementation work; set workspace=read-only for analysis/synthesis, use worktrees for edits and merge nodes for integration",
       promptGuidelines: [
         "Call braid before direct repository inspection when a code task has two or more separable review, debugging, design, test-planning, or implementation concerns; the Braid nodes can inspect the project and edit isolated Git worktrees.",
         "Use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, and merge nodes to integrate file changes. The user does not need to mention Braid or design the graph.",

@@ -56,6 +56,7 @@ interface Snapshot {
   sourceRoot: string;
   cwdSuffix: string;
   baseCommit?: string;
+  snapshotTree: string;
   snapshotCommit: string;
   hooksDirectory: string;
 }
@@ -101,7 +102,7 @@ async function gitPreview(cwd: string, args: string[], limit: number): Promise<G
   return { text: output.slice(0, limit), truncated: overflow || output.length > limit };
 }
 
-/** One source snapshot per graph; every invoked node gets its own detached worktree. */
+/** Writable workers share a snapshot; explicit read-only workers inspect the live cwd. */
 export class GitWorkspaces {
   private snapshots = new Map<string, Promise<Snapshot | undefined>>();
   private records = new Map<string, NodeWorkspace>();
@@ -122,7 +123,7 @@ export class GitWorkspaces {
     }
   }
 
-  private async snapshot(): Promise<Snapshot | undefined> {
+  private async sourceRoot(): Promise<string | undefined> {
     let ancestor = resolve(this.cwd);
     while (true) {
       try { await access(join(ancestor, ".git")); break; }
@@ -142,7 +143,12 @@ export class GitWorkspaces {
         return undefined;
       throw error;
     }
-    sourceRoot = await realpath(sourceRoot);
+    return realpath(sourceRoot);
+  }
+
+  private async snapshot(): Promise<Snapshot | undefined> {
+    const sourceRoot = await this.sourceRoot();
+    if (!sourceRoot) return undefined;
     const commonDirectory = await realpath(resolve(sourceRoot, await git(sourceRoot, ["rev-parse", "--git-common-dir"])));
     const cwdSuffix = relative(sourceRoot, await realpath(this.cwd));
     // Git records canonical worktree paths. In particular, Windows tmpdir()
@@ -183,7 +189,7 @@ export class GitWorkspaces {
         "-m", "Braid isolated workspace snapshot",
       ], options);
       const snapshot: Snapshot = {
-        directory, commonDirectory, sourceRoot, cwdSuffix, snapshotCommit, hooksDirectory,
+        directory, commonDirectory, sourceRoot, cwdSuffix, snapshotTree: tree, snapshotCommit, hooksDirectory,
         ...(baseCommit ? { baseCommit } : {}),
       };
       this.allocated.add(snapshot);
@@ -199,6 +205,16 @@ export class GitWorkspaces {
 
   async prepare(request: ModelRequest): Promise<NodeWorkspace> {
     request.signal.throwIfAborted();
+    if (request.node.type !== "merge" && request.node.workspace === "read-only") {
+      const sourceRoot = await this.sourceRoot();
+      request.signal.throwIfAborted();
+      const workspace: NodeWorkspace = {
+        nodeId: request.node.id, mode: "read-only", workingDirectory: this.cwd, state: "ready",
+        ...(sourceRoot ? { sourceRoot } : {}),
+      };
+      this.report(workspace);
+      return workspace;
+    }
     let pending = this.snapshots.get(request.execution.runId);
     if (!pending) {
       // Do not bind the shared snapshot to one node's cancellation signal.
@@ -276,7 +292,7 @@ export class GitWorkspaces {
     }
     await git(cwd, ["add", "--force", "--all", "--", "."], options);
     const tree = await git(cwd, ["write-tree"], options);
-    const commit = await git(cwd, [
+    const commit = tree === location.snapshotTree ? workspace.snapshotCommit! : await git(cwd, [
       "-c", "user.name=Braid", "-c", "user.email=braid@localhost", "-c", "commit.gpgsign=false",
       "commit-tree", tree, "-p", workspace.snapshotCommit!, "-m", `Braid node checkpoint: ${workspace.nodeId}`,
     ], options);
@@ -286,6 +302,23 @@ export class GitWorkspaces {
     workspace.checkpointCommit = commit;
     workspace.checkpointRef = ref;
     this.report(workspace);
+  }
+
+  /** Run only after declared nodes settle, so consumers retain their source paths. */
+  async discardUnchanged(): Promise<void> {
+    const errors: unknown[] = [];
+    for (const id of this.pending()) {
+      const workspace = this.records.get(id)!;
+      // Incomplete preparation must follow the existing failure/recovery path.
+      // A failed invocation with a successfully prepared workspace is still ready.
+      if (workspace.state !== "ready") continue;
+      try {
+        await this.checkpoint(workspace);
+        if (workspace.checkpointCommit === workspace.snapshotCommit)
+          await this.release(id, "discarded", "No changes from snapshot");
+      } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, "Some workspaces could not be checked or removed; their paths are retained in workspaces");
   }
 
   private async release(id: string, disposition: MergeDisposition["disposition"], reason: string): Promise<void> {
@@ -362,15 +395,18 @@ export class GitWorkspaces {
     }))
       throw new Error("Git arguments cannot override filesystem boundaries, execute external helpers, or select external strategies");
     const workspace = request.workspace!;
-    const cwd = workspace.mode === "merge" ? workspace.sourceRoot! : workspace.worktreeRoot!;
-    const location = this.locations.get(request.node.id)!;
+    const cwd = workspace.mode === "read-only" ? workspace.workingDirectory
+      : workspace.mode === "merge" ? workspace.sourceRoot! : workspace.worktreeRoot!;
+    const location = this.locations.get(request.node.id);
     const actualArgs = [command,
       ...(["diff", "show", "log"].includes(command) ? ["--no-ext-diff", "--no-textconv"] : []),
       ...args.slice(1),
     ];
     const execute = () => new Promise<GitResult>((resolve, reject) => {
       const child = execFile("git", [
-        "-c", `core.hooksPath=${location.hooksDirectory}`, "-c", "commit.gpgsign=false",
+        ...(location ? ["-c", `core.hooksPath=${location.hooksDirectory}`] : []),
+        ...(workspace.mode === "read-only" ? ["--no-optional-locks"] : []),
+        "-c", "commit.gpgsign=false",
         "-c", "core.fsmonitor=false", "--no-pager", "-C", cwd, ...actualArgs,
       ], {
         env: { ...gitEnvironment(), GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true", GIT_MERGE_AUTOEDIT: "no" },

@@ -12,7 +12,8 @@ import {
   validateGraph,
   type BraidInput,
   type BraidResult,
-} from "../../src/index.js";
+  type NodeWorkspace as PiNodeWorkspace,
+} from "@chrok/braid";
 import {
   applyEvent,
   applyProgress,
@@ -20,7 +21,6 @@ import {
   type BraidLiveState,
 } from "./display.js";
 import { createPiRunner, sumPiUsage } from "./runner.js";
-import type { PiNodeWorkspace } from "./workspaces.js";
 
 export interface JobOptions {
   maxConcurrency?: number;

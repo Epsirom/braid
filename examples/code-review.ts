@@ -6,9 +6,9 @@ const diff = "- return cache[key];\n+ return cache[key] ?? await load(key);";
 const graph: BraidInput = {
   goal: `Review this proposed cache change:\n${diff}`,
   nodes: [
-    { type: "execute", id: "correctness", prompt: "Review cache semantics and concurrent misses." },
-    { type: "execute", id: "tests", prompt: "Identify regression cases worth testing." },
-    { type: "execute", id: "review", prompt: "Synthesize actionable findings from both reviews." },
+    { type: "execute", id: "correctness", workspace: "read-only", prompt: "Review cache semantics and concurrent misses." },
+    { type: "execute", id: "tests", workspace: "read-only", prompt: "Identify regression cases worth testing." },
+    { type: "execute", id: "review", workspace: "read-only", prompt: "Synthesize actionable findings from both reviews." },
   ],
   edges: [{ from: "correctness", to: "review" }, { from: "tests", to: "review" }],
 };

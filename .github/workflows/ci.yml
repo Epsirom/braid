@@ -23,11 +23,8 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            integrations/pi/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm ci --prefix integrations/pi
       - run: npm run verify
   core-minimum:
     runs-on: ubuntu-latest
@@ -36,7 +33,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.0.0'
-      - run: npm ci
+      - run: npm ci --workspaces=false
       - run: npm run check
       - run: npm test
       - run: npm run build

@@ -9,6 +9,7 @@ import type {
   ModelResponse,
   NodeOutput,
   NodeResult,
+  NodeWorkspace,
   PredecessorOutput,
 } from "./types.js";
 import { compileGraph, type Graph } from "./validate.js";
@@ -253,6 +254,7 @@ async function runNode(
   });
   void aborted.catch(() => {});
   let acceptingWrites = true;
+  let writableWorkspace = false;
   const writes = new Set<Promise<unknown>>();
   let merge: Awaited<ReturnType<GitWorkspaces["beginMerge"]>> | undefined;
   let acceptingDecisions = true;
@@ -265,6 +267,7 @@ async function runNode(
   invocation.withWorkspaceWrite = async operation => {
     signal.throwIfAborted();
     if (!acceptingWrites) throw new Error("Node has finished; further writes are unavailable");
+    if (!writableWorkspace) throw new Error("Node workspace is read-only; writes are unavailable");
     const pending = Promise.resolve().then(() => {
       signal.throwIfAborted();
       return operation();
@@ -329,6 +332,7 @@ async function runNode(
       invocation.workspace = await workspaces.prepare(invocation);
     }
     invocation.workspace = structuredClone(invocation.workspace!);
+    writableWorkspace = invocation.workspace.mode !== "read-only";
     if (invocation.workspace?.sourceRoot) {
       const gitRequest = { ...invocation, node: structuredClone(invocation.node), workspace: structuredClone(invocation.workspace) };
       invocation.git = (args, input) => workspaces.git(gitRequest, args, input);
@@ -457,8 +461,12 @@ export async function braid(
       return [node.id, result];
     }),
   );
+  const explicitReadOnly = new Set(graph.nodes.filter(node =>
+    node.type !== "merge" && node.workspace === "read-only").map(node => node.id));
+  // Preserve the existing event/result shape for implicit non-Git read-only runs.
+  const reportWorkspace = (workspace: NodeWorkspace) => workspace.mode !== "read-only" || explicitReadOnly.has(workspace.nodeId);
   const workspaces = new GitWorkspaces(resolve(options.cwd ?? process.cwd()), workspace => {
-    if (workspace.mode === "read-only") return;
+    if (!reportWorkspace(workspace)) return;
     const node = results.get(workspace.nodeId);
     if (node) node.workspace = { ...workspace };
     log.emit({ type: "workspace_updated", workspace: { ...workspace } });
@@ -526,6 +534,15 @@ export async function braid(
         running.set(node.id, task);
       }
       if (running.size === 0) {
+        if (!automaticMergeAdded) {
+          try { await workspaces.discardUnchanged(); }
+          catch (error) {
+            cleanupError = { code: "CLEANUP_FAILED", message: error instanceof Error ? error.message : String(error) };
+            break;
+          }
+          // Checkpointing/cleanup can outlast the deadline or trigger cancellation.
+          if (controller.signal.aborted || performance.now() >= graphDeadline) continue;
+        }
         const pending = workspaces.pending();
         if (!automaticMergeAdded && pending.length) {
           automaticMergeAdded = true;
@@ -591,7 +608,7 @@ export async function braid(
     terminalOutputs,
     events: [],
     nodes: Object.fromEntries(results),
-    ...(Object.values(workspaces.all()).some(value => value.mode !== "read-only") ? { workspaces: workspaces.all() } : {}),
+    ...(Object.values(workspaces.all()).some(reportWorkspace) ? { workspaces: workspaces.all() } : {}),
     metadata: {
       ...execution,
       startedAt,

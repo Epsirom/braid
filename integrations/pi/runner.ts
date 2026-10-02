@@ -13,10 +13,16 @@ import {
 import {
   type ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
-import type { ModelRunner } from "../../src/index.js";
-import { formatBudgetReminder } from "../../src/budgets.js";
-import type { PiNodeWorkspace } from "./workspaces.js";
-import { gitToolDefinition, finishMergeToolDefinition, mergeInstructions, parseGitToolArguments, parseFinishMergeArguments } from "../../src/merge-tools.js";
+import {
+  formatBudgetReminder,
+  gitToolDefinition,
+  finishMergeToolDefinition,
+  mergeInstructions,
+  parseGitToolArguments,
+  parseFinishMergeArguments,
+  type ModelRunner,
+  type NodeWorkspace as PiNodeWorkspace,
+} from "@chrok/braid";
 import { createWorktreeWriteTools } from "./write-tools.js";
 import { createAvailableReadTools } from "./read-tools.js";
 
@@ -153,7 +159,9 @@ export function createPiRunner(
           ? "You may write and edit files inside your own isolated Git worktree. Use workingDirectory as your cwd; do not write to sourceRoot or any other node's worktree. " +
             "Nodes start from the current core snapshot of tracked changes and non-ignored untracked files. After merge nodes, newly started workers see the updated source checkout. Inspect predecessor checkpoints with git show when their worktrees have been removed. " +
             "Describe your changes in your final answer. A merge agent will review your checkpoint and core will clean up the worktree. "
-          : "This node has no writable workspace assigned. Its filesystem tools are read-only; you cannot write or edit files. ") +
+          : "This node has no writable workspace assigned. Its filesystem tools are read-only; you cannot write or edit files. " +
+            "Read workingDirectory directly; it is a live directory, not an isolated snapshot, and may change during execution. " +
+            (request.git ? "Use Git inspection to review changes or predecessor checkpoints; predecessor edits are not automatically applied to this directory. " : "")) +
         mergeInstructions(request) +
         "You cannot run shell commands, run tests, or call arbitrary tools. " +
         (request.node.type === "merge" && workspace.mode === "read-only"

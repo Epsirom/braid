@@ -57,8 +57,13 @@ Use a new version for a correction. See [the release guide](releasing.md).
   before using it.
 - Workflows from all external fork contributors require maintainer approval
   before running. Inspect workflow and code changes before approving a run.
-- CodeQL default setup scans GitHub Actions and JavaScript/TypeScript with the
-  default query suite and remote threat model, including its weekly schedule.
+- CodeQL advanced setup in [.github/workflows/codeql.yml](../.github/workflows/codeql.yml)
+  scans GitHub Actions and JavaScript/TypeScript with the default query suite and
+  remote threat model. It runs on pushes to `main`, pull requests targeting
+  `main` (including forks), and a weekly schedule, with a manual trigger available.
+  Default setup must remain disabled because it skips fork pull requests and
+  prevents advanced-setup analysis uploads. Fork PR scans use `pull_request`
+  and remain subject to the contributor approval policy above.
 - Dependabot alerts/security updates, secret scanning, secret push protection,
   and private vulnerability reporting are enabled. Dependency updates remain
   configured in [.github/dependabot.yml](../.github/dependabot.yml).
@@ -68,7 +73,8 @@ sign-off nor a CLA is required for contributions.
 
 ## Dependency maintenance
 
-Dependabot checks both npm manifests weekly. Pi host packages stay in a separate
+Dependabot checks both npm workspace manifests through the root lockfile weekly.
+The internal `@chrok/braid` dependency is updated by the coordinated release process. Pi host packages stay in a separate
 group because even 0.x minor releases can change extension contracts. Other npm
 minor/patch updates are grouped; GitHub Actions updates are grouped monthly and
 retain full commit SHA pins. Grouping does not enable automatic merging.

@@ -1,13 +1,13 @@
 version: 2
 updates:
   - package-ecosystem: npm
-    directories:
-      - /
-      - /integrations/pi
+    directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
     ignore:
+      # Updated together by the release process; development uses the local core.
+      - dependency-name: '@chrok/braid'
       # Keep declarations aligned with the minimum supported Node runtime.
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']

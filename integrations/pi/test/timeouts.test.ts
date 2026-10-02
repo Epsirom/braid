@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
+import { mockClock } from "../../../test/clock.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Context } from "@earendil-works/pi-ai";
-import type { BraidResult } from "../../../src/index.js";
+import type { BraidResult } from "@chrok/braid";
 import { createBraidTools } from "../index.js";
 import { BraidJobs } from "../jobs.js";
 import { readOnlyCwd } from "./helpers.js";
@@ -26,8 +26,7 @@ for (const scenario of [
   },
 ]) {
   test(`Pi tool: ${scenario.name}`, { timeout: 2_000 }, async (t) => {
-    let now = 0;
-    t.mock.method(performance, "now", () => now);
+    const clock = mockClock(t);
     const model = { provider: "fake", id: "model" };
     const ctx = {
       cwd: readOnlyCwd,
@@ -37,8 +36,7 @@ for (const scenario of [
         complete: async (_model: unknown, context: Context) => {
           if (!scenario.error) assert.doesNotMatch(context.systemPrompt!, /system-reminder/);
           else assert.match(context.systemPrompt!, new RegExp(`${scenario.error === "NODE_TIMEOUT" ? "Node" : "Graph"} time budget: 1000 ms remaining`));
-          now += 600_000;
-          await delay(20);
+          clock.advanceWithoutTimers(600_000);
           return {
             role: "assistant",
             content: [{ type: "text", text: "done" }],
