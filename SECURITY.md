@@ -13,6 +13,32 @@ advisory where appropriate. There is no response-time guarantee or bounty progra
 Only the latest released 0.x minor series receives fixes; older series should
 upgrade. Before the first release, report issues against the current main branch.
 
+## Dependency security
+
+Audit the development tree as well as runtime dependencies with
+`npm ci` followed by `npm run audit:dependencies`. Scanner errors are incomplete
+results and fail the check; they must not be treated as zero vulnerabilities.
+
+As verified on 2026-10-02, Pi's pinned development dependency contains
+`minimatch 10.2.6 -> brace-expansion 5.0.9`, affected by
+[GHSA-q2hr-2g5m-vwhr](https://github.com/advisories/GHSA-q2hr-2g5m-vwhr) and related
+advisories. [Issue #37](https://github.com/Epsirom/braid/issues/37) tracks the
+upgrade. The upstream fix is merged, but the latest published Pi version checked
+(1.0.0) still ships the vulnerable shrinkwrap. The dependency-security check is
+expected to fail until this is resolved; there is no exception for this finding.
+
+Pi's published `npm-shrinkwrap.json` controls this nested dependency. A root
+override tested with npm 11.12.1 still installed 5.0.9. Verify a future Pi release's
+published shrinkwrap, update the Pi development dependencies together, regenerate
+the root lockfile, and inspect `npm ls brace-expansion --all` after a clean
+`npm ci`. Confirm the version resolved by Pi's minimatch, run `npm run verify`,
+and review the full audit before declaring the issue fixed.
+
+The affected Braid lockfile entries are development dependencies. This does not
+establish exposure in a separately installed Pi host; inspect that host's actual
+dependency tree independently. A production-only audit of this repository cannot
+answer that question.
+
 ## Trust boundaries
 
 - Braid isolates invocation context; it is not a process or filesystem sandbox.
