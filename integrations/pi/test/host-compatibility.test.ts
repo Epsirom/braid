@@ -20,7 +20,13 @@ import {
 import braidExtension from "../index.js";
 import { deferred, input, response } from "./helpers.js";
 
-test("Pi host preserves worker context and continues once after a completion during settling", { timeout: 15_000 }, async (t) => {
+for (const templated of [false, true]) {
+test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and continues once after a completion during settling`, { timeout: 15_000 }, async (t) => {
+  const submittedInput = templated ? {
+    ...input,
+    promptTemplates: { inspect: "Inspect {{target}}." },
+    nodes: [{ type: "execute", id: "a", prompt: { template: "inspect", variables: { target: "runtime" } } }],
+  } : input;
   const cwd = await mkdtemp(join(tmpdir(), "braid-pi-host-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   const workerStarted = deferred<void>();
@@ -63,6 +69,10 @@ test("Pi host preserves worker context and continues once after a completion dur
             assert.ok(tools.includes("read"));
             assert.ok(!tools.includes("braid"));
             assert.match(JSON.stringify(context.messages), /Investigate in background/);
+            if (templated) {
+              assert.match(JSON.stringify(context.messages), /Inspect runtime\./);
+              assert.doesNotMatch(JSON.stringify(context.messages), /\{\{target\}\}/);
+            }
             workerStarted.resolve();
             await releaseWorker.promise;
             message.content = [{ type: "text", text: "worker result" }];
@@ -72,7 +82,7 @@ test("Pi host preserves worker context and continues once after a completion dur
             if (foregroundCalls === 1) {
               assert.match(prompt, /Braid execution policy/);
               assert.ok(tools.includes("braid"));
-              message.content = [{ type: "toolCall", id: "launch", name: "braid", arguments: input }];
+              message.content = [{ type: "toolCall", id: "launch", name: "braid", arguments: submittedInput }];
               message.stopReason = "toolUse";
             } else if (foregroundCalls === 2) {
               message.content = [{ type: "text", text: "Waiting for the background result." }];
@@ -151,3 +161,4 @@ test("Pi host preserves worker context and continues once after a completion dur
     message.role === "custom" && message.customType === "braid-completed");
   assert.equal(delivered.length, 1);
 });
+}

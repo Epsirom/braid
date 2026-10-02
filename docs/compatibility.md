@@ -35,6 +35,14 @@ this field. Explicit read-only nodes report workspace metadata/events even when
 the entire run is read-only; implicit non-Git runs keep their existing shapes.
 Older versions reject the new field during validation.
 
+Graph submissions may include `promptTemplates` and template-reference prompts.
+`BraidInput.nodes` uses `BraidInputNode`, whose `NodePrompt` accepts a string or
+`PromptTemplateReference`. Code inspecting unrendered input prompts must narrow
+that union; use `satisfies BraidInput` to preserve the inferred types of a literal
+graph. Runner-facing `BraidNode` and `ModelRequest.node` retain string prompts,
+so existing runners need no template support. Rendering happens in core before
+execution, including for Pi submissions. Older versions reject template inputs.
+
 ## Versioning
 
 Core and Pi release together with matching versions. During 0.x, patch releases

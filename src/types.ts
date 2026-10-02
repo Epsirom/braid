@@ -27,6 +27,20 @@ export interface MergeNode {
 
 export type BraidNode = ExecuteNode | DecisionNode | MergeNode;
 
+/** A reference to a template in this graph submission; values are inserted literally. */
+export interface PromptTemplateReference {
+  template: string;
+  variables: Readonly<Record<string, string>>;
+}
+
+export type NodePrompt = string | PromptTemplateReference;
+
+/** Submission nodes may use templates; ModelRequest.node always has a string prompt. */
+export type BraidInputNode =
+  | (Omit<ExecuteNode, "prompt"> & { prompt: NodePrompt })
+  | (Omit<DecisionNode, "prompt"> & { prompt: NodePrompt })
+  | (Omit<MergeNode, "prompt"> & { prompt?: NodePrompt });
+
 export interface NodeWorkspace {
   nodeId: string;
   mode: "read-only" | "worktree" | "merge";
@@ -79,8 +93,10 @@ export interface Edge {
 
 export interface BraidInput {
   goal: string;
-  nodes: readonly BraidNode[];
+  nodes: readonly BraidInputNode[];
   edges: readonly Edge[];
+  /** Named {{variable}} templates, expanded and validated before execution. */
+  promptTemplates?: Readonly<Record<string, string>>;
 }
 
 export type NodeStatus =

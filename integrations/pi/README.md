@@ -24,6 +24,24 @@ or switching/forking sessions aborts outstanding work and suppresses its
 reminders. Job IDs cannot be retrieved after that lifecycle ends. They are not
 persistent processes outside Pi.
 
+## Shared prompts
+
+The `braid` tool accepts a `promptTemplates` object alongside `goal`, `nodes`,
+`edges`, and `options`. For example, define
+`"promptTemplates": { "review": "Review {{target}}. Report evidence and file references." }`
+and use `"prompt": { "template": "review", "variables": { "target": "src/runtime.ts" } }`
+on a node. This keeps repeated instructions out of the parent model's tool-call
+arguments; workers still receive the full rendered prompt.
+
+Placeholders use `{{name}}`, with names matching `[A-Za-z_][A-Za-z0-9_]*` and
+optional whitespace inside the braces. Variables must match the template exactly
+and have string values; insertion is literal and never recursively rendered.
+Core validates all templates and rendered prompts before the job starts.
+Plain-string prompts and omitted merge prompts keep their existing behavior.
+Templates are scoped to this submission, with no saved registry. See the
+[core template guide](https://github.com/Epsirom/braid#reusable-prompt-templates)
+for a complete graph and validation rules.
+
 ## Live flow panel
 
 Run `/braid` to open the newest job, or `/braid <jobId>` to open a specific job.

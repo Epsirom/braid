@@ -11,6 +11,13 @@ import { registerBraidCommand } from "./command.js";
 import { renderGraphCall, renderGraphResult } from "./display.js";
 
 const text = () => Type.String({ minLength: 1 });
+const prompt = () => Type.Union([
+  text(),
+  Type.Object({
+    template: text(),
+    variables: Type.Record(Type.String(), Type.String()),
+  }, { additionalProperties: false }),
+]);
 const timeout = () =>
   Type.Optional(
     Type.Number({
@@ -31,13 +38,16 @@ const toolBudget = (unit: string) =>
 const braidParameters = Type.Object(
   {
     goal: text(),
+    promptTemplates: Type.Optional(Type.Record(Type.String(), text(), {
+      description: "Reusable prompts for this graph. Use {{name}} placeholders; variable names use letters, digits, and underscores and cannot start with a digit. Nodes reference a template and supply exactly its string variables. Rendering happens before any node starts.",
+    })),
     // A flat object avoids provider-specific discriminated-union schema problems.
     nodes: Type.Array(
       Type.Object(
         {
           type: StringEnum(["execute", "decision", "merge"]),
           id: text(),
-          prompt: Type.Optional(text()),
+          prompt: Type.Optional(prompt()),
           model: Type.Optional(
             Type.String({
               description:
@@ -97,6 +107,7 @@ const BRAID_USAGE_GUIDANCE = [
   "Braid is a proactive execution primitive, not only a user-requested command.",
   "Selection rule: for a code review, bug investigation, design comparison, test-planning request, or change spanning multiple files, call braid FIRST when two or more concerns can be handled independently. Nodes can analyze the project and implement changes in isolated Git worktrees. Do this without waiting for the user to say Braid; do not read everything in the parent and then decide whether to delegate.",
   BRAID_FILESYSTEM_GUIDANCE,
+  "For repeated instructions, define promptTemplates once and use prompt={template: name, variables: {name: value}} on nodes. Values are strings inserted literally into {{name}} placeholders; plain-string prompts remain supported.",
   "When Braid fits, construct and submit the complete DAG in one call: use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, and merge nodes to integrate file changes. The tool returns a jobId immediately. Continue independent work or finish your turn while it runs; do not poll repeatedly. A completion reminder will resume you. Use braid_status with the jobId to retrieve terminal outputs before relying on them.",
   "Do not use braid for a simple one-step answer, a trivial direct edit, shell work, or when decomposition adds no value. The parent reviews results, runs tests, and executes shell commands after Braid completes.",
 ].join("\n");
@@ -110,6 +121,7 @@ export function createBraidTools(jobs: BraidJobs) {
         "Use this tool FIRST for nontrivial engineering work: code reviews, bug investigations, design comparisons, test planning, and changes spanning multiple files. " +
         "It starts a background job and immediately returns jobId for a complete DAG of isolated LLM invocations with parallel branches and joins; the user does not need to mention Braid. " +
         "Use execute, decision, or merge nodes. Decision nodes must declare choices and call decide; matching choice edges activate together. Merge nodes accept multiple predecessors and an optional prompt. " +
+        "For repeated prompts, define promptTemplates and set node prompt to {template: name, variables: {name: value}}; core renders {{name}} placeholders using explicit string variables before execution. " +
         "Unlabelled edges are unconditional. Joins wait for all possible predecessor paths to resolve. " +
         "Nodes see only the goal, their prompt, labelled direct-predecessor outputs, and their filesystem capabilities: " +
         "no parent history, shell, tests, or recursive Braid calls. " +
@@ -155,6 +167,7 @@ export function createBraidTools(jobs: BraidJobs) {
               goal: params.goal,
               nodes: params.nodes,
               edges: params.edges,
+              ...(params.promptTemplates !== undefined ? { promptTemplates: params.promptTemplates } : {}),
             } as BraidInput,
             params.options ?? {},
             ctx,

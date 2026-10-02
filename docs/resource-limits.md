@@ -6,6 +6,12 @@ The scheduler rescans the graph as work settles. Consult the
 [benchmark](benchmark.md) for measured local overhead rather than treating the
 validator's deep-graph tests as a production capacity guarantee.
 
+Submission-local prompt templates reduce graph/tool-call argument size, not
+worker context size. Core expands them before execution and checks rendered
+prompts are non-empty. There is no raw or rendered prompt length/token cap;
+hosts imposing their own size budgets must account for expanded prompts as
+well as the compact definition.
+
 | Control | Core default | Pi default |
 | --- | --- | --- |
 | Active runtime-managed invocations per graph | 4 | 4 |

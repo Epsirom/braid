@@ -126,12 +126,18 @@ try {
   `);
   await run([join(consumer, "check.mjs")], consumer);
   writeFileSync(join(consumer, "check.mts"), `
-    import { braid, formatBudgetReminder, gitToolDefinition, finishMergeToolDefinition, mergeInstructions, parseGitToolArguments, parseFinishMergeArguments, type BraidInput, type ModelRunner } from ${JSON.stringify(manifest.name)};
+    import { braid, formatBudgetReminder, gitToolDefinition, finishMergeToolDefinition, mergeInstructions, parseGitToolArguments, parseFinishMergeArguments, type BraidInput, type BraidNode, type BraidInputNode, type NodePrompt, type PromptTemplateReference, type ModelRunner } from ${JSON.stringify(manifest.name)};
     import { createOpenAICompatibleRunner } from ${JSON.stringify(manifest.name + "/adapters/openai")};
-    const input: BraidInput = { goal: 'smoke', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] };
+    const node: BraidNode = { type: 'execute', id: 'a', prompt: 'PASS' };
+    const input: BraidInput = { goal: 'smoke', nodes: [node], edges: [] };
+    const reference: PromptTemplateReference = { template: 'inspect', variables: { target: 'runtime' } };
+    const prompt: NodePrompt = reference;
+    const templated: BraidInputNode = { type: 'execute', id: 'a', prompt };
     const runner: ModelRunner = createOpenAICompatibleRunner();
     void braid(input, { runner });
-    const request: Parameters<ModelRunner>[0] = { goal: 'smoke', node: input.nodes[0]!, predecessors: [], execution: { runId: 'smoke', rootRunId: 'smoke' }, signal: new AbortController().signal };
+    void braid({ goal: 'smoke', promptTemplates: { inspect: 'Inspect {{target}}.' }, nodes: [templated], edges: [] }, { runner });
+    const request: Parameters<ModelRunner>[0] = { goal: 'smoke', node, predecessors: [], execution: { runId: 'smoke', rootRunId: 'smoke' }, signal: new AbortController().signal };
+    const rendered: string = request.node.prompt!;
     const reminder: string = formatBudgetReminder(request);
     const instructions: string = mergeInstructions(request);
     const args: { args: string[]; input?: string } = parseGitToolArguments({ command: 'status', args: [] }, false);
