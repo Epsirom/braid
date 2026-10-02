@@ -5,11 +5,11 @@
 This optional Pi extension runs Braid agent graphs as background jobs with
 bounded loops, live updates, pause/resume, and a live flow panel.
 
-**0.2 development:** This guide describes the upcoming 0.2 API; npm `latest`
-is currently 0.1.3. Use the [published guide](https://github.com/Epsirom/braid/blob/v0.1.3/integrations/pi/README.md)
-for that version, or [install this checkout](#install-this-local-checkout-in-pi)
-to try 0.2. Review the [migration guide](https://github.com/Epsirom/braid/blob/main/docs/compatibility.md#migrating-from-01-to-02)
-before upgrading an existing graph.
+**0.2 API:** The npm badge shows the published version; see
+[GitHub releases](https://github.com/Epsirom/braid/releases) for release notes.
+Review the [migration guide](https://github.com/Epsirom/braid/blob/v0.2.0/docs/compatibility.md#migrating-from-01-to-02)
+before upgrading an existing graph. For the previous API, use the
+[0.1.3 guide](https://github.com/Epsirom/braid/blob/v0.1.3/integrations/pi/README.md).
 
 It registers:
 

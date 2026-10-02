@@ -6,9 +6,8 @@ and thin host adapters. This is a direction for discussion, not a delivery sched
 
 ## Release status
 
-The 0.2 execution-control implementation is merged into `main`; 0.2.0 has not
-been published yet. The latest published core and Pi packages are 0.1.3. Source
-availability and npm availability are separate milestones. Check
+The 0.2 execution-control foundation is implemented. Source availability and npm
+availability are separate milestones. Check
 [GitHub releases](https://github.com/Epsirom/braid/releases),
 [@chrok/braid](https://www.npmjs.com/package/@chrok/braid), and
 [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid) for published versions.
@@ -33,15 +32,10 @@ availability and npm availability are separate milestones. Check
 See [execution control](docs/execution-control.md) for the contract and
 [0.1 → 0.2 migration](docs/compatibility.md#migrating-from-01-to-02) before upgrading.
 
-## Before publishing 0.2.0
-
-- [ ] Run the complete supported Node/platform matrix and isolated package
-  installation checks on the final release commit.
-- [ ] Finalize dated release notes, publish both matching packages, and verify
-  registry availability, provenance, and clean installation through the
-  [release workflow](docs/releasing.md).
-- [ ] Update the README and Pi guide's development notices when npm `latest`
-  actually points to 0.2.0.
+Each release follows the [release checklist](docs/releasing.md): validate the
+supported Node/platform matrix and isolated package installation, credit PR
+authors and first-time contributors, then verify both registry versions,
+provenance, and clean installation before marking publication complete.
 
 ## Next candidates
 
