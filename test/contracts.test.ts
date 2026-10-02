@@ -28,7 +28,7 @@ test("non-Error runner rejections cannot break error serialization or independen
       return { output: "good" };
     },
   });
-  assert.equal(result.status, "failed");
+  assert.equal(result.status, "completed");
   assert.equal(result.nodes.bad!.error!.code, "MODEL_ERROR");
   assert.equal(typeof result.nodes.bad!.error!.message, "string");
   assert.deepEqual(result.terminalOutputs, { good: { output: "good" } });

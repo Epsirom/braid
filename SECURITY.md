@@ -18,17 +18,17 @@ upgrade. Before the first release, report issues against the current main branch
 - Braid isolates invocation context; it is not a process or filesystem sandbox.
   A custom runner is trusted code with the host process's permissions.
 - The core manages Git snapshots, worktrees, checkpoint refs, and merge tools.
-  Pi workers can write/edit their assigned Git worktree. Merge agents can integrate
-  changes into the source checkout; they are not restricted to read-only analysis.
+  Pi workers can write/edit their assigned Git worktree. Integrate agents can apply
+  changes to the source checkout; merge agents use isolated worktrees; they are not restricted to read-only analysis.
   Outside Git, Pi file tools stay read-only. Read paths can expose files outside
   the checkout and disclose content to a model provider.
 - Execute/decision nodes can request `workspace: "read-only"` inside Git. Pi
   omits write/edit tools, and core rejects write-barrier operations. Git inspection
-  remains available. These nodes read the live source directory, not an isolated
+  remains available. These nodes read an isolated predecessor
   snapshot; custom runners must honor this capability themselves.
 - Guarded write tools reject external paths, Git metadata, symlinks, hard links,
   and special files, but are not an OS sandbox against concurrent filesystem
-  attacks. Avoid concurrent external source edits while merge agents run. A
+  attacks. Avoid concurrent external source edits while integrate agents run. A
   cancellation or failed merge can leave partial integration/conflicts for review;
   checkpoint and backup refs support recovery.
 - Prompts, predecessor outputs, tool results, errors, and model answers may be

@@ -5,8 +5,8 @@
 | Core runtime | Node.js 22+, ESM imports, TypeScript declarations, no runtime dependencies |
 | Pi package | Node.js 22.19+, Pi 0.87.1 is the pinned validation target |
 | CI | Core minimum Node 22.0; both packages on Node 22.19 and 24 on Linux, macOS, Windows |
-| OpenAI-compatible runner | Chat Completions text and function-tool calls; decisions and merge nodes require tool calling |
-| Browsers / CommonJS | No supported browser build or CommonJS entry point in 0.1 |
+| OpenAI-compatible runner | Chat Completions text and function-tool calls; decisions and merge/integrate nodes require tool calling |
+| Browsers / CommonJS | No supported browser build or CommonJS entry point in 0.2 |
 
 The CI matrix describes configured checks; see actual workflow results for each
 commit. Offline HTTP fixtures validate the adapter contract. They do not prove
@@ -30,11 +30,30 @@ its runtime and does not need a source checkout.
 
 Git must be installed for workspace execution inside a Git checkout. Non-Git
 text-only runs do not require Git workspace management.
-Execute/decision nodes can opt into `workspace: "read-only"`; omitted or
-`"worktree"` values preserve the existing allocation behavior. Merge nodes reject
-this field. Explicit read-only nodes report workspace metadata/events even when
-the entire run is read-only; implicit non-Git runs keep their existing shapes.
-Older versions reject the new field during validation.
+## Migrating from 0.1 to 0.2
+
+This release deliberately changes the execution and workspace contracts:
+
+- Replace old source-checkout `merge` nodes with `integrate`. The new `merge`
+  combines inputs in a fresh isolated worktree.
+- Add explicit integrate nodes where a graph previously relied on automatic
+  final integration. Runs no longer append `__braid_merge__`.
+- Treat node IDs as definition identities. Read exact historical instances from
+  `executions[executionId]`; `nodes[nodeId]` returns the latest instance.
+- Key workspace lookups and `finish_merge` dispositions by `executionId`.
+  Source workspaces remain reusable; target `dispositions` records selections.
+- Read-only nodes now use isolated predecessor snapshots in Git. They receive
+  checkpoints and cleanup events. All non-Git allocations also report metadata.
+- Set `requireSuccess: true` on nodes whose failures must fail the whole job.
+  Optional failures now retain their error and artifacts while allowing recovery.
+- Handle repeated instance events and the new revision/loop/gate events. Use
+  `braid_status({jobId, executionId})` for precise Pi result retrieval.
+- Set finite `maxExecutions` (default 1000) and per-loop `maxIterations`. Deadlines
+  and execution limits span live graph updates and paused gates.
+
+Use `startBraid` for live updates or pause/resume. Existing `braid` callers can
+still await a static graph result. See [execution control](execution-control.md)
+for the full scheduling and update contract; there is no old-behavior mode.
 
 Graph submissions may include `promptTemplates` and template-reference prompts.
 `BraidInput.nodes` uses `BraidInputNode`, whose `NodePrompt` accepts a string or
@@ -45,12 +64,12 @@ so existing runners need no template support. Rendering happens in core before
 execution, including for Pi submissions. Older versions reject template inputs.
 
 All node types accept optional `notifyOnCompletion: boolean` (default `false`).
-Core preserves this adapter preference without changing scheduling or event
-semantics; Pi implements parent reminders for successful and failed nodes.
+Core captures this preference per execution; Pi implements parent reminders for successful and failed executions.
 Skipped nodes do not notify. Pi's optional `braid_status` `nodeId` parameter
-requires `jobId` and retrieves full intermediate node results. Existing whole-job
-queries and completion reminders retain their behavior. Older versions reject
-the new node field and tool parameter.
+requires `jobId` and retrieves full intermediate node results. Whole-job queries and reminders remain available. Paused executions send a
+separate gate reminder; when both preferences are enabled it supplies the single
+completion reminder for that instance. Cancellation still sends failure reminders
+for opted-in running instances.
 
 ## Versioning
 

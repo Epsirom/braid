@@ -4,7 +4,7 @@ import { type ExecutionEvent, type ModelRunner } from "../src/index.js";
 import { braid, decision, execute, graph } from "./helpers.js";
 
 function types(events: readonly ExecutionEvent[]): string[] {
-  return events.map((event) => event.type);
+  return events.filter(event => event.type !== "workspace_updated").map((event) => event.type);
 }
 
 test("execution log records graph creation, handoffs, routing, skips, and completion", async () => {
@@ -43,8 +43,8 @@ test("execution log records graph creation, handoffs, routing, skips, and comple
     "node_runnable",
     "node_started",
     "node_completed",
-    "node_runnable",
     "node_skipped",
+    "node_runnable",
     "node_started",
     "handoff",
     "node_completed",
@@ -64,6 +64,7 @@ test("execution log records graph creation, handoffs, routing, skips, and comple
     type: "graph_created",
     sequence: 1,
     timestamp: result.events[0]!.timestamp,
+    revision: 0,
     nodeCount: 4,
     edgeCount: 3,
   });
@@ -84,11 +85,10 @@ test("execution log records graph creation, handoffs, routing, skips, and comple
   });
   const handoffs = result.events.filter((event) => event.type === "handoff");
   assert.deepEqual(
-    handoffs.map(({ timestamp: _timestamp, ...event }) => event),
+    handoffs.map(({ timestamp: _timestamp, sequence: _sequence, executionId: _id, fromExecutionId: _fromId, revision: _revision, ...event }) => event),
     [
       {
         type: "handoff",
-        sequence: 15,
         from: "route",
         to: "left",
         output: "route",
@@ -96,7 +96,6 @@ test("execution log records graph creation, handoffs, routing, skips, and comple
       },
       {
         type: "handoff",
-        sequence: 19,
         from: "left",
         to: "join",
         output: "left",
@@ -108,7 +107,7 @@ test("execution log records graph creation, handoffs, routing, skips, and comple
   );
   assert.equal(completed?.type, "node_completed");
   if (completed?.type === "node_completed") {
-    assert.equal(completed.sequence, 11);
+    assert.equal(completed.executionId, result.nodes.route!.executionId);
     assert.equal(completed.nodeId, "route");
     assert.equal(completed.output, "route");
     assert.equal(completed.decision, "go");
@@ -119,7 +118,7 @@ test("execution log records graph creation, handoffs, routing, skips, and comple
     type: "graph_completed",
     sequence: result.events.length,
     timestamp: result.events.at(-1)!.timestamp,
-    terminalNodeIds: ["join"],
+    terminalNodeIds: ["join"], revision: 0,
   });
 });
 
@@ -144,7 +143,7 @@ test("execution log records failures and continued handoffs", async () => {
   assert.ok(result.events.some(event => event.type === "handoff" && event.from === "bad" && event.to === "dependent"));
   assert.equal(result.nodes.dependent!.status, "completed");
   const final = result.events.at(-1);
-  assert.equal(final?.type, "graph_failed");
+  assert.equal(final?.type, "graph_completed");
   assert.deepEqual(result.terminalOutputs, {
     independent: { output: "independent" },
     dependent: { output: "dependent" },

@@ -52,3 +52,10 @@ export function deferred<T = void>() {
   });
   return { promise, resolve, reject };
 }
+
+export function predecessorText(values: import("../src/types.js").PredecessorOutput[]) {
+  return values.map(({ executionId, workspace: _workspace, ...value }) => {
+    if (!executionId) throw new Error("Predecessor execution identity missing");
+    return value;
+  });
+}

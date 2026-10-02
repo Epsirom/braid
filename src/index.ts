@@ -1,7 +1,12 @@
-export { braid } from "./runtime.js";
+export { braid, startBraid } from "./runtime.js";
 export { validateGraph, GraphValidationError } from "./validate.js";
 export type {
   BraidInput,
+  BraidRun,
+  BraidSnapshot,
+  GraphUpdate,
+  LoopDefinition,
+  NodeExecution,
   BraidInputNode,
   BraidNode,
   BraidOptions,
@@ -16,6 +21,7 @@ export type {
   ModelResponse,
   ModelRunner,
   MergeNode,
+  IntegrateNode,
   MergeDisposition,
   MergeSource,
   GitPreview,

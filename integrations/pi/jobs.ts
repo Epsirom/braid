@@ -8,7 +8,10 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
-  braid,
+  startBraid,
+  type BraidRun,
+  type BraidSnapshot,
+  type GraphUpdate,
   validateGraph,
   type BraidInput,
   type BraidResult,
@@ -26,6 +29,7 @@ import { createPiRunner, sumPiUsage } from "./runner.js";
 
 export interface JobOptions {
   maxConcurrency?: number;
+  maxExecutions?: number;
   nodeTimeoutMs?: number;
   graphTimeoutMs?: number;
   maxToolRounds?: number;
@@ -41,6 +45,7 @@ export interface JobSnapshot {
   createdAt: number;
   live: BraidLiveState;
   result?: BraidResult;
+  execution?: BraidSnapshot;
   error?: string;
   fullOutputPath?: string;
   usage?: Usage;
@@ -49,6 +54,7 @@ export interface JobSnapshot {
 }
 
 interface Job extends JobSnapshot {
+  run?: BraidRun;
   controller: AbortController;
   done: Promise<void>;
   usageClaimed: boolean;
@@ -59,8 +65,11 @@ export interface NodeCompletion {
   jobId: string;
   handle: string;
   nodeId: string;
+  executionId: string;
+  paused?: boolean;
+  iteration?: number;
   status: "completed" | "failed";
-  /** Identifies the terminal event within this job; nodes currently execute once. */
+  /** Identifies this execution event within the job. */
   eventSequence: number;
   errorCode?: ExecutionError["code"];
 }
@@ -137,36 +146,37 @@ export class BraidJobs {
     model?: string,
   ): Promise<void> {
     const reports: Usage[] = [];
-    const notifyNodes = new Set(input.nodes.filter((node) => node.notifyOnCompletion).map((node) => node.id));
     try {
       // Return the submission to Pi before doing provider work or sending reminders.
-      await nextTurn();
-      job.result = await braid(input, {
+      job.run = startBraid(input, {
         ...options,
         cwd,
         nodeTimeoutMs: options.nodeTimeoutMs ?? Infinity,
         graphTimeoutMs: options.graphTimeoutMs ?? Infinity,
         signal: job.controller.signal,
         ...(model ? { defaultModel: model } : {}),
-        runner: createPiRunner(registry, {
-          cwd,
-          maxToolRounds: options.maxToolRounds ?? Infinity,
-          maxToolCalls: options.maxToolCalls ?? Infinity,
-          onUsage: (usage) => {
-            if (job.status === "running" && !job.controller.signal.aborted)
-              reports.push(usage);
-          },
-          onProgress: (progress) => {
-            if (job.status !== "running" || job.controller.signal.aborted)
-              return;
-            applyProgress(job.live, progress);
-            this.changed();
-          },
-        }),
+        runner: (() => {
+          const invoke = createPiRunner(registry, {
+            cwd,
+            maxToolRounds: options.maxToolRounds ?? Infinity,
+            maxToolCalls: options.maxToolCalls ?? Infinity,
+            onUsage: (usage) => {
+              if (job.status === "running" && !job.controller.signal.aborted)
+                reports.push(usage);
+            },
+            onProgress: (progress) => {
+              if (job.status !== "running" || job.controller.signal.aborted)
+                return;
+              applyProgress(job.live, progress);
+              this.changed();
+            },
+          });
+          return async request => { await nextTurn(); return invoke(request); };
+        })(),
         onEvent: (event) => {
           if (event.type === "workspace_updated") {
             job.workspaces ??= {};
-            Object.defineProperty(job.workspaces, event.workspace.nodeId, {
+            Object.defineProperty(job.workspaces, event.workspace.executionId ?? event.workspace.nodeId, {
               value: { ...event.workspace }, enumerable: true, configurable: true, writable: true,
             });
           }
@@ -181,16 +191,24 @@ export class BraidJobs {
             });
           }
           this.changed();
-          if (!this.disposed && (event.type === "node_completed" || event.type === "node_failed") &&
-              notifyNodes.has(event.nodeId)) {
+          const terminal = event.type === "execution_paused" || event.type === "node_completed" || event.type === "node_failed";
+          const state = terminal ? job.run?.snapshot() : undefined;
+          const instance = event.executionId ? state?.executions[event.executionId] : undefined;
+          const shouldNotify = event.type === "execution_paused" ||
+            ((event.type === "node_completed" || event.type === "node_failed") && instance?.node.notifyOnCompletion &&
+              (!instance.node.pauseAfter || state?.error));
+          if (!this.disposed && shouldNotify && "nodeId" in event && instance) {
             try {
               void Promise.resolve(this.onNodeFinished({
                 jobId: job.jobId,
                 handle: job.handle,
                 nodeId: event.nodeId,
-                status: event.type === "node_completed" ? "completed" : "failed",
+                executionId: instance.executionId,
+                ...(event.type === "execution_paused" ? { paused: true } : {}),
+                ...(instance.iteration ? { iteration: instance.iteration } : {}),
+                status: instance.status === "completed" ? "completed" : "failed",
                 eventSequence: event.sequence,
-                ...(event.type === "node_failed" ? { errorCode: event.error.code } : {}),
+                ...(instance.error ? { errorCode: instance.error.code } : {}),
               })).catch(() => {});
             } catch {
               /* Notification failures must not affect scheduling or results. */
@@ -198,6 +216,7 @@ export class BraidJobs {
           }
         },
       });
+      job.result = await job.run.result;
       if (reports.length) job.usage = sumPiUsage(reports);
       job.live.observedAt = job.result.metadata.finishedAt;
       job.live.latencyMs = job.result.metadata.latencyMs;
@@ -246,6 +265,7 @@ export class BraidJobs {
     const job = this.lookup(jobId);
     if (!job) return undefined;
     const {
+      run: _run,
       controller: _controller,
       done: _done,
       usageClaimed: _claimed,
@@ -253,6 +273,7 @@ export class BraidJobs {
       ...snapshot
     } = job;
     const copy = structuredClone(snapshot);
+    if (job.run) copy.execution = job.run.snapshot();
     if (job.status === "running") {
       copy.live.observedAt = Date.now();
       copy.live.latencyMs = copy.live.observedAt - job.createdAt;
@@ -260,17 +281,33 @@ export class BraidJobs {
     return copy;
   }
 
-  getNode(jobId: string, nodeId: string): NodeResult {
+  getNode(jobId: string, nodeId?: string, executionId?: string): NodeResult {
     const job = this.lookup(jobId);
     if (!job) throw this.unknownJob(jobId);
-    const node = job.result && Object.hasOwn(job.result.nodes, nodeId)
-      ? job.result.nodes[nodeId] : job.nodeResults.get(nodeId);
-    if (!node) throw new Error(`Unknown Braid node: ${JSON.stringify(nodeId)} in ${job.handle}. Use braid_status with only jobId to list nodes.`);
-    return structuredClone({
-      ...node,
-      ...(job.workspaces && Object.hasOwn(job.workspaces, nodeId)
-        ? { workspace: job.workspaces[nodeId] } : {}),
-    });
+    const state = job.result ?? job.run?.snapshot();
+    const node = executionId
+      ? state && Object.hasOwn(state.executions, executionId) ? state.executions[executionId] : undefined
+      : nodeId ? (state && Object.hasOwn(state.nodes, nodeId) ? state.nodes[nodeId] : undefined) ?? job.nodeResults.get(nodeId) : undefined;
+    if (!node || (nodeId && node.id !== nodeId)) throw new Error(`Unknown Braid node or execution in ${job.handle}. Use braid_status with only jobId to list executions.`);
+    return structuredClone(node);
+  }
+
+  update(jobId: string, patch: GraphUpdate): JobSnapshot {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    if (!job.run) throw new Error("Job is not accepting updates");
+    job.run.update(patch);
+    this.changed();
+    return this.get(jobId)!;
+  }
+
+  resume(jobId: string, executionIds: readonly string[], expectedRevision: number): JobSnapshot {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    if (!job.run) throw new Error("Job is not accepting updates");
+    job.run.resume(executionIds, expectedRevision);
+    this.changed();
+    return this.get(jobId)!;
   }
 
   list(): Pick<JobSnapshot, "jobId" | "handle" | "goal" | "status" | "createdAt">[] {

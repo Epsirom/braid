@@ -8,7 +8,8 @@ Replace a runner with the documented provider adapter for live use.
 | --- | --- | --- |
 | [Design comparison](../examples/basic.ts) | `npm run demo` | Decision chooses comparison, benefits/risks run concurrently, answer synthesizes them; brief branch skips |
 | [Code review](../examples/code-review.ts) | `npx tsx examples/code-review.ts` | Correctness and test reviews run independently; final review lists both findings |
-| [Failure handling](../examples/failure-handling.ts) | `npx tsx examples/failure-handling.ts` | `failed`; join completes with local findings and explicit `remote` error context |
+| [Failure handling](../examples/failure-handling.ts) | `npx tsx examples/failure-handling.ts` | `completed`; optional failure stays in history and join completes with local findings and explicit `remote` error context |
+| [Loop and live update](../examples/execution-control.ts) | `npx tsx examples/execution-control.ts` | Two refinement rounds, a pause, and an atomic graph update/resume |
 | [Custom runner](../examples/custom-runner.ts) | `npx tsx examples/custom-runner.ts` | `Received direct predecessors: route` |
 
 These text-only examples use temporary non-Git directories. The code-review

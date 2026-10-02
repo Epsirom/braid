@@ -68,10 +68,10 @@ test("Pi braid tool submits read-only review and decision nodes with Git inspect
       nodeId: string; workspace: PiNodeWorkspace;
     };
     assert.equal(workspace.mode, "read-only");
-    assert.equal(workspace.workingDirectory, ctx.cwd);
-    assert.equal(workspace.worktreeRoot, undefined);
+    assert.equal(workspace.workingDirectory, join(workspace.worktreeRoot!, "src"));
+    assert.ok(workspace.worktreeRoot);
     assert.match(worker.systemPrompt!, /filesystem tools are read-only/);
-    assert.match(worker.systemPrompt!, /live directory, not an isolated snapshot/);
+    assert.match(worker.systemPrompt!, /isolated predecessor snapshot/);
     const turn = turns.get(nodeId) ?? 0;
     turns.set(nodeId, turn + 1);
     assert.deepEqual(worker.tools!.map(tool => tool.name), [
@@ -94,7 +94,7 @@ test("Pi braid tool submits read-only review and decision nodes with Git inspect
     if (nodeId === "review") {
       assert.deepEqual(results.map(result => result.isError), [false, false, true, true, true]);
       assert.match(JSON.stringify(results[0]!.content), /parent change/);
-      assert.match(JSON.stringify(results[1]!.content), /parent change/);
+      assert.doesNotMatch(JSON.stringify(results[1]!.content), /parent change/);
     } else assert.equal(results[0]!.isError, false);
     return response("Reviewed");
   });
@@ -112,10 +112,10 @@ test("Pi braid tool submits read-only review and decision nodes with Git inspect
   assert.equal(status.details!.status, "completed", status.details!.result?.error?.message ?? status.details!.error);
   assert.deepEqual([...turns.keys()], ["review", "route"]);
   assert.equal(status.details!.result!.terminalOutputs.route!.decision, "done");
-  assert.equal(status.details!.workspaces!.review!.mode, "read-only");
-  assert.equal(status.details!.workspaces!.route!.mode, "read-only");
+  assert.equal(status.details!.result!.nodes.review!.workspace!.mode, "read-only");
+  assert.equal(status.details!.result!.nodes.route!.workspace!.mode, "read-only");
   assert.equal(await readFile(join(ctx.cwd, "file.txt"), "utf8"), "parent change\n");
-  assert.equal(await git(fixture.root, "for-each-ref", "--format=%(refname)", "refs/braid/"), "");
+  assert.match(await git(fixture.root, "for-each-ref", "--format=%(refname)", "refs/braid/"), /checkpoints/);
 });
 
 test("Pi analysis-only graphs finish without a merge model invocation", async t => {
@@ -139,7 +139,7 @@ test("Pi analysis-only graphs finish without a merge model invocation", async t 
   assert.deepEqual(calls, ["analysis", "summary"]);
   assert.equal(result.terminalOutputs.summary!.output, "Reviewed summary");
   for (const workspace of Object.values(result.workspaces!)) {
-    assert.equal(workspace.state, "discarded");
+    assert.equal(workspace.state, "archived");
     assert.equal(await git(fixture.root, "show", `${workspace.checkpointRef}:src/file.txt`), "original");
     await assert.rejects(readFile(join(workspace.worktreeRoot!, ".git")), { code: "ENOENT" });
   }
@@ -196,7 +196,7 @@ test("parallel Git nodes write and edit separate worktrees from the same dirty s
     cwd: join(fixture.root, "src"), defaultModel: "fake/model",
     runner: async invocation => {
       if (invocation.merge) {
-        await invocation.merge.finish(invocation.merge.sources.map(source => ({ nodeId: source.nodeId, disposition: "discarded", reason: "Test only" })));
+        await invocation.merge.finish(invocation.merge.sources.map(source => ({ executionId: source.executionId!, disposition: "discarded", reason: "Test only" })));
         return { output: "Discarded test changes" };
       }
       const output = await runner(invocation);
@@ -284,9 +284,9 @@ for (const failure of ["error", "cancel"] as const) {
     if (failure === "cancel") jobs.cancel(id);
     await jobs.wait(id);
     const status = await statusTool.execute("status", { jobId: id }, undefined, undefined, ctx);
-    const workspace = status.details!.workspaces!.a!;
+    const workspace = status.details!.result!.nodes.a!.workspace!;
     fixture.onWorkspace(workspace);
-    assert.equal(status.details!.status, failure === "error" ? "failed" : "cancelled");
+    assert.equal(status.details!.status, failure === "error" ? "completed" : "cancelled");
     assert.equal(workspace.state, "archived");
     assert.equal(await git(fixture.root, "show", `${workspace.checkpointRef}:partial.txt`), "keep this work");
     await assert.rejects(readFile(join(workspace.worktreeRoot!, "partial.txt")), { code: "ENOENT" });
@@ -312,7 +312,7 @@ test("Pi merge agent inspects, applies, and finishes through core tools before a
       if (turn === 0) return toolResponse({ type: "toolCall", id: "save", name: "write", arguments: { path: "chosen.txt", content: "chosen change" } });
       return response("Created chosen.txt");
     }
-    assert.equal(payload.nodeId, "__braid_merge__");
+    assert.equal(payload.nodeId, "integrate");
     assert.match(worker.systemPrompt!, /core has not merged anything/);
     assert.match(worker.systemPrompt!, /Reserve budget.*finish_merge/);
     assert.ok(worker.tools!.some(tool => tool.name === "finish_merge"));
@@ -322,9 +322,9 @@ test("Pi merge agent inspects, applies, and finishes through core tools before a
       assert.match(source.changes!.diff.text, /chosen change/);
       assert.equal(payload.sourceCheckoutStatus!.dirty, false);
       const finishSchema = worker.tools!.find(tool => tool.name === "finish_merge")!.parameters as unknown as {
-        properties: { dispositions: { maxItems: number; items: { properties: { nodeId: { enum: string[] } } } } };
+        properties: { dispositions: { maxItems: number; items: { properties: { executionId: { enum: string[] } } } } };
       };
-      assert.deepEqual(finishSchema.properties.dispositions.items.properties.nodeId.enum, ["a"]);
+      assert.deepEqual(finishSchema.properties.dispositions.items.properties.executionId.enum, [source.executionId]);
       assert.equal(finishSchema.properties.dispositions.maxItems, 1);
       await assert.rejects(readFile(join(fixture.root, "chosen.txt")), { code: "ENOENT" });
       return toolResponse({ type: "toolCall", id: "inspect", name: "git", arguments: { command: "diff", args: ["--binary", source.snapshotCommit!, source.checkpointRef!] } });
@@ -337,18 +337,18 @@ test("Pi merge agent inspects, applies, and finishes through core tools before a
     }
     if (turn === 1) return toolResponse({ type: "toolCall", id: "apply", name: "git", arguments: { command: "apply", args: ["-"], input: patch } });
     if (turn === 2) return toolResponse({ type: "toolCall", id: "finish", name: "finish_merge", arguments: {
-      dispositions: [{ nodeId: source.nodeId, disposition: "integrated", reason: "Inspected and applied the selected change" }],
+      dispositions: [{ executionId: source.executionId!, disposition: "integrated", reason: "Inspected and applied the selected change" }],
     } });
     return response("Integrated the source");
   });
   const jobs = new BraidJobs();
   t.after(() => jobs.dispose());
   const { braidTool, statusTool } = createBraidTools(jobs);
-  const submitted = await braidTool.execute("work", { ...input, options: { maxToolCalls: 3 } }, undefined, undefined, ctx);
+  const submitted = await braidTool.execute("work", { ...input, nodes: [...input.nodes, { type: "integrate", id: "integrate", requireSuccess: true }], edges: [{ from: "a", to: "integrate" }], options: { maxToolCalls: 3 } }, undefined, undefined, ctx);
   await jobs.wait(submitted.details!.jobId);
   const status = await statusTool.execute("result", { jobId: submitted.details!.jobId }, undefined, undefined, ctx);
   assert.equal(status.details!.status, "completed", JSON.stringify(status.details));
-  assert.equal(status.details!.workspaces!.a!.state, "integrated");
+  assert.equal(status.details!.result!.nodes.a!.workspace!.state, "archived");
   assert.equal(await readFile(join(fixture.root, "chosen.txt"), "utf8"), "chosen change");
   assert.equal((await git(fixture.root, "worktree", "list", "--porcelain")).split("\n").filter(line => line.startsWith("worktree ")).length, 1);
 });
@@ -364,7 +364,7 @@ test("Pi rejects submodule writes before they can escape Git checkpoint coverage
     const payload = JSON.parse(worker.messages[0]!.content as string) as { nodeId: string; mergeSources?: PiNodeWorkspace[] };
     if (payload.mergeSources) {
       if (worker.messages.length === 1) return toolResponse({ type: "toolCall", id: "finish", name: "finish_merge", arguments: {
-        dispositions: payload.mergeSources.map(source => ({ nodeId: source.nodeId, disposition: "discarded", reason: "No supported changes" })),
+        dispositions: payload.mergeSources.map(source => ({ executionId: source.executionId!, disposition: "discarded", reason: "No supported changes" })),
       } });
       return response("Discarded unchanged source");
     }
@@ -384,7 +384,7 @@ test("Pi rejects submodule writes before they can escape Git checkpoint coverage
   await jobs.wait(submitted.details!.jobId);
   const status = await statusTool.execute("result", { jobId: submitted.details!.jobId }, undefined, undefined, ctx);
   assert.equal(status.details!.status, "completed", JSON.stringify(status.details));
-  assert.equal(status.details!.workspaces!.a!.state, "discarded");
+  assert.equal(status.details!.result!.nodes.a!.workspace!.state, "archived");
 });
 
 test("duplicate status cannot silently hide actual node changes behind a path filter", async (t) => {
@@ -395,7 +395,7 @@ test("duplicate status cannot silently hide actual node changes behind a path fi
   t.mock.method(ctx.modelRegistry, "complete", async (_model: unknown, worker: Context) => {
     const payload = JSON.parse(worker.messages[0]!.content as string) as { nodeId: string; mergeSources?: PiNodeWorkspace[] };
     if (payload.mergeSources) return toolResponse({ type: "toolCall", id: "finish", name: "finish_merge", arguments: {
-      dispositions: payload.mergeSources.map(source => ({ nodeId: source.nodeId, disposition: "discarded", reason: "Inspection test only" })),
+      dispositions: payload.mergeSources.map(source => ({ executionId: source.executionId!, disposition: "discarded", reason: "Inspection test only" })),
     } });
     if (turn++ === 0) return toolResponse(
       { type: "toolCall", id: "write", name: "write", arguments: { path: "node-change.txt", content: "real change" } },

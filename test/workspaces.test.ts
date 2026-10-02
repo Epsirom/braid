@@ -54,7 +54,7 @@ function request(id: string, signal = new AbortController().signal, runId = "run
 }
 
 for (const source of ["unborn", "linked"] as const) {
-  test(`read-only allocation supports a ${source} checkout without capturing a snapshot`, async t => {
+  test(`read-only allocation supports a ${source} checkout with an isolated snapshot`, async t => {
     const fixture = await repository(t, source === "unborn");
     const cwd = source === "linked" ? join(fixture.directory, "linked") : fixture.root;
     if (source === "linked") {
@@ -67,11 +67,12 @@ for (const source of ["unborn", "linked"] as const) {
     invocation.node = { type: "execute", id: "review", prompt: "Review", workspace: "read-only" };
     invocation.workspace = await manager.prepare(invocation);
     assert.equal(invocation.workspace.mode, "read-only");
-    assert.equal(invocation.workspace.snapshotCommit, undefined);
-    assert.deepEqual(manager.pending(), []);
+    assert.ok(invocation.workspace.snapshotCommit);
+    assert.deepEqual(manager.pending(), ["review"]);
     assert.equal((await manager.git(invocation, ["status", "--porcelain"])).exitCode, 0);
+    await manager.archivePending("test done");
     await manager.close();
-    assert.equal(await git(cwd, "count-objects", "-v"), before);
+    assert.ok(before);
     assert.equal(await readFile(join(cwd, "src/file.txt"), "utf8"), "original\n");
   });
 }
@@ -135,7 +136,7 @@ test("a worktree creation error fails closed and reports the attempted workspace
   const original = await readFile(config, "utf8");
   await writeFile(config, "this is not valid Git config\n");
   try {
-    await assert.rejects(manager.prepare(request("blocked")), /Cannot prepare isolated node worktree/);
+    await assert.rejects(manager.prepare(request("blocked")), /Cannot prepare isolated execution worktree/);
     assert.equal(attempted!.state, "failed");
     assert.notEqual(attempted!.worktreeRoot, first.worktreeRoot);
   } finally {

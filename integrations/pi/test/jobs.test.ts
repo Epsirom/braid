@@ -211,7 +211,7 @@ test(
       jobs.get(job.jobId)!.result!.nodes.a!.error!.message,
       "provider failed",
     );
-    assert.deepEqual(finished, ["failed"]);
+    assert.deepEqual(finished, ["completed"]);
     const listed = await statusTool.execute(
       "list",
       {},
@@ -317,7 +317,7 @@ test("large intermediate node results can be retrieved in full without claiming 
   const copy = jobs.getNode(job.jobId, "__proto__");
   copy.output = "mutated";
   assert.equal(jobs.getNode(job.handle, "__proto__").output, output);
-  await assert.rejects(statusTool.execute("missing-job", { nodeId: "a" }, undefined, undefined, ctx), /nodeId requires jobId/);
+  await assert.rejects(statusTool.execute("missing-job", { nodeId: "a" }, undefined, undefined, ctx), /nodeId.*requires jobId/);
   await assert.rejects(statusTool.execute("missing-node", { jobId: job.handle, nodeId: "toString" }, undefined, undefined, ctx), /Unknown Braid node/);
   other.resolve(response());
   await jobs.wait(job.handle);

@@ -78,7 +78,7 @@ for (const scenario of [
     );
     await jobs.wait(result.details!.jobId);
     const details = jobs.get(result.details!.jobId)!.result as BraidResult;
-    assert.equal(details.status, scenario.error ? "failed" : "completed");
+    assert.equal(details.status, scenario.error === "GRAPH_TIMEOUT" ? "failed" : "completed");
     assert.equal(details.nodes.a!.error?.code, scenario.error);
   });
 }

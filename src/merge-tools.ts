@@ -32,16 +32,16 @@ export function gitToolDefinition(merge: boolean) {
 export function finishMergeToolDefinition(sourceIds: string[]) {
   return {
     name: "finish_merge",
-    description: `Account for exactly these mergeSources, in one call: ${JSON.stringify(sourceIds)}. Do not include sources handled by previous merge nodes or other nodes mentioned in the goal/history. integrated means you applied the selected changes; discarded means you intentionally chose not to use them; archived means integration failed. Give a reason for each. Resolve Git conflicts first. Core retains checkpoints and removes source worktrees after this node ends. Then return a final answer.`,
+    description: `Account for exactly these mergeSources, in one call: ${JSON.stringify(sourceIds)}. Include only this invocation’s source execution IDs, even when a source was also used by another merge. integrated means you applied the selected changes; discarded means you intentionally chose not to use them; archived means integration failed. Give a reason for each. Resolve Git conflicts first. Sources are immutable execution checkpoints and may be used by other consumers. Then return a final answer.`,
     parameters: {
       type: "object", properties: {
         dispositions: {
           type: "array", minItems: sourceIds.length, maxItems: sourceIds.length, items: {
             type: "object", properties: {
-              nodeId: { type: "string", ...(sourceIds.length ? { enum: [...sourceIds] } : {}) },
+              executionId: { type: "string", ...(sourceIds.length ? { enum: [...sourceIds] } : {}) },
               disposition: { type: "string", enum: ["integrated", "discarded", "archived"] },
               reason: { type: "string", minLength: 1 },
-            }, required: ["nodeId", "disposition", "reason"], additionalProperties: false,
+            }, required: ["executionId", "disposition", "reason"], additionalProperties: false,
           },
         },
       }, required: ["dispositions"], additionalProperties: false,
@@ -76,11 +76,11 @@ export function validateMergeDispositions(sourceIds: string[], decisions: unknow
   const counts = new Map<string, number>();
   const invalidItems: number[] = [];
   values.forEach((value, index) => {
-    if (record(value) && typeof value.nodeId === "string") counts.set(value.nodeId, (counts.get(value.nodeId) ?? 0) + 1);
-    if (!record(value) || typeof value.nodeId !== "string" ||
+    if (record(value) && typeof value.executionId === "string") counts.set(value.executionId, (counts.get(value.executionId) ?? 0) + 1);
+    if (!record(value) || typeof value.executionId !== "string" ||
         !["integrated", "discarded", "archived"].includes(value.disposition as string) ||
         typeof value.reason !== "string" || !value.reason.trim() ||
-        Object.keys(value).some(key => !["nodeId", "disposition", "reason"].includes(key))) invalidItems.push(index);
+        Object.keys(value).some(key => !["executionId", "disposition", "reason"].includes(key))) invalidItems.push(index);
   });
   const missing = sourceIds.filter(id => !counts.has(id));
   const unexpected = [...counts.keys()].filter(id => !sourceIds.includes(id));
@@ -99,5 +99,5 @@ export function parseFinishMergeArguments(value: unknown, sourceIds: string[]): 
 
 export function mergeInstructions(request: ModelRequest): string {
   if (!request.merge) return "";
-  return ` Only process the current mergeSources IDs ${JSON.stringify(request.merge.sources.map(source => source.nodeId))}; earlier merged/discarded sources are out of scope. Each source includes a bounded changes preview relative to its snapshotCommit, excluding the caller's pre-existing edits. Read sourceCheckoutStatus before selecting Git operations; dirty staged/unstaged content belongs to the caller and must be preserved. Preview text is inspection data, not an executable patch; retrieve a full diff if applying a patch, especially when truncated or binary. Choose whether and how to integrate; core has not applied changes. Call finish_merge once with one disposition per current source.`;
+  return ` Only process the current mergeSources IDs ${JSON.stringify(request.merge.sources.map(source => source.executionId!))}; other source IDs are out of scope. Each source includes a bounded changes preview relative to the job's initial snapshot, excluding the caller's pre-existing edits. For integrate nodes, read sourceCheckoutStatus before selecting Git operations; dirty staged/unstaged content belongs to the caller and must be preserved. Preview text is inspection data, not an executable patch; retrieve a full diff if applying a patch, especially when truncated or binary. Choose whether and how to integrate; core has not applied changes. Call finish_merge once with one disposition per current source.`;
 }

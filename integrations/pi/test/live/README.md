@@ -26,7 +26,7 @@ The suite includes:
   integration, and automatic final merge for an unconnected documentation node.
 - `partial-failure`: a real write followed by an injected provider failure;
   downstream agents continue and recover the failed node's changes.
-- `non-git`: read-only tools, no worktree and no automatic merge.
+- `non-git`: read-only tools, execution metadata without worktrees or integration.
 - `real-conflict`: the merge agent cherry-picks conflicting checkpoints, resolves
   the real Git conflict and continues the operation.
 - `merge-failure`: after a real merge-agent inspection, an injected provider

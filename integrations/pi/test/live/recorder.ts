@@ -18,7 +18,7 @@ export default function recorder(pi: any) {
       const nodeId = payload.nodeId;
       log({ kind: 'node_request', nodeId, model: `${model.provider}/${model.id}`, systemPrompt: context.systemPrompt,
         payload, tools: context.tools, messages: context.messages });
-      if (payload.workspace?.mode === 'merge' && !seenMerge.has(nodeId)) {
+      if (payload.mergeSources && !seenMerge.has(nodeId)) {
         seenMerge.add(nodeId);
         const files: Record<string, string | null> = {};
         for (const file of ['calculator.cjs', 'README.md', 'user.txt', 'partial.txt', 'review.txt']) {
