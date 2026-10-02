@@ -16,8 +16,6 @@
 - Make invocation failures optional by default. Captured `requireSuccess: true`
   failures abort siblings and fail the job after writes/checkpoint/cleanup drain.
   Add a finite `maxExecutions` budget shared across loops and live updates.
-
-
 - Add submission-local `promptTemplates` and explicit template-reference prompts
   to core and Pi's `braid` tool. Core expands `{{name}}` placeholders using literal
   string variables, validates every rendered prompt before execution, and keeps
@@ -30,6 +28,10 @@
   `braid_status({jobId, nodeId})` for full intermediate outputs/errors, with
   overflow results saved to a private temporary file. Live graph
   controls are now available through the execution-control API above (#31).
+- Refresh repository/package descriptions and discovery keywords for mutable
+  agent graphs, bounded loops, and explicit workspace integration. Add npm links
+  and version badges, distinguish 0.2 source from published 0.1.3, and align the
+  roadmap and release checklist with the new execution contract.
 
 ## 0.1.3 — 2026-09-29
 

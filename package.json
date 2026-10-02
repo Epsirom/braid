@@ -2,7 +2,7 @@
   "name": "@chrok/braid",
   "version": "0.2.0",
   "license": "MIT",
-  "description": "A small, framework-agnostic graph runtime for isolated model invocations",
+  "description": "TypeScript runtime for LLM agent graphs with bounded loops, live updates, and isolated Git worktrees",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -61,9 +61,15 @@
   },
   "keywords": [
     "llm",
+    "ai-agents",
     "agents",
+    "agent-runtime",
+    "agent-orchestration",
     "graph",
+    "bounded-loops",
+    "git-worktree",
     "orchestration",
+    "openai-compatible",
     "typescript"
   ],
   "publishConfig": {
