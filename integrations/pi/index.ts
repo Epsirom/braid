@@ -1,4 +1,7 @@
 import { StringEnum, Type } from "@earendil-works/pi-ai";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   defineTool,
   truncateHead,
@@ -48,6 +51,9 @@ const braidParameters = Type.Object(
           type: StringEnum(["execute", "decision", "merge"]),
           id: text(),
           prompt: Type.Optional(prompt()),
+          notifyOnCompletion: Type.Optional(Type.Boolean({
+            description: "Send the parent a reminder when this node succeeds or fails; defaults to false. Does not pause downstream work. Skipped nodes do not notify.",
+          })),
           model: Type.Optional(
             Type.String({
               description:
@@ -109,6 +115,7 @@ const BRAID_USAGE_GUIDANCE = [
   BRAID_FILESYSTEM_GUIDANCE,
   "For repeated instructions, define promptTemplates once and use prompt={template: name, variables: {name: value}} on nodes. Values are strings inserted literally into {{name}} placeholders; plain-string prompts remain supported.",
   "When Braid fits, construct and submit the complete DAG in one call: use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, and merge nodes to integrate file changes. The tool returns a jobId immediately. Continue independent work or finish your turn while it runs; do not poll repeatedly. A completion reminder will resume you. Use braid_status with the jobId to retrieve terminal outputs before relying on them.",
+  "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Retrieve that node's output or error with braid_status({jobId, nodeId}). Reminders do not pause scheduling or enable changes to the submitted graph.",
   "Do not use braid for a simple one-step answer, a trivial direct edit, shell work, or when decomposition adds no value. The parent reviews results, runs tests, and executes shell commands after Braid completes.",
 ].join("\n");
 
@@ -128,6 +135,7 @@ export function createBraidTools(jobs: BraidJobs) {
         BRAID_FILESYSTEM_GUIDANCE + " " +
         "Do not use it for a simple one-step answer or trivial direct edit. " +
         "Use braid_status(jobId) for progress and results, or braid_cancel(jobId) to stop it. A completion reminder resumes the agent if idle; do independent work or end your turn instead of polling. Humans can open /braid for the live flow panel. " +
+        "Set notifyOnCompletion=true on selected nodes for intermediate success/failure reminders; retrieve their output/error with braid_status({jobId, nodeId}). Notifications do not pause scheduling or allow graph mutation. " +
         "Read result.status: failed graphs can still return successful terminal outputs.",
       promptSnippet:
         "Use FIRST for nontrivial code review/debug/design/implementation work; set workspace=read-only for analysis/synthesis, use worktrees for edits and merge nodes for integration",
@@ -197,7 +205,10 @@ export function createBraidTools(jobs: BraidJobs) {
   );
 
   const statusParameters = Type.Object(
-    { jobId: Type.Optional(text()) },
+    {
+      jobId: Type.Optional(text()),
+      nodeId: Type.Optional(Type.String({ minLength: 1, description: "Exact node ID; requires jobId. Retrieve this node's full output/error even while the job is running." })),
+    },
     { additionalProperties: false },
   );
   const statusTool = defineTool<
@@ -207,7 +218,7 @@ export function createBraidTools(jobs: BraidJobs) {
     name: "braid_status",
     label: "Braid status",
     description:
-      "Retrieve a background Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Prefer the short handle from submission/reminders. Omit jobId to list jobs in this session. Completion reminders arrive automatically; avoid repeated polling.",
+      "Retrieve a background Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Add nodeId for one node's full output/error, including intermediate results while the job runs. Large results include a path to the full JSON. Prefer the short handle from submission/reminders. Omit both IDs to list jobs in this session. Completion reminders arrive automatically; avoid repeated polling.",
     parameters: statusParameters,
     renderResult(result, options, theme) {
       const job = result.details;
@@ -236,6 +247,8 @@ export function createBraidTools(jobs: BraidJobs) {
       );
     },
     async execute(_id, params) {
+      if (params.nodeId !== undefined && !params.jobId)
+        throw new Error("nodeId requires jobId");
       if (!params.jobId)
         return {
           content: [{ type: "text", text: JSON.stringify(jobs.list()) }],
@@ -243,6 +256,20 @@ export function createBraidTools(jobs: BraidJobs) {
         };
       const job = jobs.get(params.jobId);
       if (!job) throw jobs.unknownJob(params.jobId);
+      if (params.nodeId !== undefined) {
+        const node = jobs.getNode(params.jobId, params.nodeId);
+        const full = JSON.stringify({ jobId: job.jobId, handle: job.handle, status: job.status, node }, null, 2);
+        const preview = truncateHead(full);
+        let suffix = "";
+        if (preview.truncated) {
+          const directory = await mkdtemp(join(tmpdir(), "braid-node-result-"));
+          const path = join(directory, "result.json");
+          await writeFile(path, full, { mode: 0o600 });
+          suffix = `\n[Preview truncated. Full node result: ${path}]`;
+        }
+        // Focused reads do not claim the whole job's usage; final job retrieval does.
+        return { content: [{ type: "text", text: preview.content + suffix }], details: job };
+      }
       const preview = truncateHead(JSON.stringify(job, null, 2));
       const suffix = preview.truncated
         ? `\n[Preview truncated. ${job.fullOutputPath ? `Full result/log: ${job.fullOutputPath}` : "Full results will be available when the job finishes."}]`
@@ -285,35 +312,51 @@ export function createBraidTools(jobs: BraidJobs) {
 }
 
 export default function braidExtension(pi: ExtensionAPI) {
-  const pending = new Map<string, JobSnapshot["status"]>();
-  const remind = (jobId: string, status: JobSnapshot["status"]): void => {
-    const handle = jobs.get(jobId)?.handle ?? jobId;
-    pi.sendMessage(
-      {
-        customType: "braid-completed",
-        display: true,
-        content: `[system-reminder] Braid job ${handle} finished with status ${status}. Retrieve its results with braid_status({"jobId":"${handle}"}) and continue the original task. Failed or cancelled jobs may contain successful partial outputs. [/system-reminder]`,
-        details: { jobId, handle, status },
-      },
-      { triggerTurn: true, deliverAs: "followUp" },
-    );
+  const pending = new Map<string, Parameters<ExtensionAPI["sendMessage"]>[0]>();
+  const remind = (message: Parameters<ExtensionAPI["sendMessage"]>[0]): void => {
+    try {
+      pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
+    } catch {
+      // Keep failed deliveries pending for the next settled retry.
+    }
   };
   const jobs = new BraidJobs((job) => {
-    pending.set(job.jobId, job.status);
-    remind(job.jobId, job.status);
+    const { jobId, handle, status } = job;
+    const reminderId = JSON.stringify([jobId, "job"]);
+    const message = {
+      customType: "braid-completed",
+      display: true,
+      content: `[system-reminder] Braid job ${handle} finished with status ${status}. Retrieve its results with braid_status({"jobId":"${handle}"}) and continue the original task. Failed or cancelled jobs may contain successful partial outputs. [/system-reminder]`,
+      details: { jobId, handle, status, reminderId },
+    };
+    pending.set(reminderId, message);
+    remind(message);
+  }, (completion) => {
+    const { jobId, handle, nodeId, status, eventSequence, errorCode } = completion;
+    const reminderId = JSON.stringify([jobId, "node", nodeId, eventSequence]);
+    const lookup = JSON.stringify({ jobId: handle, nodeId });
+    const message = {
+      customType: "braid-node-completed",
+      display: true,
+      content: `[system-reminder] Braid job ${handle} node ${JSON.stringify(nodeId)} finished with status ${status}${errorCode ? ` (${errorCode})` : ""}. Retrieve its output or error with braid_status(${lookup}) and continue the original task. This is a node reminder; the job may still be running and downstream work is not paused. [/system-reminder]`,
+      details: { ...completion, reminderId },
+    };
+    pending.set(reminderId, message);
+    remind(message);
   });
   // Foreground cancellation can discard queued follow-ups. Retry only reminders
   // that never entered context, once Pi has settled and emptied its queues.
   pi.on("message_start", (event) => {
     const message = event.message;
-    if (message.role === "custom" && message.customType === "braid-completed") {
-      const details = message.details as { jobId?: string } | undefined;
-      if (details?.jobId) pending.delete(details.jobId);
+    if (message.role === "custom" &&
+        (message.customType === "braid-completed" || message.customType === "braid-node-completed")) {
+      const details = message.details as { reminderId?: string } | undefined;
+      if (details?.reminderId) pending.delete(details.reminderId);
     }
   });
   pi.on("agent_settled", (_event, ctx) => {
     if (ctx.isIdle() && !ctx.hasPendingMessages()) {
-      for (const [jobId, status] of pending) remind(jobId, status);
+      for (const message of pending.values()) remind(message);
     }
   });
   const { braidTool, statusTool, cancelTool } = createBraidTools(jobs);

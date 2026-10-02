@@ -7,6 +7,7 @@ import {
   type BraidOptions,
 } from "../src/index.js";
 import { braid, decision, execute, graph } from "./helpers.js";
+import { compileGraph } from "../src/validate.js";
 
 const invalid: [string, unknown][] = [
   ["null graph", null],
@@ -38,6 +39,12 @@ const invalid: [string, unknown][] = [
   ["workspace on merge node", {
     goal: "x", nodes: [{ type: "merge", id: "merge", workspace: "read-only" }], edges: [],
   }],
+  ...["execute", "decision", "merge"].flatMap((type) =>
+    [null, "true", 1, {}, []].map((notifyOnCompletion) => [
+      `invalid notifyOnCompletion on ${type}: ${JSON.stringify(notifyOnCompletion)}`,
+      { goal: "x", nodes: [{ type, id: "a", prompt: "work", notifyOnCompletion,
+        ...(type === "decision" ? { choices: ["left"] } : {}) }], edges: [] },
+    ] as [string, unknown])),
   ["empty choices", graph([decision("a", [])])],
   ["duplicate choices", graph([decision("a", ["same", "same"])])],
   ["blank choice", graph([decision("a", [""])])],
@@ -161,6 +168,29 @@ test("validation is iterative for deep DAGs", () => {
     .slice(1)
     .map((node, i) => ({ from: String(i), to: node.id }));
   assert.doesNotThrow(() => validateGraph(graph(nodes, edges)));
+});
+
+test("completion notification preferences are optional, validated, and preserved for every node type", async () => {
+  for (const notifyOnCompletion of [undefined, false, true]) {
+    const nodes = [execute("a"), decision(), { type: "merge" as const, id: "merge" }]
+      .map((node) => ({ ...node, ...(notifyOnCompletion !== undefined ? { notifyOnCompletion } : {}) }));
+    for (const node of compileGraph(graph(nodes)).nodes) {
+      assert.equal(node.notifyOnCompletion, notifyOnCompletion);
+      assert.equal(Object.hasOwn(node, "notifyOnCompletion"), notifyOnCompletion !== undefined);
+    }
+    const seen: string[] = [];
+    const result = await braid(graph(nodes.filter((node) => node.type !== "merge")), {
+      runner: async ({ node, decide }) => {
+        assert.equal(node.notifyOnCompletion, notifyOnCompletion);
+        assert.equal(Object.hasOwn(node, "notifyOnCompletion"), notifyOnCompletion !== undefined);
+        if (decide) decide("left");
+        seen.push(node.id);
+        return { output: "done" };
+      },
+    });
+    assert.equal(result.status, "completed");
+    assert.deepEqual(seen.sort(), ["a", "route"]);
+  }
 });
 
 test("invalid runtime options are rejected before model execution", async () => {

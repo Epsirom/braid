@@ -19,7 +19,8 @@ The wildcard is a loader/distribution convention, **not a claim that every Pi
 version works**. Test the whole Pi suite before updating the supported target.
 The offline host compatibility test loads the extension into a real Pi session
 with an in-memory model provider. It checks worker prompt/tool normalization and
-exactly one automatic continuation when a job finishes during `agent_settled`.
+exactly one automatic continuation per node/job reminder delivered during
+`agent_settled`, including retrieval of a node output while its job still runs.
 This covers the Pi 0.86/0.87 transcript and settling changes without provider
 credentials or network model calls. Version 0.1.0 was originally validated with
 Pi 0.85.1; the current checkout's pinned validation target is 0.87.1.
@@ -42,6 +43,14 @@ that union; use `satisfies BraidInput` to preserve the inferred types of a liter
 graph. Runner-facing `BraidNode` and `ModelRequest.node` retain string prompts,
 so existing runners need no template support. Rendering happens in core before
 execution, including for Pi submissions. Older versions reject template inputs.
+
+All node types accept optional `notifyOnCompletion: boolean` (default `false`).
+Core preserves this adapter preference without changing scheduling or event
+semantics; Pi implements parent reminders for successful and failed nodes.
+Skipped nodes do not notify. Pi's optional `braid_status` `nodeId` parameter
+requires `jobId` and retrieves full intermediate node results. Existing whole-job
+queries and completion reminders retain their behavior. Older versions reject
+the new node field and tool parameter.
 
 ## Versioning
 

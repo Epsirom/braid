@@ -8,7 +8,7 @@ import braidExtension, { createBraidTools } from "../index.js";
 import { context, deferred, input, response } from "./helpers.js";
 
 type Handler = (event: never, ctx: ExtensionContext) => unknown;
-function extension() {
+function extension(onSend?: (message: Parameters<ExtensionAPI["sendMessage"]>[0]) => void) {
   const tools = new Map<string, unknown>();
   const commands = new Map<
     string,
@@ -20,6 +20,7 @@ function extension() {
     options: Parameters<ExtensionAPI["sendMessage"]>[1];
   }>();
   let reminders = 0;
+  const messages: Parameters<ExtensionAPI["sendMessage"]>[0][] = [];
   braidExtension({
     registerTool: (tool: { name: string }) => tools.set(tool.name, tool),
     registerCommand: (name: string, command: never) =>
@@ -30,10 +31,12 @@ function extension() {
       options: Parameters<ExtensionAPI["sendMessage"]>[1],
     ) => {
       reminders++;
+      messages.push(message);
+      onSend?.(message);
       reminder.resolve({ message, options });
     },
   } as unknown as ExtensionAPI);
-  return { tools, commands, handlers, reminder, reminders: () => reminders };
+  return { tools, commands, handlers, reminder, messages, reminders: () => reminders };
 }
 
 test("extension registers background tools, a panel command, and guidance to wait for reminders", async () => {
@@ -59,6 +62,8 @@ test("extension registers background tools, a panel command, and guidance to wai
   assert.match(prompt.systemPrompt, /Merge nodes operate in the source checkout/);
   const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
   assert.deepEqual(tool.parameters.properties.nodes.items.properties.workspace.enum, ["read-only", "worktree"]);
+  assert.equal(tool.parameters.properties.nodes.items.properties.notifyOnCompletion.type, "boolean");
+  assert.match(prompt.systemPrompt, /notifyOnCompletion=true/);
   for (const guidance of [prompt.systemPrompt, tool.description, tool.promptGuidelines!.join("\n")]) {
     assert.match(guidance, /workspace=read-only/);
     assert.match(guidance, /live source directory/);
@@ -74,6 +79,65 @@ test("extension registers background tools, a panel command, and guidance to wai
 });
 
 for (const idle of [true, false]) {
+  for (const failed of [false, true]) {
+    test(`opted-in node ${failed ? "failure" : "success"} resumes an ${idle ? "idle" : "streaming"} parent before the job finishes`, { timeout: 2_000 }, async (t) => {
+      const finished = deferred<void>();
+      const fake = extension((message) => {
+        if (message.customType === "braid-completed") finished.resolve();
+      });
+      t.after(() => fake.handlers.get("session_shutdown")!({} as never, ctx));
+      const otherStarted = deferred<void>();
+      const other = deferred<ReturnType<typeof response>>();
+      let calls = 0;
+      const output = "Full finding\n".repeat(100);
+      const ctx = context(async () => {
+        if (++calls === 1) {
+          if (failed) throw new Error(output);
+          return response(output);
+        }
+        otherStarted.resolve();
+        return other.promise;
+      });
+      ctx.isIdle = () => idle;
+      const nodeId = 'survey "quoted"\nnode';
+      const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
+      const status = fake.tools.get("braid_status") as ReturnType<typeof createBraidTools>["statusTool"];
+      const submitted = await tool.execute("call", {
+        ...input,
+        nodes: [
+          { type: "execute", id: nodeId, prompt: "survey", notifyOnCompletion: true },
+          { type: "execute", id: "other", prompt: "other", notifyOnCompletion: false },
+        ],
+        options: { maxConcurrency: 1 },
+      }, undefined, undefined, ctx);
+      assert.equal(fake.reminders(), 0);
+      const { message, options } = await fake.reminder.promise;
+      await otherStarted.promise;
+      assert.equal(message.customType, "braid-node-completed");
+      const details = message.details as { jobId: string; handle: string; nodeId: string; status: string; eventSequence: number; errorCode?: string };
+      assert.equal(details.jobId, submitted.details!.jobId);
+      assert.equal(details.nodeId, nodeId);
+      assert.equal(details.status, failed ? "failed" : "completed");
+      assert.equal(details.errorCode, failed ? "MODEL_ERROR" : undefined);
+      assert.ok(details.eventSequence > 0);
+      assert.ok(String(message.content).includes(`braid_status(${JSON.stringify({ jobId: details.handle, nodeId })})`));
+      assert.deepEqual(options, { triggerTurn: true, deliverAs: "followUp" });
+      const read = await status.execute("read", { jobId: details.handle, nodeId }, undefined, undefined, ctx);
+      const block = read.content[0]!;
+      assert.equal(block.type, "text");
+      const result = JSON.parse(block.type === "text" ? block.text : "");
+      assert.equal(result.status, "running");
+      assert.equal(result.node.status, details.status);
+      assert.equal(failed ? result.node.error.message : result.node.output, output);
+      assert.equal(read.usage, undefined);
+      fake.handlers.get("message_start")!({ message: { ...message, role: "custom" } } as never, ctx);
+      fake.handlers.get("agent_settled")!({} as never, ctx);
+      assert.equal(fake.reminders(), 1);
+      other.resolve(response("other result"));
+      await finished.promise;
+      assert.deepEqual(fake.messages.map((item) => item.customType), ["braid-node-completed", "braid-completed"]);
+    });
+  }
   test(
     `completion sends one system reminder with automatic continuation while ${idle ? "idle" : "streaming"}`,
     { timeout: 2_000 },
@@ -107,6 +171,43 @@ for (const idle of [true, false]) {
     },
   );
 }
+
+test("node and job reminder acknowledgements are independent, and failed deliveries can retry", { timeout: 2_000 }, async (t) => {
+  const finished = deferred<void>();
+  let throwOnce = true;
+  const fake = extension((message) => {
+    if (message.customType === "braid-completed") finished.resolve();
+    if (throwOnce) {
+      throwOnce = false;
+      throw new Error("delivery unavailable");
+    }
+  });
+  const ctx = context(async () => response());
+  t.after(() => fake.handlers.get("session_shutdown")!({} as never, ctx));
+  const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
+  await tool.execute("call", {
+    ...input,
+    nodes: ["a", "b"].map((id) => ({ type: "execute", id, prompt: "work", notifyOnCompletion: true })),
+    options: { maxConcurrency: 1 },
+  }, undefined, undefined, ctx);
+  await finished.promise;
+  assert.deepEqual(fake.messages.map((message) => message.customType), ["braid-node-completed", "braid-node-completed", "braid-completed"]);
+  assert.equal((fake.messages[2]!.details as { status: string }).status, "completed");
+  const acknowledge = (index: number) => fake.handlers.get("message_start")!({ message: { ...fake.messages[index], role: "custom" } } as never, ctx);
+  acknowledge(1);
+  ctx.hasPendingMessages = () => true;
+  fake.handlers.get("agent_settled")!({} as never, ctx);
+  assert.equal(fake.reminders(), 3);
+  ctx.hasPendingMessages = () => false;
+  fake.handlers.get("agent_settled")!({} as never, ctx);
+  assert.equal(fake.reminders(), 5);
+  assert.deepEqual(fake.messages[3], fake.messages[0]);
+  assert.deepEqual(fake.messages[4], fake.messages[2]);
+  acknowledge(3);
+  acknowledge(4);
+  fake.handlers.get("agent_settled")!({} as never, ctx);
+  assert.equal(fake.reminders(), 5);
+});
 
 test(
   "a reminder dropped by foreground abort is retried after settling, but delivered reminders are not repeated",

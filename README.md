@@ -169,10 +169,11 @@ type NodePrompt = string | {
 };
 type BraidInputNode =
   | { type: "execute"; id: string; prompt: NodePrompt; model?: string;
-      workspace?: "read-only" | "worktree" }
+      workspace?: "read-only" | "worktree"; notifyOnCompletion?: boolean }
   | { type: "decision"; id: string; prompt: NodePrompt;
-      choices: readonly string[]; model?: string; workspace?: "read-only" | "worktree" }
-  | { type: "merge"; id: string; prompt?: NodePrompt; model?: string };
+      choices: readonly string[]; model?: string; workspace?: "read-only" | "worktree"; notifyOnCompletion?: boolean }
+  | { type: "merge"; id: string; prompt?: NodePrompt; model?: string;
+      notifyOnCompletion?: boolean };
 
 type Edge = { from: string; to: string; choice?: string };
 type BraidInput = {
@@ -191,6 +192,12 @@ Use `"read-only"` for analysis, review, routing, and synthesis. Omit it or use
 `"worktree"` for the existing behavior: an isolated writable worktree in Git,
 read-only access outside Git. Explicit read-only nodes read the live source
 directory, not a fixed snapshot; see [workspace semantics](#worktrees-and-merge-agents).
+`notifyOnCompletion` is an optional boolean on all node types, defaulting to
+`false`. It requests a parent-model reminder from a supporting host adapter when
+the node succeeds or fails. The [Pi adapter](integrations/pi/README.md#node-completion-reminders)
+supports it, including retrieval of full intermediate results. Core validates
+and preserves the setting; notification delivery belongs to the host. It does
+not change scheduling, pause downstream nodes, or enable graph mutation.
 Unknown fields, unsupported node types, missing references, duplicate exact
 edges, and cycles are rejected. Cycles are rejected even if a decision might
 make them inactive. Disconnected components are allowed; every root runs.

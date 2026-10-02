@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import test from "node:test";
-import { BraidJobs } from "../jobs.js";
+import { BraidJobs, type NodeCompletion } from "../jobs.js";
 import { createBraidTools } from "../index.js";
 import { context, deferred, input, response } from "./helpers.js";
 
@@ -285,4 +285,92 @@ test("short handles resolve exactly across status, cancellation, waiting, and us
   assert.equal(jobs.cancel("job-2"), true);
   await jobs.wait("job-2");
   assert.equal(jobs.get(running.jobId)!.status, "cancelled");
+});
+
+test("large intermediate node results can be retrieved in full without claiming job usage", bounds, async (t) => {
+  const nodeFinished = deferred<NodeCompletion>();
+  const jobs = new BraidJobs(undefined, (node) => nodeFinished.resolve(node));
+  t.after(() => jobs.dispose());
+  const other = deferred<ReturnType<typeof response>>();
+  let calls = 0;
+  const output = "finding\n".repeat(15_000);
+  const ctx = context(async () => ++calls === 1 ? response(output) : other.promise);
+  const job = jobs.start({ ...input, nodes: [
+    { type: "execute", id: "__proto__", prompt: "work", notifyOnCompletion: true },
+    { type: "execute", id: "other", prompt: "work" },
+  ] }, { maxConcurrency: 1 }, ctx);
+  assert.equal(jobs.getNode(job.handle, "__proto__").status, "pending");
+  await nodeFinished.promise;
+  const { statusTool } = createBraidTools(jobs);
+  const result = await statusTool.execute("read", { jobId: job.handle, nodeId: "__proto__" }, undefined, undefined, ctx);
+  const block = result.content[0]!;
+  assert.equal(block.type, "text");
+  const text = block.type === "text" ? block.text : "";
+  assert.ok(text.length < 52_000);
+  const path = text.match(/Full node result: (.+)\]/)![1]!;
+  t.after(() => rm(dirname(path), { recursive: true }));
+  const saved = JSON.parse(await readFile(path, "utf8"));
+  assert.equal(saved.status, "running");
+  assert.equal(saved.node.output, output);
+  assert.equal(result.usage, undefined);
+  if (process.platform !== "win32") assert.equal((await stat(path)).mode & 0o777, 0o600);
+  const copy = jobs.getNode(job.jobId, "__proto__");
+  copy.output = "mutated";
+  assert.equal(jobs.getNode(job.handle, "__proto__").output, output);
+  await assert.rejects(statusTool.execute("missing-job", { nodeId: "a" }, undefined, undefined, ctx), /nodeId requires jobId/);
+  await assert.rejects(statusTool.execute("missing-node", { jobId: job.handle, nodeId: "toString" }, undefined, undefined, ctx), /Unknown Braid node/);
+  other.resolve(response());
+  await jobs.wait(job.handle);
+  const final = jobs.get(job.handle)!;
+  t.after(() => rm(dirname(final.fullOutputPath!), { recursive: true }));
+  const read = await statusTool.execute("finished-node", { jobId: job.handle, nodeId: "other" }, undefined, undefined, ctx);
+  assert.equal(read.usage, undefined);
+  assert.ok(jobs.claimUsage(job.handle));
+  assert.throws(() => jobs.getNode(job.handle, "toString"), /Unknown Braid node/);
+});
+
+test("cancelled running nodes notify as failures; skipped queued nodes and shutdown do not notify", bounds, async (t) => {
+  for (const shutdown of [false, true]) {
+    const started = deferred<void>();
+    const notifications: NodeCompletion[] = [];
+    const jobs = new BraidJobs(undefined, (node) => notifications.push(node));
+    t.after(() => jobs.dispose());
+    const job = jobs.start({ ...input, nodes: ["running", "queued"].map((id) => ({
+      type: "execute", id, prompt: "work", notifyOnCompletion: true,
+    })) }, { maxConcurrency: 1 }, context(async () => {
+      started.resolve();
+      return new Promise(() => {});
+    }));
+    await started.promise;
+    if (shutdown) jobs.dispose();
+    else jobs.cancel(job.handle);
+    await jobs.wait(job.handle);
+    assert.equal(jobs.getNode(job.handle, "queued").status, "skipped");
+    assert.equal(notifications.length, shutdown ? 0 : 1);
+    if (!shutdown) {
+      assert.equal(notifications[0]!.nodeId, "running");
+      assert.equal(notifications[0]!.status, "failed");
+      assert.equal(notifications[0]!.errorCode, "CANCELLED");
+    }
+  }
+});
+
+test("async notification failures do not affect downstream execution; preferences are snapshotted", bounds, async (t) => {
+  const notifications: NodeCompletion[] = [];
+  const jobs = new BraidJobs(undefined, async (node) => {
+    notifications.push(node);
+    throw new Error("notification failure");
+  });
+  t.after(() => jobs.dispose());
+  const submission = { ...input, nodes: [
+    { type: "execute" as const, id: "a", prompt: "work", notifyOnCompletion: true },
+    { type: "execute" as const, id: "b", prompt: "work", notifyOnCompletion: false },
+  ], edges: [{ from: "a", to: "b" }] };
+  const job = jobs.start(submission, {}, context(async () => response()));
+  submission.nodes[0]!.notifyOnCompletion = false;
+  submission.nodes[1]!.notifyOnCompletion = true;
+  await jobs.wait(job.handle);
+  assert.equal(jobs.get(job.handle)!.status, "completed");
+  assert.deepEqual(notifications.map((node) => node.nodeId), ["a"]);
+  assert.equal(jobs.getNode(job.handle, "b").status, "completed");
 });
