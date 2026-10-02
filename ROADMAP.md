@@ -1,6 +1,6 @@
 # Roadmap
 
-Braid is a small execution primitive for complete, dynamically constructed DAGs
+Braid is a small execution primitive for mutable graphs with bounded loops
 of isolated model calls. The goal is a predictable core and thin host adapters.
 This is a direction for discussion, not a delivery schedule.
 
@@ -16,6 +16,15 @@ This is a direction for discussion, not a delivery schedule.
 
 Published versions are listed in [GitHub releases](https://github.com/Epsirom/braid/releases).
 
+## 0.2 execution control
+
+- [x] Separate node definitions from immutable execution instances and history.
+- [x] Bounded structured loops with explicit feedback and fresh workspaces.
+- [x] Revision-checked graph updates, pause gates, and atomic update/resume.
+- [x] Separate isolated `merge` from source-checkout `integrate`; remove implicit integration.
+- [x] Optional failures by default and captured `requireSuccess` fail-fast policy.
+- [x] Execution-specific Pi reminders, retrieval, controls, and live topology.
+
 ## Next candidates
 
 - Migrate both packages from TypeScript 5 to 7 in one dedicated change. Explicitly
@@ -23,7 +32,7 @@ Published versions are listed in [GitHub releases](https://github.com/Epsirom/br
   consumption, package builds, and the complete Node/platform matrix. Keep Node
   declarations on 22.x while Node 22 remains the minimum supported runtime.
 - Measure real applications before changing scheduler data structures.
-- Discuss optional per-run node/output limits and host-wide admission controls.
+- Discuss optional per-run definition/output limits and host-wide admission controls.
 - Define budget semantics that account for missing usage and in-flight calls
   before adding token or spend enforcement.
 - Improve provider diagnostics and add adapters backed by real compatibility
@@ -33,9 +42,10 @@ Published versions are listed in [GitHub releases](https://github.com/Epsirom/br
 
 ## Scope
 
-Loops, durable workflows, checkpoints/resume, graphical workflow editing,
-arbitrary code nodes, graph mutation during execution, and recursive worker
-delegation remain outside the current scope. Proposals should explain why a
+Arbitrary cycles, nested/overlapping loops, durable workflow recovery, graphical
+workflow editing, arbitrary code nodes, and recursive worker delegation remain
+outside the current scope. In-memory updates/resume and Git recovery checkpoints
+are supported. Proposals should explain why a
 small runtime primitive needs the behavior rather than a caller or host adapter.
 
 Useful early contributions include minimal bug reproductions, platform testing,

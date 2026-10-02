@@ -99,7 +99,7 @@ test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and 
             } else if (foregroundCalls === 3) {
               assert.match(JSON.stringify(context.messages), /Braid job .* finished with status completed/);
               if (notifyNode) {
-                assert.ok(JSON.stringify(context.messages).includes("This is a node reminder"));
+                assert.ok(JSON.stringify(context.messages).includes("This execution reminder"));
                 assert.ok(!JSON.stringify(context.messages).includes("Braid job job-1 finished with status"));
                 message.content = [{ type: "toolCall", id: "read-node", name: "braid_status", arguments: { jobId: "job-1", nodeId: "a" } }];
                 message.stopReason = "toolUse";

@@ -91,7 +91,7 @@ try {
   }
   writeFileSync(join(consumer, "check.mjs"), `
     import assert from 'node:assert/strict';
-    import { braid, formatBudgetReminder, gitToolDefinition, finishMergeToolDefinition,
+    import { braid, startBraid, formatBudgetReminder, gitToolDefinition, finishMergeToolDefinition,
       mergeInstructions, parseGitToolArguments, parseFinishMergeArguments } from ${JSON.stringify(manifest.name)};
     for (const helper of [formatBudgetReminder, gitToolDefinition, finishMergeToolDefinition,
       mergeInstructions, parseGitToolArguments, parseFinishMergeArguments]) assert.equal(typeof helper, 'function');
@@ -103,10 +103,13 @@ try {
     let finished;
     const completion = new Promise(resolve => { finished = resolve; });
     extension({ registerTool: t => tools.set(t.name, t), registerCommand() {}, on: (event, handler) => handlers.set(event, handler), sendMessage: finished });
-    assert.deepEqual([...tools.keys()].sort(), ['braid', 'braid_cancel', 'braid_status']);
+    assert.deepEqual([...tools.keys()].sort(), ['braid', 'braid_cancel', 'braid_resume', 'braid_status', 'braid_update']);
     const result = await braid({ goal: 'smoke', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] }, { runner: async () => ({ output: 'PASS' }) });
     assert.equal(result.terminalOutputs.a.output, 'PASS');
     assert.equal(result.status, 'completed');
+    assert.equal(typeof startBraid, 'function');
+    assert.equal(Object.keys(result.executions).length, 1);
+    assert.equal(result.terminalExecutionIds[0], result.nodes.a.executionId);
     const model = { provider: 'fake', id: 'model', contextWindow: 10000 };
     const context = { cwd: process.cwd(), model, modelRegistry: {
       find: () => model,
@@ -126,10 +129,14 @@ try {
   `);
   await run([join(consumer, "check.mjs")], consumer);
   writeFileSync(join(consumer, "check.mts"), `
-    import { braid, formatBudgetReminder, gitToolDefinition, finishMergeToolDefinition, mergeInstructions, parseGitToolArguments, parseFinishMergeArguments, type BraidInput, type BraidNode, type BraidInputNode, type NodePrompt, type PromptTemplateReference, type ModelRunner } from ${JSON.stringify(manifest.name)};
+    import { braid, startBraid, formatBudgetReminder, gitToolDefinition, finishMergeToolDefinition, mergeInstructions, parseGitToolArguments, parseFinishMergeArguments, type BraidInput, type BraidNode, type BraidInputNode, type NodePrompt, type PromptTemplateReference, type ModelRunner, type BraidRun, type GraphUpdate, type NodeExecution, type IntegrateNode } from ${JSON.stringify(manifest.name)};
     import { createOpenAICompatibleRunner } from ${JSON.stringify(manifest.name + "/adapters/openai")};
     const node: BraidNode = { type: 'execute', id: 'a', prompt: 'PASS' };
     const input: BraidInput = { goal: 'smoke', nodes: [node], edges: [] };
+    const integration: IntegrateNode = { type: 'integrate', id: 'apply', requireSuccess: true };
+    const patch: GraphUpdate = { expectedRevision: 0, upsertNodes: [integration] };
+    const run: BraidRun = startBraid(input, { runner: async () => ({ output: 'ok' }) });
+    run.update(patch);
     const reference: PromptTemplateReference = { template: 'inspect', variables: { target: 'runtime' } };
     const prompt: NodePrompt = reference;
     const templated: BraidInputNode = { type: 'execute', id: 'a', prompt };
@@ -142,7 +149,7 @@ try {
     const instructions: string = mergeInstructions(request);
     const args: { args: string[]; input?: string } = parseGitToolArguments({ command: 'status', args: [] }, false);
     gitToolDefinition(false); finishMergeToolDefinition(['a']);
-    parseFinishMergeArguments({ dispositions: [{ nodeId: 'a', disposition: 'discarded', reason: 'test' }] }, ['a']);
+    parseFinishMergeArguments({ dispositions: [{ executionId: 'a', disposition: 'discarded', reason: 'test' }] }, ['a']);
   `);
   await run([join(root, "node_modules/typescript/bin/tsc"), "--noEmit", "--strict", "--skipLibCheck", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "check.mts"], consumer);
   console.log(`Package smoke passed: ${core.id} (${core.entryCount} files), ${pi.id} (${pi.entryCount} files). Public imports, types, a Pi background job, and clean builds verified outside the checkout.`);

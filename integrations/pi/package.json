@@ -1,12 +1,12 @@
 {
   "name": "@chrok/pi-braid",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "license": "MIT",
-  "description": "Pi extension for Braid: background DAG jobs and a live flow panel",
+  "description": "Pi extension for Braid: background graph jobs and a live flow panel",
   "type": "module",
   "dependencies": {
     "grok-mermaid": "^0.2.2",
-    "@chrok/braid": "0.1.3"
+    "@chrok/braid": "0.2.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -48,7 +48,7 @@
     "pi-package",
     "llm",
     "agents",
-    "dag"
+    "graph"
   ],
   "publishConfig": {
     "access": "public",

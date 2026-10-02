@@ -37,6 +37,7 @@ function lines(
 }
 
 const result: BraidResult = {
+  executions: {}, revision: 0, terminalExecutionIds: [],
   status: "failed",
   terminalOutputs: { answer: { output: "final answer" } },
   events: [

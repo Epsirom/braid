@@ -1,7 +1,8 @@
 # Resource limits and deployment responsibility
 
 Braid targets small reasoning graphs. Graph size, prompt/output size, event-log
-size, and the number of simultaneous graph submissions have no hard cap in 0.1.
+size, and the number of simultaneous graph submissions have no hard cap. Total materialized executions, including skipped branches,
+are capped at 1000 by default; loops also require a finite iteration limit.
 The scheduler rescans the graph as work settles. Consult the
 [benchmark](benchmark.md) for measured local overhead rather than treating the
 validator's deep-graph tests as a production capacity guarantee.
@@ -15,8 +16,9 @@ well as the compact definition.
 | Control | Core default | Pi default |
 | --- | --- | --- |
 | Active runtime-managed invocations per graph | 4 | 4 |
+| Materialized executions across loops/updates | 1000 (`maxExecutions`) | 1000 (`maxExecutions`) |
 | Node timeout (starts at admission) | 60 seconds | Unlimited |
-| Graph timeout (includes queueing) | 5 minutes | Unlimited |
+| Graph timeout (includes queueing and paused gates) | 5 minutes | Unlimited |
 | Caller cancellation | `AbortSignal` | `braid_cancel` / panel `c` |
 | Worker tool loop | Decision continuation / merge Git-tool loop, bounded by deadlines | Unlimited by default; optional `maxToolRounds` and `maxToolCalls` |
 | Result preview | Full result | 50 KB / 2,000 lines, then temporary full-result file |
@@ -49,9 +51,9 @@ after exporting needed results. Reloading also cancels outstanding work.
 
 Git worktree preparation, checkpointing, tracked writes, and cleanup add disk,
 Git-process, and elapsed-time overhead. Cleanup may extend wall time beyond a
-model deadline. Automatically appended merge agents are additional model calls
-and share the graph's remaining time; unchanged worktrees are released without
-an automatic merge call, but still incur workspace and checkpoint overhead.
+model deadline. Every loop visit creates a new invocation and worktree. Explicit merge/integrate
+nodes count toward the same limits; no final integration call is appended.
+Updates/resumes never reset the graph deadline or execution counter.
 Benchmark results measured outside Git do not include this lifecycle. Recoverable
 refs retain Git objects until removed.
 

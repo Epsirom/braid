@@ -1,3 +1,4 @@
+import { predecessorText } from "./helpers.js";
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import test from "node:test";
@@ -43,7 +44,7 @@ test(
       ["a", "b", "c"],
     );
     assert.deepEqual(
-      calls.map((call) => call.predecessors),
+      calls.map((call) => predecessorText(call.predecessors)),
       [
         [],
         [{ nodeId: "a", output: "result:a" }],
@@ -88,7 +89,7 @@ test(
         maxConcurrency: 2,
         runner: async (request) => {
           if (request.node.id !== "root") {
-            assert.deepEqual(request.predecessors, [
+            assert.deepEqual(predecessorText(request.predecessors), [
               { nodeId: "root", output: "root" },
             ]);
             started.push(request.node.id);
@@ -130,7 +131,7 @@ test(
         runner: async (request) => {
           if (request.node.id === "join") {
             joinStarted = true;
-            assert.deepEqual(request.predecessors, [
+            assert.deepEqual(predecessorText(request.predecessors), [
               { nodeId: "a", output: "a" },
               { nodeId: "b", output: "b" },
             ]);
@@ -206,7 +207,7 @@ test(
           called.push(request.node.id);
           if (request.node.type === "decision") request.decide!("left");
           else
-            assert.deepEqual(request.predecessors, [
+            assert.deepEqual(predecessorText(request.predecessors), [
               { nodeId: "route", output: "route", decision: "left" },
             ]);
           return { output: request.node.id };
@@ -293,7 +294,7 @@ test(
           calls.push(request.node.id);
           if (request.decide) request.decide("left");
           if (request.node.id === "join") {
-            assert.deepEqual(request.predecessors, [
+            assert.deepEqual(predecessorText(request.predecessors), [
               { nodeId: "live", output: "live" },
             ]);
           }
@@ -335,7 +336,7 @@ test(
           }
           if (request.node.id === "join") {
             joined = true;
-            assert.deepEqual(request.predecessors, [
+            assert.deepEqual(predecessorText(request.predecessors), [
               { nodeId: "fast", output: "fast" },
             ]);
           }
@@ -464,7 +465,7 @@ for (const [name, choose, code] of [
           },
         },
       );
-      assert.equal(result.status, "failed");
+      assert.equal(result.status, "completed");
       assert.equal(result.nodes.route!.error!.code, code);
       assert.equal(result.nodes.child!.status, "completed");
       assert.deepEqual(result.terminalOutputs, { child: { output: "Recovered" } });
@@ -543,7 +544,7 @@ test(
       },
     );
     assert.deepEqual(calls, ["bad", "good", "independent", "dependent", "join", "tail"]);
-    assert.equal(result.status, "failed");
+    assert.equal(result.status, "completed");
     assert.deepEqual(result.nodes.bad!.error, {
       code: "MODEL_ERROR",
       message: "provider unavailable",
@@ -605,7 +606,7 @@ test(
           rootStarted.resolve();
           await release.promise;
         } else {
-          assert.deepEqual(request.predecessors, [
+          assert.deepEqual(predecessorText(request.predecessors), [
             { nodeId: "root", output: "root" },
           ]);
         }
@@ -687,7 +688,7 @@ test(
     assert.equal(request.signal.aborted, false);
     clock.advance(1);
     const result = await run;
-    assert.equal(result.status, "failed");
+    assert.equal(result.status, "completed");
     assert.equal(result.nodes.route!.error!.code, "NODE_TIMEOUT");
     assert.equal(request.signal.aborted, true);
     assert.equal(result.nodes.child!.status, "completed");

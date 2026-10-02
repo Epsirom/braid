@@ -16,10 +16,10 @@ test("Git tool enums and validation follow node permissions with useful checkout
 
 test("finish_merge schema and errors identify only this invocation's exact sources", () => {
   const schema = finishMergeToolDefinition(["docs"]).parameters.properties.dispositions;
-  assert.deepEqual(schema.items.properties.nodeId.enum, ["docs"]);
+  assert.deepEqual(schema.items.properties.executionId.enum, ["docs"]);
   assert.equal(schema.minItems, 1);
   assert.equal(schema.maxItems, 1);
-  const item = (nodeId: string) => ({ nodeId, disposition: "integrated", reason: "Reviewed" });
+  const item = (executionId: string) => ({ executionId, disposition: "integrated", reason: "Reviewed" });
   assert.throws(() => parseFinishMergeArguments({ dispositions: [item("previous"), item("previous"), null] }, ["docs"]), error => {
     const details = JSON.parse((error as Error).message);
     assert.deepEqual(details.expected, ["docs"]);
@@ -32,7 +32,7 @@ test("finish_merge schema and errors identify only this invocation's exact sourc
   assert.deepEqual(parseFinishMergeArguments({ dispositions: [item("docs")] }, ["docs"]), [item("docs")]);
   assert.deepEqual(parseFinishMergeArguments({ dispositions: [] }, []), []);
   assert.equal(finishMergeToolDefinition([]).parameters.properties.dispositions.maxItems, 0);
-  assert.equal(finishMergeToolDefinition([]).parameters.properties.dispositions.items.properties.nodeId.enum, undefined);
+  assert.equal(finishMergeToolDefinition([]).parameters.properties.dispositions.items.properties.executionId.enum, undefined);
 });
 
 test("Git tool rejects repeated commands without rewriting legitimate explicit operands", () => {

@@ -20,10 +20,10 @@ const result = await inTemporaryDirectory(cwd => braid({
     return { output: "Known local facts are still available." };
   },
 }));
-assert.equal(result.status, "failed");
+assert.equal(result.status, "completed");
 assert.equal(result.nodes.join!.status, "completed");
 assert.match(result.terminalOutputs.join!.output, /remote: unavailable \(MODEL_ERROR\)/);
 // Unconditional successors receive failed predecessors as explicit error context.
-// A recovered answer does not erase the graph's original failure status.
+// The graph completes while the optional node failure stays in execution history.
 console.log(`status: ${result.status}; join: ${result.nodes.join!.status}`);
 console.log(result.terminalOutputs.join!.output);

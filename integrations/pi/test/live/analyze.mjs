@@ -34,7 +34,7 @@ export function analyze(run, capabilities) {
     const replies = responses.get(id) ?? [];
     const tools = replies.flatMap(r => r.content.filter(c => c.type === 'toolCall'));
     return [id, { status: node.status, error: node.error, modelCalls: replies.length, toolCalls: tools.length, tools,
-      availableTools: requests.get(id)?.tools.map(t => t.name) ?? [], workspace: result.workspaces?.[id] }];
+      availableTools: requests.get(id)?.tools.map(t => t.name) ?? [], workspace: node.workspace }];
   }));
   const errors = [...toolResults.entries()].filter(([, m]) => m.isError).map(([id, m]) => ({ id, tool: m.toolName, content: m.content }));
   check('one braid submission', calls.filter(c => c.tool === 'braid').length === 1);
@@ -58,12 +58,12 @@ export function analyze(run, capabilities) {
     }
     const sources = req.payload.mergeSources;
     if (sources) {
-      const ids = sources.map(s => s.nodeId);
+      const ids = sources.map(s => s.executionId);
       const schema = req.tools.find(t => t.name === 'finish_merge').parameters.properties.dispositions;
-      check(`${id}:scoped finish schema`, equal(schema.items.properties.nodeId.enum ?? [], ids) && schema.minItems === ids.length && schema.maxItems === ids.length);
+      check(`${id}:scoped finish schema`, equal(schema.items.properties.executionId.enum ?? [], ids) && schema.minItems === ids.length && schema.maxItems === ids.length);
       check(`${id}:bounded previews supplied`, sources.every(s => s.changes && s.changes.diff.text.length <= 6000 && !s.changes.files.some(f => ['user.txt','notes.txt'].includes(f))));
-      check(`${id}:source status supplied`, req.payload.sourceCheckoutStatus?.dirty === (scenario !== 'real-conflict'));
-      check(`${id}:only current sources finalized`, nodes[id].tools.filter(c => c.name === 'finish_merge').every(c => equal(c.arguments.dispositions.map(d => d.nodeId).sort(), [...ids].sort())));
+      if (nodes[id].workspace.mode === 'integrate') check(`${id}:source status supplied`, req.payload.sourceCheckoutStatus?.dirty === (scenario !== 'real-conflict'));
+      check(`${id}:only current sources finalized`, nodes[id].tools.filter(c => c.name === 'finish_merge').every(c => equal(c.arguments.dispositions.map(d => d.executionId).sort(), [...ids].sort())));
     }
   }
   if (scenario !== 'non-git') {
@@ -78,10 +78,10 @@ export function analyze(run, capabilities) {
     }
   }
   if (scenario === 'selective-merge') {
-    check('expected topology', equal(Object.keys(nodes).sort(), ['numeric','alternative','docs','select','__braid_merge__'].sort()));
+    check('expected topology', equal(Object.keys(nodes).sort(), ['numeric','alternative','docs','select','apply'].sort()));
     check('all nodes completed', job.status === 'completed' && Object.values(nodes).every(n => n.status === 'completed'));
-    check('correct source selected', nodes.numeric.workspace.state === 'integrated' && nodes.alternative.workspace.state === 'discarded');
-    check('automatic merge integrated docs', nodes.docs.workspace.state === 'integrated' && verification.files['README.md'].includes('Supports numeric strings.'));
+    check('correct source selected', nodes.select.workspace.dispositions.some(d => d.executionId === result.nodes.numeric.executionId && d.disposition === 'integrated') && nodes.select.workspace.dispositions.some(d => d.executionId === result.nodes.alternative.executionId && d.disposition === 'discarded'));
+    check('explicit integrate applied docs', nodes.apply.workspace.dispositions.some(d => d.executionId === result.nodes.docs.executionId && d.disposition === 'integrated') && verification.files['README.md'].includes('Supports numeric strings.'));
     check('actual arithmetic correct', equal(verification.addValues, [5,5]));
     const initial = log.find(r => r.kind === 'source_before_merge_agent' && r.nodeId === 'select');
     check('no integration before agent starts', initial?.files['calculator.cjs'] === 'exports.add = (a, b) => a - b;\n' && initial?.files['README.md'] === '# Calculator\n');
@@ -90,20 +90,20 @@ export function analyze(run, capabilities) {
     check('ignored file excluded', git(cwd, 'ls-tree', '--name-only', snapshot, 'ignored.txt') === '');
     check('distinct node worktrees', new Set(['numeric','alternative','docs'].map(id => nodes[id].workspace.worktreeRoot)).size === 3);
   } else if (scenario === 'partial-failure') {
-    check('injected failure retained', job.status === 'failed' && nodes.fragile.error?.code === 'MODEL_ERROR' && nodes.fragile.error?.message === 'LIVE_TEST_INJECTED_PROVIDER_FAILURE_AFTER_WRITE');
+    check('injected failure retained', job.status === 'completed' && nodes.fragile.error?.code === 'MODEL_ERROR' && nodes.fragile.error?.message === 'LIVE_TEST_INJECTED_PROVIDER_FAILURE_AFTER_WRITE');
     check('downstream agents executed', nodes.reviewer.status === 'completed' && nodes.recover.status === 'completed');
     check('both partial files recovered', verification.files['partial.txt'] === 'recoverable partial change\n' && verification.files['review.txt']?.includes('LIVE_TEST_INJECTED_PROVIDER_FAILURE_AFTER_WRITE'));
-    check('both sources integrated', ['fragile','reviewer'].every(id => nodes[id].workspace.state === 'integrated'));
+    check('both sources integrated', ['fragile','reviewer'].every(id => nodes.recover.workspace.dispositions.some(d => d.executionId === result.nodes[id].executionId && ['integrated','discarded'].includes(d.disposition))));
   } else if (scenario === 'non-git') {
     check('read only tools', nodes.probe.availableTools.includes('read') && nodes.probe.availableTools.includes('ls') && nodes.probe.availableTools.every(n => ['read','ls','grep','find'].includes(n)));
     check('no forbidden write', !existsSync(join(cwd, 'forbidden.txt')));
-    check('no worktree or automatic merge', job.status === 'completed' && equal(Object.keys(nodes), ['probe']) && !Object.keys(result.workspaces ?? {}).length);
+    check('read-only without a worktree', job.status === 'completed' && equal(Object.keys(nodes), ['probe']) && Object.values(result.workspaces ?? {}).every(workspace => !workspace.worktreeRoot));
   } else if (scenario === 'real-conflict') {
     check('actual Git conflict observed', errors.some(e => JSON.stringify(e).includes('CONFLICT')));
     check('agent continued cherry-pick', nodes.resolve.tools.some(c => c.name === 'git' && c.arguments.command === 'cherry-pick' && c.arguments.args.includes('--continue')));
     check('both changes preserved', job.status === 'completed' && equal(verification.settings, { precision: 3, label: 'shipping' }));
     check('no unmerged index entries', verification.unmerged === '');
-    check('both sources integrated', ['left','right'].every(id => nodes[id].workspace.state === 'integrated'));
+    check('both sources integrated', ['left','right'].every(id => nodes.resolve.workspace.dispositions.some(d => d.executionId === result.nodes[id].executionId && d.disposition === 'integrated')));
   } else if (scenario === 'merge-failure' || scenario === 'cancel') {
     const file = scenario === 'cancel' ? 'cancelled.txt' : 'salvage.txt';
     const expected = scenario === 'cancel' ? 'recoverable cancelled change' : 'recoverable merge failure change';
@@ -116,7 +116,7 @@ export function analyze(run, capabilities) {
     } else {
       check('cancel invoked once', calls.filter(c => c.tool === 'braid_cancel').length === 1);
       check('cancel preserved', job.status === 'cancelled' && nodes.worker.error?.code === 'CANCELLED');
-      check('no automatic merge', equal(Object.keys(nodes), ['worker']));
+      check('no unrequested integration', equal(Object.keys(nodes), ['worker']));
       check('real write before pause', log.some(r => r.kind === 'injected_pause'));
     }
   } else if (scenario === 'git-arguments') {
@@ -127,7 +127,7 @@ export function analyze(run, capabilities) {
     check('intentional bad diff rejected', output(findCall('diff',['diff','--stat']))?.isError && text(findCall('diff',['diff','--stat'])).includes('DUPLICATE_GIT_COMMAND'));
     check('full status reveals changes', !output(findCall('status',['--short']))?.isError && text(findCall('status',['--short'])).includes('probe-change.txt') && text(findCall('status',['--short'])).includes('status'));
     check('explicit same named path works', output(findCall('status',['--','status']))?.isError === false && text(findCall('status',['--','status'])).includes('status') && !text(findCall('status',['--','status'])).includes('probe-change.txt'));
-    check('test changes intentionally discarded', job.status === 'completed' && nodes.probe.workspace.state === 'discarded' && !existsSync(join(cwd,'probe-change.txt')) && !existsSync(join(cwd,'status')));
+    check('test changes intentionally discarded', job.status === 'completed' && nodes.cleanup.workspace.dispositions.some(d => d.executionId === result.nodes.probe.executionId && d.disposition === 'discarded') && !existsSync(join(cwd,'probe-change.txt')) && !existsSync(join(cwd,'status')));
     for (const name of ['find','grep']) if (nodes.probe.availableTools.includes(name)) {
       check(`${name}:available search actually succeeds`, [...toolResults].some(([id,m]) => id.startsWith('probe/') && m.toolName === name && !m.isError && JSON.stringify(m.content).includes(name === 'grep' ? 'argument guard marker' : 'probe-change.txt')));
     }

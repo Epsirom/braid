@@ -22,12 +22,15 @@ export const MAX_VISIBLE_NODES = 80;
 export interface BraidLiveState {
   status: "running";
   nodes: Record<string, NodeResult>;
-  nodeTypes: Record<string, "execute" | "decision" | "merge">;
+  nodeTypes: Record<string, "execute" | "decision" | "merge" | "integrate">;
   edges: Array<{ from: string; to: string; choice?: string }>;
   progress: Record<string, PiNodeProgress>;
   events: ExecutionEvent[];
   latencyMs: number;
   observedAt: number;
+  revision?: number;
+  pausedExecutionIds?: string[];
+  iterations?: Record<string, number>;
 }
 export type BraidToolDetails =
   | ((BraidResult | BraidLiveState) & {
@@ -99,7 +102,7 @@ function compact(value: unknown, max = 90): string {
 
 function graphParts(result: BraidResult | BraidLiveState): {
   nodes: Record<string, NodeResult>;
-  nodeTypes: Record<string, "execute" | "decision" | "merge">;
+  nodeTypes: Record<string, "execute" | "decision" | "merge" | "integrate">;
   edges: Array<{ from: string; to: string; choice?: string }>;
   progress: Record<string, PiNodeProgress>;
 } {
@@ -108,10 +111,17 @@ function graphParts(result: BraidResult | BraidLiveState): {
     Object.create(null),
     result.nodes,
   );
-  const nodeTypes: Record<string, "execute" | "decision" | "merge"> = Object.create(null);
+  const nodeTypes: Record<string, "execute" | "decision" | "merge" | "integrate"> = Object.create(null);
   const edges: Array<{ from: string; to: string; choice?: string }> = [];
   for (const event of result.events) {
-    if (event.type === "node_created") {
+    if (event.type === "graph_updated") {
+      edges.splice(0, edges.length, ...event.graph.edges);
+      for (const node of event.graph.nodes) {
+        nodes[node.id] ??= { id: node.id, status: "pending" };
+        Object.defineProperty(nodeTypes, node.id, { value: node.type, enumerable: true, configurable: true });
+      }
+      for (const id of Object.keys(nodes)) if (!event.graph.nodes.some(node => node.id === id)) { delete nodes[id]; delete nodeTypes[id]; }
+    } else if (event.type === "node_created") {
       nodes[event.nodeId] ??= { id: event.nodeId, status: "pending" };
       if (
         event.model !== undefined &&
@@ -184,8 +194,9 @@ function mermaidLabelLines(
   const decision =
     node.decision === undefined ? "" : ` → ${compact(node.decision, 16)}`;
   const now = "observedAt" in result ? result.observedAt : Date.now();
+  const iteration = "executions" in result ? result.executions[node.executionId ?? ""]?.iteration : result.iterations?.[id];
   const lines = [
-    `${icon} ${compact(id, 24)}`,
+    `${icon} ${compact(id, 24)}${iteration ? ` #${iteration}` : ""}`,
     `${status}${decision} · ${nodeElapsed(node, now)}`,
   ];
   if (progress) {
@@ -318,6 +329,11 @@ export function renderGraphCall(args: unknown, theme: Palette): Component {
 
 function eventText(event: ExecutionEvent): string {
   switch (event.type) {
+    case "graph_updated": return `graph updated · revision ${event.revision}`;
+    case "execution_paused": return `paused · ${compact(event.nodeId, 40)} · ${event.executionId}`;
+    case "execution_resumed": return `resumed · ${compact(event.nodeId, 40)} · ${event.executionId}`;
+    case "loop_started": return `loop ${compact(event.loopId, 40)} · iteration ${event.iteration}`;
+    case "loop_completed": return `loop ${compact(event.loopId, 40)} completed · iteration ${event.iteration}`;
     case "graph_created":
       return `graph created · ${event.nodeCount} nodes · ${event.edgeCount} edges`;
     case "node_created":
@@ -389,7 +405,7 @@ export function createLiveState(): BraidLiveState {
     progress: Object.create(null),
     events: [],
     latencyMs: 0,
-    observedAt: Date.now(),
+    observedAt: Date.now(), revision: 0, pausedExecutionIds: [], iterations: Object.create(null),
   };
 }
 
@@ -430,11 +446,35 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
     });
     return;
   }
+  if (event.type === "graph_updated") {
+    state.revision = event.revision ?? state.revision ?? 0;
+    state.edges = structuredClone([...event.graph.edges]);
+    for (const id of Object.keys(state.nodes)) if (!event.graph.nodes.some(node => node.id === id)) {
+      delete state.nodes[id]; delete state.nodeTypes[id]; delete state.progress[id];
+    }
+    for (const node of event.graph.nodes) {
+      Object.defineProperty(state.nodeTypes, node.id, { value: node.type, enumerable: true, configurable: true });
+      if (!Object.hasOwn(state.nodes, node.id)) Object.defineProperty(state.nodes, node.id, {
+        value: { id: node.id, status: "pending" }, enumerable: true, configurable: true, writable: true,
+      });
+    }
+  }
+  if (event.type === "execution_paused") state.pausedExecutionIds = [...(state.pausedExecutionIds ?? []), event.executionId!];
+  if (event.type === "execution_resumed") state.pausedExecutionIds = state.pausedExecutionIds?.filter(id => id !== event.executionId) ?? [];
   const node =
     "nodeId" in event && Object.hasOwn(state.nodes, event.nodeId)
       ? state.nodes[event.nodeId]
       : undefined;
   if (!node) return;
+  if (event.type === "node_runnable" || event.type === "node_skipped") {
+    for (const key of Object.keys(node)) if (key !== "id") delete (node as unknown as Record<string, unknown>)[key];
+    if (event.executionId) node.executionId = event.executionId;
+    delete state.progress[node.id];
+    if (event.iteration !== undefined) {
+      state.iterations ??= Object.create(null) as Record<string, number>;
+      state.iterations[node.id] = event.iteration;
+    }
+  } else if (event.executionId && node.executionId && event.executionId !== node.executionId) return;
   switch (event.type) {
     case "node_runnable":
       node.status = "runnable";
@@ -470,6 +510,7 @@ export function applyProgress(
   state: BraidLiveState,
   progress: PiNodeProgress,
 ): void {
+  if (progress.executionId && state.nodes[progress.nodeId]?.executionId !== progress.executionId) return;
   Object.defineProperty(state.progress, progress.nodeId, {
     value: progress,
     enumerable: true,
@@ -533,6 +574,8 @@ export function renderGraphResult(
         ),
       );
   }
+  if ("pausedExecutionIds" in result && result.pausedExecutionIds?.length) lines.push(theme.fg("warning", `${result.pausedExecutionIds.length} paused executions · revision ${result.revision ?? 0}`));
+  if ("executions" in result) lines.push(theme.fg("dim", `${Object.keys(result.executions).length} executions · revision ${result.revision}`));
   const chartStart = lines.length;
   const chart = mermaidLines(result, theme);
   lines.push(...chart);

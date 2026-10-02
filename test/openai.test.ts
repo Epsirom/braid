@@ -1,3 +1,4 @@
+import { predecessorText } from "./helpers.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type BraidInput } from "../src/index.js";
@@ -159,7 +160,7 @@ test("OpenAI-compatible adapter runs decision -> parallel branches -> join end t
     assert.ok(payload.prompt.length > 0);
     if (payload.nodeId === "route" && body.messages.length === 2) {
       assert.equal(body.model, "router");
-      assert.deepEqual(payload.predecessors, []);
+      assert.deepEqual(predecessorText(payload.predecessors as import("../src/types.js").PredecessorOutput[]), []);
       assert.deepEqual(body.tool_choice, {
         type: "function",
         function: { name: "decide" },
@@ -197,13 +198,13 @@ test("OpenAI-compatible adapter runs decision -> parallel branches -> join end t
     // Every other node has a new conversation, not the decision's tool history.
     assert.equal(body.messages.length, 2);
     if (payload.nodeId === "join") {
-      assert.deepEqual(payload.predecessors, [
+      assert.deepEqual(predecessorText(payload.predecessors as import("../src/types.js").PredecessorOutput[]), [
         { nodeId: "a", output: "answer:a", model: "writer-v1" },
         { nodeId: "b", output: "answer:b", model: "default-v1" },
       ]);
     } else {
       assert.ok(payload.nodeId === "a" || payload.nodeId === "b");
-      assert.deepEqual(payload.predecessors, [
+      assert.deepEqual(predecessorText(payload.predecessors as import("../src/types.js").PredecessorOutput[]), [
         {
           nodeId: "route",
           decision: "left",
@@ -338,7 +339,7 @@ for (const [name, responses, expectedCode, node] of [
         }),
       },
     );
-    assert.equal(result.status, "failed");
+    assert.equal(result.status, "completed");
     assert.equal(result.nodes.route!.error!.code, expectedCode);
     assert.equal(result.nodes.child!.status, "completed");
     assert.equal(mock.calls.length, responses.length + 1);
@@ -408,7 +409,7 @@ test("OpenAI merge tools expose agent-selected Git operations and finish disposi
   const fake = queuedFetch([
     completion("Inspect first", [toolCall('{"command":"status","args":["--short"]}', "git")]),
     completion(null, [toolCall('{"command":"cherry-pick","args":["checkpoint"]}', "git")]),
-    completion(null, [toolCall('{"dispositions":[{"nodeId":"work","disposition":"integrated","reason":"Reviewed and picked"}]}', "finish_merge")]),
+    completion(null, [toolCall('{"dispositions":[{"executionId":"work","disposition":"integrated","reason":"Reviewed and picked"}]}', "finish_merge")]),
     completion("Integrated"),
   ]);
   const gitCalls: string[][] = [];
@@ -417,17 +418,17 @@ test("OpenAI merge tools expose agent-selected Git operations and finish disposi
   const result = await runner({
     goal: "Integrate reviewed work", node: { type: "merge", id: "merge" },
     predecessors: [], execution: { runId: "run", rootRunId: "run" }, signal: new AbortController().signal,
-    workspace: { nodeId: "merge", mode: "merge", sourceRoot: "/repo", workingDirectory: "/repo", state: "ready" },
+    workspace: { nodeId: "merge", mode: "integrate", sourceRoot: "/repo", workingDirectory: "/repo", state: "ready" },
     git: async args => { gitCalls.push(args); return { exitCode: 0, stdout: "", stderr: "" }; },
     merge: {
-      sources: [{ nodeId: "work", mode: "worktree", workingDirectory: "/work", state: "ready", checkpointRef: "checkpoint",
+      sources: [{ nodeId: "work", executionId: "work", mode: "worktree", workingDirectory: "/work", state: "ready", checkpointRef: "checkpoint",
         changes: { files: ["chosen.txt"], filesTruncated: false, stat: { text: "1 file changed", truncated: false }, diff: { text: "+chosen change", truncated: false } } }],
       sourceStatus: { text: " M user.txt\n", truncated: false, dirty: true },
       finish: async values => { dispositions.push(...values); },
     },
   });
   assert.deepEqual(gitCalls, [["status", "--short"], ["cherry-pick", "checkpoint"]]);
-  assert.deepEqual(dispositions, [{ nodeId: "work", disposition: "integrated", reason: "Reviewed and picked" }]);
+  assert.deepEqual(dispositions, [{ executionId: "work", disposition: "integrated", reason: "Reviewed and picked" }]);
   assert.equal(result.output, "Inspect first\n\nIntegrated");
   assert.deepEqual(result.usage, { inputTokens: 40, outputTokens: 8 });
   assert.deepEqual(fake.calls[0]!.tools!.map(tool => tool.function.name), ["git", "finish_merge"]);
@@ -438,11 +439,11 @@ test("OpenAI merge tools expose agent-selected Git operations and finish disposi
   assert.deepEqual(payload.mergeSources[0].changes.files, ["chosen.txt"]);
   assert.equal(payload.sourceCheckoutStatus.dirty, true);
   const finishSchema = fake.calls[0]!.tools![1]!.function.parameters as unknown as {
-    properties: { dispositions: { minItems: number; maxItems: number; items: { properties: { nodeId: { enum: string[] } } } } };
+    properties: { dispositions: { minItems: number; maxItems: number; items: { properties: { executionId: { enum: string[] } } } } };
   };
   assert.equal(finishSchema.properties.dispositions.minItems, 1);
   assert.equal(finishSchema.properties.dispositions.maxItems, 1);
-  assert.deepEqual(finishSchema.properties.dispositions.items.properties.nodeId.enum, ["work"]);
+  assert.deepEqual(finishSchema.properties.dispositions.items.properties.executionId.enum, ["work"]);
   assert.equal(fake.calls[3]!.messages.filter(message => message.role === "tool").length, 3);
 });
 

@@ -13,6 +13,9 @@ garbage collection is requested before each run. Deadlines are disabled.
 
 ## Sample run — 2026-09-27
 
+These measurements predate 0.2 execution history and live controls; rerun before
+using them to estimate current overhead.
+
 Environment: Apple M5, darwin/arm64, Node v25.9.0.
 The following subset uses concurrency 4:
 

@@ -5,7 +5,11 @@ export interface ExecuteNode {
   model?: string;
   /** Ask the parent adapter for a completion reminder on success or failure. Default: false. */
   notifyOnCompletion?: boolean;
-  /** Read the live cwd without a worktree; defaults to worktree in Git, read-only elsewhere. */
+  /** Optional failures remain in history; true aborts the entire run on failure. */
+  requireSuccess?: boolean;
+  /** Hold this execution's outgoing dependencies until explicitly resumed. */
+  pauseAfter?: boolean;
+  /** Fresh predecessor snapshot in Git; read-only disables writes. Read-only outside Git. */
   workspace?: "read-only" | "worktree";
 }
 
@@ -17,21 +21,31 @@ export interface DecisionNode {
   model?: string;
   /** Ask the parent adapter for a completion reminder on success or failure. Default: false. */
   notifyOnCompletion?: boolean;
-  /** Read the live cwd without a worktree; defaults to worktree in Git, read-only elsewhere. */
+  /** Optional failures remain in history; true aborts the entire run on failure. */
+  requireSuccess?: boolean;
+  /** Hold this execution's outgoing dependencies until explicitly resumed. */
+  pauseAfter?: boolean;
+  /** Fresh predecessor snapshot in Git; read-only disables writes. Read-only outside Git. */
   workspace?: "read-only" | "worktree";
 }
 
 export interface MergeNode {
   type: "merge";
   id: string;
-  /** Defaults to reviewing and integrating all predecessor workspaces. */
+  /** Defaults to combining selected predecessor checkpoints in a new worktree. */
   prompt?: string;
   model?: string;
   /** Ask the parent adapter for a completion reminder on success or failure. Default: false. */
   notifyOnCompletion?: boolean;
+  /** Optional failures remain in history; true aborts the entire run on failure. */
+  requireSuccess?: boolean;
+  /** Hold this execution's outgoing dependencies until explicitly resumed. */
+  pauseAfter?: boolean;
 }
 
-export type BraidNode = ExecuteNode | DecisionNode | MergeNode;
+export interface IntegrateNode extends Omit<MergeNode, "type"> { type: "integrate"; }
+
+export type BraidNode = ExecuteNode | DecisionNode | MergeNode | IntegrateNode;
 
 /** A reference to a template in this graph submission; values are inserted literally. */
 export interface PromptTemplateReference {
@@ -45,11 +59,13 @@ export type NodePrompt = string | PromptTemplateReference;
 export type BraidInputNode =
   | (Omit<ExecuteNode, "prompt"> & { prompt: NodePrompt })
   | (Omit<DecisionNode, "prompt"> & { prompt: NodePrompt })
-  | (Omit<MergeNode, "prompt"> & { prompt?: NodePrompt });
+  | (Omit<MergeNode, "prompt"> & { prompt?: NodePrompt })
+  | (Omit<IntegrateNode, "prompt"> & { prompt?: NodePrompt });
 
 export interface NodeWorkspace {
   nodeId: string;
-  mode: "read-only" | "worktree" | "merge";
+  executionId?: string;
+  mode: "read-only" | "worktree" | "integrate";
   workingDirectory: string;
   worktreeRoot?: string;
   sourceRoot?: string;
@@ -59,12 +75,14 @@ export interface NodeWorkspace {
   checkpointCommit?: string;
   /** Source checkout snapshot captured before a merge agent receives write access. */
   backupRef?: string;
+  /** Agent decisions for this merge/integrate invocation; sources remain reusable. */
+  dispositions?: MergeDisposition[];
   state: "preparing" | "ready" | "integrated" | "discarded" | "archived" | "failed";
   reason?: string;
 }
 
 export interface MergeDisposition {
-  nodeId: string;
+  executionId: string;
   disposition: "integrated" | "discarded" | "archived";
   reason: string;
 }
@@ -75,7 +93,7 @@ export interface GitPreview {
 }
 
 export interface MergeSource extends NodeWorkspace {
-  /** Inspection-only summaries relative to snapshotCommit; omitted by custom runners. */
+  /** Inspection-only summaries relative to the job’s initial snapshot; omitted by custom runners. */
   changes?: { files: string[]; filesTruncated: boolean; stat: GitPreview; diff: GitPreview };
 }
 
@@ -95,6 +113,16 @@ export interface Edge {
   to: string;
   /** Omit for an unconditional edge, including from a decision node. */
   choice?: string;
+  /** Explicit feedback edge into the named loop's entry. */
+  feedback?: string;
+  /** Pin a dependency to a historical execution rather than the current round. */
+  executionId?: string;
+}
+
+export interface LoopDefinition {
+  id: string;
+  entry: string;
+  maxIterations: number;
 }
 
 export interface BraidInput {
@@ -103,6 +131,7 @@ export interface BraidInput {
   edges: readonly Edge[];
   /** Named {{variable}} templates, expanded and validated before execution. */
   promptTemplates?: Readonly<Record<string, string>>;
+  loops?: readonly LoopDefinition[];
 }
 
 export type NodeStatus =
@@ -126,6 +155,7 @@ export interface NodeOutput {
 
 export interface PredecessorOutput extends NodeOutput {
   nodeId: string;
+  executionId?: string;
   /** Failed predecessors remain available on unconditional edges. */
   error?: ExecutionError;
   workspace?: NodeWorkspace;
@@ -133,8 +163,12 @@ export interface PredecessorOutput extends NodeOutput {
 
 export interface ExecutionContext {
   runId: string;
-  /** Equal to runId in v0.1; reserved identity for future shared-root accounting. */
+  /** Equal to runId; reserved identity for future shared-root accounting. */
   rootRunId: string;
+  executionId?: string;
+  revision?: number;
+  loopId?: string;
+  iteration?: number;
 }
 
 export interface ModelRequest {
@@ -151,7 +185,7 @@ export interface ModelRequest {
   workspace?: NodeWorkspace;
   /** Rejects read-only writes; adapters must wrap mutating file tools so cleanup waits for in-flight writes. */
   withWorkspaceWrite?: <T>(operation: () => Promise<T>) => Promise<T>;
-  /** Local Git operations: inspection for workers, integration commands for merge nodes. */
+  /** Local Git operations: inspection for workers, integration commands for merge/integrate nodes. */
   git?: (args: string[], input?: string) => Promise<GitResult>;
   /** Merge nodes must account for every source before returning their final answer. */
   merge?: {
@@ -173,11 +207,15 @@ export interface ModelResponse {
 /** Each call starts a fresh conversation and exposes only the adapter’s declared capabilities. */
 export type ModelRunner = (request: ModelRequest) => Promise<ModelResponse>;
 
-/** Frozen snapshots in emission order. Creation means admission of the submitted DAG, not mutation. */
+/** Frozen snapshots in emission order, including graph revisions and execution identities. */
 export type ExecutionEvent = Readonly<
   {
     sequence: number;
     timestamp: number;
+    executionId?: string;
+    revision?: number;
+    loopId?: string;
+    iteration?: number;
   } & (
     | { type: "graph_created"; nodeCount: number; edgeCount: number }
     | {
@@ -186,7 +224,12 @@ export type ExecutionEvent = Readonly<
         nodeType: BraidNode["type"];
         model?: string;
       }
-    | { type: "edge_created"; from: string; to: string; choice?: string }
+    | ({ type: "edge_created" } & Edge)
+    | { type: "graph_updated"; graph: BraidInput }
+    | { type: "execution_paused"; nodeId: string }
+    | { type: "execution_resumed"; nodeId: string }
+    | { type: "loop_started"; entry: string }
+    | { type: "loop_completed"; entry: string }
     | { type: "workspace_updated"; workspace: Readonly<NodeWorkspace> }
     | { type: "node_runnable"; nodeId: string }
     | {
@@ -195,6 +238,7 @@ export type ExecutionEvent = Readonly<
         to: string;
         output: string;
         decision?: string;
+        fromExecutionId?: string;
       }
     | { type: "node_started"; nodeId: string; model?: string }
     | ({
@@ -227,7 +271,7 @@ export type ExecutionEvent = Readonly<
 export interface BraidOptions {
   runner: ModelRunner;
   defaultModel?: string;
-  /** Source checkout. Nodes may opt into live read-only access; outside Git, all nodes are read-only. */
+  /** Source checkout for the initial snapshot and explicit integrate nodes. */
   cwd?: string;
   /** Positive integer. Defaults to 4. */
   maxConcurrency?: number;
@@ -239,6 +283,8 @@ export interface BraidOptions {
   signal?: AbortSignal;
   /** Live observer. Throws/rejections are ignored; returned work is not awaited. */
   onEvent?: (event: ExecutionEvent) => void;
+  /** Total admitted executions across loops and graph updates. Default: 1000. */
+  maxExecutions?: number;
 }
 
 export interface ExecutionError {
@@ -251,30 +297,40 @@ export interface ExecutionError {
     | "GRAPH_TIMEOUT"
     | "CANCELLED"
     | "MERGE_FAILED"
-    | "CLEANUP_FAILED";
+    | "CLEANUP_FAILED"
+    | "CHECKPOINT_FAILED"
+    | "WORKSPACE_MERGE_REQUIRED"
+    | "EXECUTION_LIMIT"
+    | "LOOP_LIMIT"
+    | "REQUIRED_NODE_FAILED"
+    | "SCHEDULING_ERROR";
   message: string;
 }
 
 /** Output is absent if no valid response was received; status determines success. */
 export interface NodeResult extends Partial<NodeOutput> {
   id: string;
+  executionId?: string;
   status: NodeStatus;
   usage?: TokenUsage;
   startedAt?: number;
   finishedAt?: number;
   latencyMs?: number;
   error?: ExecutionError;
-  skipReason?: "inactive" | "upstream_failed" | "graph_timeout" | "cancelled";
+  skipReason?: "inactive" | "upstream_failed" | "graph_timeout" | "cancelled" | "run_failed";
   workspace?: NodeWorkspace;
 }
 
 export interface BraidResult {
   status: "completed" | "failed";
-  /** Completed nodes with no active outgoing edges in this execution. */
+  /** Latest output per node among completed, unconsumed executions; exact IDs are in terminalExecutionIds. */
   terminalOutputs: Record<string, NodeOutput>;
-  /** Immutable execution log, including graph construction and runtime handoffs. */
+  /** Immutable execution log, including graph revisions and runtime handoffs. */
   events: readonly ExecutionEvent[];
   nodes: Record<string, NodeResult>;
+  executions: Record<string, NodeExecution>;
+  terminalExecutionIds: string[];
+  revision: number;
   workspaces?: Record<string, NodeWorkspace>;
   error?: ExecutionError;
   metadata: ExecutionContext & {
@@ -285,4 +341,48 @@ export interface BraidResult {
     usage: TokenUsage;
     usageReportedNodes: number;
   };
+}
+
+
+/** One immutable invocation definition, with a result updated only by that invocation. */
+export interface NodeExecution extends NodeResult {
+  executionId: string;
+  node: BraidNode;
+  revision: number;
+  predecessorExecutionIds: string[];
+  loopId?: string;
+  iteration?: number;
+}
+
+export interface GraphUpdate {
+  expectedRevision: number;
+  upsertNodes?: readonly BraidInputNode[];
+  removeNodeIds?: readonly string[];
+  addEdges?: readonly Edge[];
+  removeEdges?: readonly Edge[];
+  promptTemplates?: Readonly<Record<string, string>>;
+  loops?: readonly LoopDefinition[];
+  /** Resume these completed executions atomically with this update. */
+  resume?: readonly string[];
+}
+
+export interface BraidSnapshot {
+  runId: string;
+  status: "running" | "waiting" | "finalizing" | "completed" | "failed";
+  revision: number;
+  graph: BraidInput;
+  nodes: Record<string, NodeResult>;
+  executions: Record<string, NodeExecution>;
+  pausedExecutionIds: string[];
+  /** Present as soon as a run-wide failure or cancellation starts draining work. */
+  error?: ExecutionError;
+}
+
+export interface BraidRun {
+  runId: string;
+  result: Promise<BraidResult>;
+  snapshot(): BraidSnapshot;
+  update(update: GraphUpdate): BraidSnapshot;
+  resume(executionIds: readonly string[], expectedRevision: number): BraidSnapshot;
+  cancel(): void;
 }

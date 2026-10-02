@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased
+## Unreleased — 0.2.0 (breaking)
+
+- Separate editable node definitions from unique execution instances, preserving
+  captured prompts, policies, predecessor identities, and historical results.
+- Support bounded structured loops with explicit decision feedback, finite round
+  limits, fresh worktrees per visit, and no overlapping/nested rounds (#30).
+- Add `startBraid`, revision-checked live updates, `pauseAfter`, and atomic
+  update/resume. Pi adds `braid_update`, `braid_resume`, exact execution retrieval,
+  iteration-aware reminders, and live topology updates (#31).
+- Derive successor worktrees from predecessor checkpoints, including read-only
+  executions. Split isolated `merge` from source-checkout `integrate`; remove
+  automatic final integration. Workspace keys and merge dispositions use
+  `executionId`; sources remain reusable until final cleanup.
+- Make invocation failures optional by default. Captured `requireSuccess: true`
+  failures abort siblings and fail the job after writes/checkpoint/cleanup drain.
+  Add a finite `maxExecutions` budget shared across loops and live updates.
+
 
 - Add submission-local `promptTemplates` and explicit template-reference prompts
   to core and Pi's `braid` tool. Core expands `{{name}}` placeholders using literal
@@ -12,8 +28,8 @@
   running nodes, with delivery acknowledgement and dropped-message retries.
   Skipped nodes stay silent; whole-job reminders remain enabled. Add
   `braid_status({jobId, nodeId})` for full intermediate outputs/errors, with
-  overflow results saved to a private temporary file. Scheduling and submitted
-  graphs remain unchanged; this implements the reminder portion of #31.
+  overflow results saved to a private temporary file. Live graph
+  controls are now available through the execution-control API above (#31).
 
 ## 0.1.3 — 2026-09-29
 

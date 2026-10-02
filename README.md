@@ -1,15 +1,15 @@
 # Braid
 
 Braid is a small execution runtime for dynamically constructed graphs of isolated
-model invocations. A parent submits a complete DAG in one call; Braid resolves
-routing and dependencies, runs independent nodes concurrently, and returns the
-successful execution-terminal outputs. It is an agent primitive, not a workflow
+model invocations. A parent submits a graph and can update it while it runs. Braid resolves
+routing and dependencies, runs independent nodes concurrently, supports bounded
+loops, and retains the outputs and checkpoints of each execution. It is an agent primitive, not a workflow
 builder.
 
 [![CI](https://github.com/Epsirom/braid/actions/workflows/ci.yml/badge.svg)](https://github.com/Epsirom/braid/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**v0.1:** Experimental, TypeScript, Node.js 22+, ESM, no runtime dependencies.
+**v0.2:** Experimental, TypeScript, Node.js 22+, ESM, no runtime dependencies.
 The core has no Pi, provider SDK, or framework dependency.
 
 ## Why Braid?
@@ -67,8 +67,8 @@ try {
 
 For a live provider, use the adapter in the API example below. Installation and
 running the example above do not make model requests. In a Git checkout, Braid
-creates node worktrees and may append a merge agent that can integrate changes
-into the source checkout. Read [workspace behavior](#worktrees-and-merge-agents)
+creates a fresh worktree for each execution. Only explicit `integrate` nodes
+write results back to the source checkout. Read [workspace behavior](#worktrees-and-merge-agents)
 before running a custom adapter against a repository.
 
 ## Install in Pi
@@ -169,17 +169,21 @@ type NodePrompt = string | {
 };
 type BraidInputNode =
   | { type: "execute"; id: string; prompt: NodePrompt; model?: string;
-      workspace?: "read-only" | "worktree"; notifyOnCompletion?: boolean }
+      workspace?: "read-only" | "worktree"; notifyOnCompletion?: boolean;
+      requireSuccess?: boolean; pauseAfter?: boolean }
   | { type: "decision"; id: string; prompt: NodePrompt;
-      choices: readonly string[]; model?: string; workspace?: "read-only" | "worktree"; notifyOnCompletion?: boolean }
-  | { type: "merge"; id: string; prompt?: NodePrompt; model?: string;
-      notifyOnCompletion?: boolean };
+      choices: readonly string[]; model?: string; workspace?: "read-only" | "worktree"; notifyOnCompletion?: boolean;
+      requireSuccess?: boolean; pauseAfter?: boolean }
+  | { type: "merge" | "integrate"; id: string; prompt?: NodePrompt; model?: string;
+      notifyOnCompletion?: boolean;
+      requireSuccess?: boolean; pauseAfter?: boolean };
 
-type Edge = { from: string; to: string; choice?: string };
+type Edge = { from: string; to: string; choice?: string; feedback?: string; executionId?: string };
 type BraidInput = {
   goal: string;
   nodes: readonly BraidInputNode[];
   edges: readonly Edge[];
+  loops?: readonly { id: string; entry: string; maxIterations: number }[];
   promptTemplates?: Readonly<Record<string, string>>;
 };
 ```
@@ -187,27 +191,23 @@ type BraidInput = {
 IDs are unique, non-empty strings. Goals, models, choices, plain-string prompts,
 and rendered prompts must be non-empty strings when present. Decision choices
 must be non-empty and unique.
-`workspace` is optional on execute/decision nodes and forbidden on merge nodes.
-Use `"read-only"` for analysis, review, routing, and synthesis. Omit it or use
-`"worktree"` for the existing behavior: an isolated writable worktree in Git,
-read-only access outside Git. Explicit read-only nodes read the live source
-directory, not a fixed snapshot; see [workspace semantics](#worktrees-and-merge-agents).
-`notifyOnCompletion` is an optional boolean on all node types, defaulting to
-`false`. It requests a parent-model reminder from a supporting host adapter when
-the node succeeds or fails. The [Pi adapter](integrations/pi/README.md#node-completion-reminders)
-supports it, including retrieval of full intermediate results. Core validates
-and preserves the setting; notification delivery belongs to the host. It does
-not change scheduling, pause downstream nodes, or enable graph mutation.
-Unknown fields, unsupported node types, missing references, duplicate exact
-edges, and cycles are rejected. Cycles are rejected even if a decision might
-make them inactive. Disconnected components are allowed; every root runs.
-Distinct choices may connect the same node pair. Choices need not all have
-outgoing edges, and decisions may themselves be terminal.
+`workspace` is optional on execute/decision nodes and forbidden on merge/integrate
+nodes. Both read-only and writable Git executions get isolated predecessor
+snapshots; read-only disables write capabilities. Outside Git all filesystem
+access is read-only. `notifyOnCompletion` requests host reminders, `pauseAfter`
+holds outgoing scheduling, and `requireSuccess` makes failure abort the whole run.
+All three booleans default to false.
 
-`validateGraph(input)` is also exported for validation without execution. It and
-`braid` throw `GraphValidationError` for invalid graphs, before invoking a model.
-Invalid runtime options throw `TypeError`. Execution failures return a result
-with `status: "failed"` instead of discarding the run's successful outputs.
+Unknown fields, missing references, duplicate exact edges, and undeclared cycles
+are rejected. Declared structured loops require a finite iteration limit and an
+explicit feedback edge. Disconnected components are allowed; every root runs.
+Only decision nodes may have choice edges, and choices need not all have exits.
+
+`validateGraph(input)` validates without execution. Invalid graphs raise
+`GraphValidationError`; invalid options raise `TypeError`. Optional invocation
+failures remain in execution history; required or infrastructure failures make
+the run fail. See [execution control](docs/execution-control.md) for the complete
+loop, live update, pause/resume, and failure contract.
 
 ### Reusable prompt templates
 
@@ -276,9 +276,10 @@ length or token cap (see [resource limits](docs/resource-limits.md)).
 | `runner` | Required | A fresh, isolated invocation for each call |
 | `defaultModel` | Adapter default | Overridden by each node's `model` |
 | `cwd` | `process.cwd()` | Source checkout for core-managed worktrees; non-Git directories grant read-only capabilities |
+| `maxExecutions` | `1000` | Total materialized executions, including skipped branches, across all rounds and updates; positive safe integer |
 | `maxConcurrency` | `4` | Maximum simultaneous runtime-managed node invocations; positive integer |
 | `nodeTimeoutMs` | `60_000` | Separate deadline for each node, starting when it runs (not while queued) |
-| `graphTimeoutMs` | `300_000` | Whole execution deadline, including node queueing; starts after validation |
+| `graphTimeoutMs` | `300_000` | Whole execution deadline, including node queueing and paused gates; starts after validation |
 | `signal` | None | Caller cancellation signal; aborts running nodes and marks queued nodes cancelled |
 | `onEvent` | None | Live observer for graph/node creation, readiness, starts, handoffs, completions, skips, failures, and graph completion |
 
@@ -325,9 +326,16 @@ A pending node waits until **all incoming edges are resolved**. Then:
 Failures propagate as context through unconditional edges, allowing successors
 and merge agents to inspect errors and recover partial work. Failed decisions
 cannot activate choice-labelled edges; their unconditional successors can run.
-Skip propagation uses topological order. There are no automatic retries. The
-graph still reports failure if any node fails, even if a later node recovers its
-work successfully.
+There are no automatic retries. Failures are optional by default; a
+`requireSuccess: true` execution failure aborts the whole run, cancels siblings,
+and drains writes and cleanup. The policy is captured when the instance starts.
+Graph deadlines and execution limits remain active while paused.
+
+Nodes are mutable definitions; execution instances retain captured prompts and
+inputs. `startBraid` exposes revision-checked `update`, `resume`, `snapshot`, and
+`cancel`. Updates can change running nodes, completed nodes, edges, templates, and
+loop topology at any time before finalization. Completion uses the latest graph.
+See [loops and live updates](docs/execution-control.md) for schemas and examples.
 
 ## Execution events
 
@@ -337,37 +345,22 @@ timestamped. The log is diagnostic data and does not alter scheduling; observer
 exceptions and rejected promises are ignored. Event payloads are frozen before
 being retained and delivered.
 
-The event sequence includes:
+The event sequence includes initial `graph_created`, `node_created`, and
+`edge_created`; revision-bearing `graph_updated`; and per-instance
+`node_runnable`, `node_started`, `workspace_updated`, `handoff`, `node_completed`,
+`node_failed`, or `node_skipped`. Instance events carry `executionId`, admission
+`revision`, and optional `loopId`/`iteration`. Handoffs also identify their exact
+`fromExecutionId`.
 
-- `graph_created`, `node_created`, and `edge_created` when the submitted DAG is
-  admitted; an appended final merge emits its own node/edge creation events.
-- `node_runnable` and `node_started` when scheduling admits a node.
-- `workspace_updated` for Git workspace preparation, checkpointing, cleanup, and
-  explicitly requested read-only workspaces.
-- `handoff` for every direct predecessor output passed to a downstream node,
-  including the upstream decision when present.
-- `node_completed`, `node_skipped`, and `node_failed`, including output,
-  decision, model, usage, latency, skip reason, or error where applicable.
-  A node start/completion/failure event is emitted only once the corresponding
-  transition is admitted; a provider call that expires before admission has no
-  `node_started` event.
-- `graph_completed` with execution terminal IDs, or `graph_failed` with the
-  representative error and any successful terminal IDs.
+`loop_started`/`loop_completed` report rounds. `execution_paused` and
+`execution_resumed` report gates. `graph_completed` or `graph_failed` terminates
+the log. Completion/failure is published after checkpointing. Node events repeat
+with distinct execution IDs when the same definition runs again.
 
-`node_completed` and `node_failed` include node latency; `node_completed` also
-includes the selected decision and reported usage when available. Event output
-is diagnostic context and may be previewed by an adapter; `BraidResult.events`
-retains the complete event payloads.
-
-The core event stream is intentionally a log, not a second control API. It does
-not permit graph mutation or runtime intervention. A Pi adapter can use it to
-render live topology, handoffs, failures, and active nodes without reconstructing
-scheduler state from final results. Tool selection remains the responsibility of
-the host agent; the optional Pi adapter supplies explicit proactive-use guidance
-so Braid is considered for complex multi-branch reasoning without forcing it for
-every prompt. In the Pi adapter, nodes can inspect the live source read-only or
-edit individual Git worktrees; nodes outside Git stay read-only. Merge agents
-handle integration; the parent reviews results and runs shell commands and tests.
+Use `startBraid` methods to control a run. Event callbacks are observers; throwing
+or rejecting does not change scheduler behavior. The Pi panel displays current
+topology, iterations, pause gates, and a bounded event preview; complete history
+remains available in the result.
 
 ## Context isolation and model runners
 
@@ -413,124 +406,66 @@ Read tools follow the host filesystem permissions and are not a security sandbox
 
 ### Worktrees and merge agents
 
-By default, execute and decision nodes in a Git checkout receive detached worktrees
-under `os.tmpdir()/braid-workspaces-*/<unique-id>`. The first writable node captures tracked
-staged/unstaged changes, deletions, and non-ignored untracked files with a temporary
-index. Snapshot creation preserves the source index, branch, and files. Ignored
-files are not copied, and submodules are not initialized or recursively captured.
-Pi rejects writes inside submodules. If a custom runner populates one, core
-reports cleanup failure and retains the worktree rather than losing those files.
-Empty repositories are supported. Worktree nodes share this baseline until a merge
-ends; subsequent worktree nodes snapshot the current source checkout. Relative working directories
-are preserved. Code changes do not implicitly flow into successor worktrees.
+Every Git execution owns a fresh worktree. Roots use the job's initial snapshot
+of tracked edits and non-ignored untracked files without changing the real index.
+Successors use immutable predecessor checkpoints; read-only executions use the
+same snapshot rules with writes disabled. Independent code branches require an
+explicit merge before an ordinary worker consumes them together.
 
-Set `workspace: "read-only"` on execute/decision nodes that only inspect or reason
-about files. They read the original `cwd`, including ignored files accessible to
-the adapter, without creating a snapshot, worktree, checkpoint, or merge source.
-In Git they retain inspection commands (`status`, `diff`, `show`, `log`,
-`ls-files`, `rev-parse`), with optional Git index writes disabled. Relative paths
-use the original `cwd`, including when it is a subdirectory of the repository.
-These reads observe the live checkout: parent edits or concurrent merge nodes
-may change files during execution. Use worktree mode when a fixed snapshot is
-needed. Predecessor edits are visible in the source only after integration;
-their worktrees/checkpoints can still be inspected explicitly.
+- `merge` combines selected predecessor checkpoints in a **new isolated worktree**.
+- `integrate` applies selected results to the **invoking working checkout**.
 
-Explicit read-only allocations appear in `workspace_updated`, node/predecessor
-workspace metadata, and `result.workspaces` with mode `read-only` and state
-`ready`. They have no cleanup lifecycle or recovery refs. Implicit non-Git
-read-only runs retain their existing event/result behavior. A custom runner is
-trusted code and must honor the workspace capability; this is not an OS sandbox.
-
-For a mixed graph, give review branches `workspace: "read-only"` and leave
-implementation branches in worktree mode. Use a read-only execute node to
-summarize findings; a merge node integrates file changes and does not accept
-the `workspace` field.
-
-Add `{ type: "merge", id: "integrate" }` with incoming edges from any number of
-sources. The merge agent receives predecessor errors, workspace paths, and Git
-checkpoint refs and operates directly in the invoking checkout. **Core does not
-run merge, cherry-pick, or apply automatically.** The agent reviews each source,
-chooses which changes to integrate and how, resolves conflicts, then calls the
-`finish_merge` tool with exactly one disposition and reason per source:
+There is no automatic final integration. Add an explicit integrate node when
+results should reach the working branch. Both operations accept optional prompts
+and require `finish_merge` with exactly one disposition per source:
 
 ```json
 { "dispositions": [
-  { "nodeId": "implementation", "disposition": "integrated", "reason": "Cherry-picked the reviewed checkpoint" },
-  { "nodeId": "alternative", "disposition": "discarded", "reason": "The selected implementation supersedes this alternative" }
+  { "executionId": "<source-execution-id>", "disposition": "integrated", "reason": "Applied the reviewed checkpoint" }
 ] }
 ```
 
-Each merge request includes bounded changed-file lists, diff statistics and diff
-previews in `mergeSources[].changes`, plus the invoking checkout's dirty status.
-These are inspection aids; the agent still chooses every integration operation.
-The `finish_merge` schema lists only the current source IDs and requires exactly
-one decision per source. Invalid calls report missing, unexpected and duplicate
-IDs so the agent can correct the call.
+The agent chooses merge, cherry-pick, apply, restore, or file edits; core never
+chooses for it. Sources include bounded diffs relative to the initial job
+snapshot. Integrate also receives the current source checkout's dirty status and
+must preserve unrelated user changes. Unresolved conflicts, a missing finish
+call, or an `archived` disposition fail the operation.
 
-The model-facing `git` tool takes a `command` from the node's allowed command
-enum and a separate `args` array. For example, `{"command":"show","args":["REF:path"]}`.
-The programmatic `ModelRequest.git` API continues to accept the complete argument
-array. Rejected commands include relevant supported alternatives; Braid never
-silently substitutes a different Git operation. A first argument identical to
-`command` is rejected before execution: `{ "command": "status", "args": ["status"] }`
-would otherwise silently query a path named `status`. Use `args: ["--short"]`
-for the full status, or `args: ["--", "status"]` for an intentional path filter;
-same-named branches can use a full ref such as `refs/heads/diff`.
+The model-facing Git tool separates `command` from `args`, for example
+`{ "command": "show", "args": ["REF:path"] }`. The programmatic `request.git`
+accepts the complete argument array. Duplicate command prefixes, network Git,
+branch switching, and filesystem-boundary overrides are rejected.
 
-`archived` means integration failed. A missing finish call, unresolved conflicts,
-or any archived source fails the merge node. Once the agent ends, core removes
-its predecessor worktrees. Every removed source retains a checkpoint ref,
-including intentionally discarded changes and ignored node output files. A
-later consumer can inspect a removed source through `git show <checkpointRef>`.
-Core also records `backupRef` for the source checkout before each merge agent.
+Instances checkpoint before downstream admission. All source checkpoints remain
+reusable; no merge consumes or deletes a predecessor's result. Job cleanup
+archives and removes owned worktrees, retaining refs under
+`refs/braid/checkpoints/`. Integration additionally captures a pre-write
+`backupRef` under `refs/braid/merge-backups/`. Target workspace `dispositions`
+record the agent's source selections.
 
-When declared nodes settle, core releases worktrees whose contents match their
-own snapshot, including those from failed nodes, as `discarded` with reason
-`No changes from snapshot`. Their checkpoint refs point to the snapshot commit
-without creating empty checkpoint commits; original node errors remain visible.
-This comparison includes ignored output files. Explicit merge nodes still run
-even when their sources have no changes.
+`result.workspaces` is keyed by execution ID; `result.nodes[id].workspace` is the
+latest convenience view. Cleaned paths are historical; recover their contents
+with `git show <checkpointRef>:path` or inspect changes with
+`git diff <snapshotCommit> <checkpointRef>`. Remove reviewed refs explicitly with
+`git update-ref -d <ref>`.
 
-When worktrees with changes remain, core appends an ordinary merge
-agent named `__braid_merge__` (with a suffix if needed), using the run's default
-model. It appears in results, events, usage, and terminal outputs. Merge nodes
-are exclusive within a graph and serialized per source checkout across runs in
-the same process. Avoid concurrent external edits to that checkout while merging;
-this lock does not coordinate other processes or the parent editor.
-
-Analysis-only graphs therefore keep their declared terminal outputs and do not
-incur an automatic merge model call. Consumers should not assume that every Git
-run includes `__braid_merge__`; use `terminalOutputs` for the completed endpoints.
-
-Cancellation or graph timeout prevents new merge agents from starting. Core waits
-for tracked writes, archives remaining work, and removes its worktrees. Merge
-agent failure follows the same archive/cleanup path. It does not reset the source
-checkout: partial integration or Git conflict state may remain for review, with
-`backupRef` available for recovery. Filesystem/Git cleanup errors are reported as
-`CLEANUP_FAILED` with retained workspace paths; a process crash cannot run cleanup.
-
-`result.workspaces` and `node.workspace` report paths, states, reasons, and refs.
-A cleaned worktree path is historical; use `checkpointRef` to recover its contents:
-
-```sh
-git show <checkpointRef>:path/to/file
-git diff <snapshotCommit> <checkpointRef>
-```
-
-Recovery refs live under `refs/braid/checkpoints/` and `refs/braid/merge-backups/`.
-After reviewing them, remove a particular ref with `git update-ref -d <ref>`.
-They preserve recoverable Git objects without retaining worktree directories.
+Cancellation drains tracked writes before cleanup. Checkpoint/cleanup failures
+fail the run and retain unsafe-to-remove paths. Failed integration may leave
+partial source edits or conflict state with its backup available for recovery;
+it does not reset the checkout. Source integrations serialize within one process;
+this does not coordinate parent edits or other processes. Read-only workers remain
+isolated from those source edits. See [execution control](docs/execution-control.md).
 
 **The adapter is a trust boundary, not a security sandbox.** It must avoid shared
 conversation state, expose only its declared capabilities, and forward `signal` to its provider.
 The core never gives the model arbitrary code execution or a recursive Braid
 tool. An optional Pi adapter translates this same contract without changing the
-runtime; the core v0.1 package does not depend on Pi. See
+runtime; the core package does not depend on Pi. See
 [`integrations/pi/README.md`](integrations/pi/README.md) for installation and testing.
 
 The included OpenAI-compatible adapter uses fresh Chat Completions contexts,
 a strict `decide({ choice })` tool and one tool-free continuation for decisions.
-Merge nodes use a local `git` / `finish_merge` tool loop; ordinary OpenAI nodes
+Merge/integrate nodes use a local `git` / `finish_merge` tool loop; ordinary OpenAI nodes
 have no filesystem tools. Pi exposes read and guarded write tools plus these
 core Git/merge tools. Tool errors go back to merge agents for recovery. Both
 adapters sum usage across their model calls and forward cancellation.
@@ -558,16 +493,14 @@ remain 60 seconds per node and 5 minutes per graph.
 `BraidResult` contains:
 
 - `status`: `completed` or `failed`.
-- `terminalOutputs`: `{ [nodeId]: { output, decision?, model? } }` for completed
-  nodes with **no active outgoing edges in this execution**. This includes a
-  decision selecting a choice with no successor. A completed node does not
-  become terminal merely because its active successor failed or was skipped.
-- `nodes`: all node states plus available output, decision, model, usage, error,
-  skip reason, start/end timestamps (Unix milliseconds), and latency in ms.
-  Skipped nodes have no start time or latency. Nodes without a valid
-  response have no output. A failed decision may retain its text and selected
-  choice for debugging; choice-labelled edges still remain blocked.
-- `workspaces`: Git workspace states and recovery refs, including cleaned sources.
+- `terminalOutputs`: latest successful unconsumed outputs keyed by node ID.
+- `terminalExecutionIds`: exact IDs of the successful execution endpoints.
+- `nodes`: latest states/results per node ID, including output, error, usage,
+  timing, and workspace metadata. A pending definition has no execution ID yet.
+- `executions`: all immutable invocation definitions and their final results,
+  keyed by execution ID, including historical rounds and deleted definitions.
+- `revision`: the last committed graph revision.
+- `workspaces`: execution-keyed workspace states, recovery refs, and merge choices.
 - `events`: the immutable execution log described above. `onEvent` observes live
   copies of the same state transitions while the run is in progress.
 - `metadata`: run/root identity, timestamps, monotonic latency, summed reported
@@ -593,7 +526,7 @@ uncancelled provider work after timeout can outlive a slot.
 
 - [`src/types.ts`](src/types.ts): public graph, provider, and result types.
 - [`src/validate.ts`](src/validate.ts): strict validation, graph snapshot,
-  dependency indexes, and iterative DAG validation.
+  dependency indexes, and iterative validation of acyclic regions and structured loops.
 - [`src/runtime.ts`](src/runtime.ts): edge resolution, explicit state transitions,
   bounded concurrent scheduling, invocation deadlines, execution events, and result accounting.
 - [`src/workspaces.ts`](src/workspaces.ts): Git snapshots, checkpoint refs, merge
@@ -603,18 +536,18 @@ uncancelled provider work after timeout can outlive a slot.
 - [`test/`](test/): deterministic scheduling, execution-event, and intercepted HTTP/tool tests.
 
 There is one in-memory execution context per run, plus a process-local mutex
-per source checkout for merge agents. Worktree registration and removal are
+per source checkout for integrate agents. Worktree registration and removal are
 serialized per common Git directory within the process; model calls remain
 concurrent. These locks do not coordinate other processes. `rootRunId` equals
-`runId` in v0.1. Centralized invocation admission and
+`runId`. Centralized invocation admission and
 usage aggregation leave places to thread a shared root budget in a future
 nested-run implementation; **nested runs and shared budget enforcement are not
-implemented**. The current scheduler deliberately rescans a small DAG after
+implemented**. The current scheduler deliberately rescans a small graph after
 completions; `onEvent` is an observer for diagnostics and visualization, not a
 scheduler event bus.
 
-Out of scope: loops, arbitrary code nodes, persistent workflows, saved templates,
-resuming saved runs, human approval, editing UI, user-directed graph mutation,
+Out of scope: arbitrary/unstructured cycles, nested/overlapping loops, arbitrary
+code nodes, durable workflow recovery, saved templates, a graphical editing UI,
 and recursive Braid calls from model nodes.
 
 ## Contributing and project status

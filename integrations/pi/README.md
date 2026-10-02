@@ -2,7 +2,8 @@
 
 This optional Pi integration runs Braid graphs as background jobs. It registers:
 
-- `braid` — submit a complete DAG and immediately receive a `jobId`.
+- `braid_update` / `braid_resume` — edit live definitions or release paused executions.
+- `braid` — submit a graph with optional bounded loops and immediately receive a `jobId`.
 - `braid_status` — retrieve progress and results with `{ "jobId": "..." }`, or
   add `"nodeId": "..."` for a single node's full output/error. Omit both IDs to
   list jobs in the current session.
@@ -43,59 +44,44 @@ Templates are scoped to this submission, with no saved registry. See the
 [core template guide](https://github.com/Epsirom/braid#reusable-prompt-templates)
 for a complete graph and validation rules.
 
-## Node completion reminders
+## Node completion reminders and live control
 
-Set `notifyOnCompletion: true` on selected execute, decision, or merge nodes to
-receive a reminder as soon as each node succeeds or fails:
+Set `notifyOnCompletion: true` on selected nodes for completion/failure reminders.
+Each reminder identifies the exact `executionId` and optional loop iteration.
+`braid_status({jobId, executionId})` retrieves that instance's full output/error;
+`nodeId` selects the latest instance. Skipped executions stay silent. Reminders
+are acknowledged when they enter context and retried if foreground cancellation
+drops the queued message. Session shutdown suppresses delivery.
+
+Set `pauseAfter: true` to hold an execution's outgoing scheduling and receive a
+pause reminder. Independent branches continue. Fetch `braid_status` to obtain
+`execution.revision` and `execution.pausedExecutionIds`, then:
 
 ```json
 {
-  "goal": "Investigate two independent areas",
-  "nodes": [
-    {
-      "type": "execute",
-      "id": "survey",
-      "prompt": "Identify areas that need deeper investigation.",
-      "workspace": "read-only",
-      "notifyOnCompletion": true
-    },
-    {
-      "type": "execute",
-      "id": "tests",
-      "prompt": "Review test coverage and report gaps.",
-      "workspace": "read-only"
-    }
-  ],
-  "edges": []
+  "jobId": "job-1",
+  "expectedRevision": 0,
+  "upsertNodes": [{ "type": "execute", "id": "fix", "prompt": "Implement the findings." }],
+  "addEdges": [{ "from": "inspect", "to": "fix", "executionId": "<paused-execution-id>" }],
+  "resume": ["<paused-execution-id>"]
 }
 ```
 
-The setting defaults to `false`. A `braid-node-completed` system reminder names
-the job handle, node, and `completed`/`failed` status (with an error code on
-failure). Its details include the UUID and completion event sequence. Each node
-currently executes once per job, so the job and node IDs identify the execution.
-The reminder resumes an idle parent or queues a follow-up during streaming,
-using the same delivery and dropped-message retry mechanism as job reminders.
-Delivered reminders are not retried, and notification failures do not fail nodes.
+Pass this to `braid_update`. It validates and commits the full change and resume
+atomically. To continue without edits, call `braid_resume({jobId,
+expectedRevision, executionIds})`. Definitions can be changed while executions
+are running or waiting, including inside a loop. Existing instances keep their
+captured prompt, inputs, and policy; completion routes through the latest graph.
+Rejected revisions/changes have no effects. Finalized jobs cannot be reopened.
 
-Use `braid_status({"jobId":"job-1","nodeId":"survey"})` to retrieve the full
-node output or error immediately, even while other nodes run. The returned
-`node` includes its status, available output/error, timing, and workspace data.
-Large responses are bounded and include a path to the complete JSON. The normal
-job query keeps its compact live previews and final results. Focused node reads
-do not claim usage; retrieve the finished whole job to account for its usage.
+`requireSuccess` defaults to false. Optional failures retain artifacts and allow
+unconditional recovery; required failures cancel siblings and fail the job after
+cleanup. All loops declare a finite `maxIterations`; total `maxExecutions`
+defaults to 1000 and spans updates. Deadlines keep running through pauses.
 
-Running nodes that fail due to timeout or cancellation also notify, with their
-error code. Nodes skipped without executing (inactive branches, blocked paths,
-or queued work skipped on cancellation/timeout) do not notify. Automatically
-appended merge nodes have no opt-in and do not send node reminders. Session
-shutdown suppresses both node and job reminders.
-
-Whole-job completion reminders remain enabled, including when the last node
-also requests a reminder. A node reminder does not mean the job has finished.
-It does not pause downstream work or allow editing the running graph; submit
-the complete DAG as before. Scheduling gates and JIT graph updates are separate
-future work tracked in [#31](https://github.com/Epsirom/braid/issues/31).
+See [execution control](../../docs/execution-control.md) for loop schemas, exact
+update semantics, historical dependencies, and workspace lineage. There is no
+scheduler persistence across Pi reloads. Reminders alone do not pause execution.
 
 ## Live flow panel
 
@@ -135,8 +121,7 @@ an explicit per-turn planning policy to Pi's system prompt and tool metadata:
 - do not use Braid for simple one-step answers, trivial direct edits, or shell
   work; keep tests and shell commands in the parent agent;
 - the user does not need to say “Braid” or design the graph;
-- when Braid fits, the model should construct and submit the complete graph
-  immediately, continue independent work, and retrieve the terminal outputs after
+- when Braid fits, the model should submit a graph and refine it with live updates when needed, continue independent work, and retrieve the terminal outputs after
   the completion reminder.
 
 This is a recommendation to the model, not hard enforcement. If a model still
@@ -145,7 +130,7 @@ or strengthen the project/system prompt for that model. The adapter explicitly
 asks the model to make the delegation choice before directly inspecting the
 repository. Do not add a generic `always call braid` rule: that would waste
 model calls and bypass direct tools.
-Merge agents review and integrate node changes; the parent reviews results and runs tests.
+Merge nodes combine snapshots; integrate nodes apply selected changes to the caller; the parent reviews results and runs tests.
 Each node gets a new Pi AI context containing only the Braid goal, its node prompt,
 labelled direct predecessor outputs, and workspace metadata. It receives Pi's
 `read` and `ls`, plus `grep` when local `rg` is available and `find` when
@@ -155,9 +140,9 @@ exposing search tools and again before executing them; missing tools are not
 installed by Braid. Git worktrees additionally receive `write` and `edit`.
 It receives no parent transcript, shell tools, test runner, skills, or arbitrary
 code execution. Decision nodes additionally receive `decide`. Git nodes receive
-local Git inspection; merge nodes also receive Git integration commands and
+local Git inspection; merge/integrate nodes also receive Git integration commands and
 `finish_merge`. Merge agents receive bounded changed-file lists, diff statistics
-and previews, plus the source checkout's dirty status. The model-facing `git`
+and previews; integrate also receives the source checkout's dirty status. The model-facing `git`
 tool has a role-specific `command` enum and separate `args`; `finish_merge` lists
 only the current source IDs and diagnoses missing, duplicate or unexpected IDs.
 
@@ -235,88 +220,46 @@ They make no provider requests.
 
 ## Node filesystem capabilities
 
-Core owns workspace preparation, checkpointing, serialization, and cleanup for
-all integrations. Pi exposes `read` and `ls` in all directories, plus search tools whose local dependencies are available.
-In Git, execute and decision nodes default to `write`/`edit` restricted to their
-own detached worktree, plus local Git inspection. Set `workspace: "read-only"`
-to keep read tools and Git inspection without write/edit tools or a worktree.
-Omit `workspace` or use `"worktree"` for implementation or a fixed snapshot.
-Outside Git, both modes remain read-only. Nodes never receive shell commands or
-a test runner. The `workspace` field is forbidden on merge nodes.
+Inside Git, every execution gets a new worktree based on predecessor checkpoints.
+Root executions use the initial job snapshot, including tracked and non-ignored
+untracked caller edits. Later loop rounds get new worktrees; they never reuse a
+previous invocation's workspace. `workspace: "read-only"` disables write/edit
+while retaining an isolated snapshot. Outside Git, all filesystem access is
+read-only. Search tools require installed `rg`/`fd`; shell/tests are unavailable.
 
-Read-only nodes inspect the live source directory at the original `cwd`, including
-accessible ignored files. They create no snapshot, checkpoint, or merge source.
-Parent edits and concurrent merges may change what they read during execution.
-Implementation changes reach the source only through integration; a downstream
-review can inspect a predecessor worktree/checkpoint explicitly, or run after a
-merge to review the integrated source. Use a read-only execute node to summarize
-findings, and a merge node to integrate file changes.
+`merge` combines predecessor results into a new isolated worktree. `integrate`
+applies selected changes to the invoking checkout and preserves user edits. Both
+expose Git integration commands and `finish_merge`, require per-source
+`executionId` dispositions, and forbid the `workspace` property. Use ordinary
+execute/decision nodes for analysis; a worker with independent changed code
+inputs needs an explicit merge to produce its starting snapshot.
 
-For example, this graph reviews two concerns before implementing a fix. Core
-invokes an automatic merge only if the implementation leaves file changes:
+Nothing is automatically integrated at job completion. To apply implementation
+results, explicitly connect them to an integrate node:
 
 ```json
 {
-  "goal": "Review the cache and fix confirmed problems.",
+  "goal": "Implement and review a fix",
   "nodes": [
-    { "type": "execute", "id": "correctness", "workspace": "read-only", "prompt": "Review cache correctness." },
-    { "type": "execute", "id": "tests", "workspace": "read-only", "prompt": "Inspect test coverage and identify missing cases; do not run tests." },
-    { "type": "execute", "id": "fix", "prompt": "Implement confirmed fixes and regression tests from both reviews." }
+    { "type": "execute", "id": "implement", "prompt": "Make the fix." },
+    { "type": "execute", "id": "review", "prompt": "Review the fix.", "workspace": "read-only" },
+    { "type": "integrate", "id": "apply", "requireSuccess": true }
   ],
-  "edges": [{ "from": "correctness", "to": "fix" }, { "from": "tests", "to": "fix" }]
+  "edges": [{ "from": "implement", "to": "review" }, { "from": "review", "to": "apply" }]
 }
 ```
 
-The initial snapshot includes tracked staged/unstaged changes, deletions, and
-non-ignored untracked files. It preserves the source index and files. Ignored
-files are not copied; submodules are not initialized or recursively snapshotted,
-and Pi rejects writes inside them to keep checkpoint recovery complete.
-Workers using worktrees share that baseline until a merge ends, after which new workers
-snapshot the current source checkout. Uncommitted predecessor changes are not
-implicitly applied to downstream workers. Their paths and checkpoint refs are
-available as context for inspection.
+`braid_status` retains execution-keyed workspace paths, checkpoint refs, and target
+merge dispositions. Cleanup removes worktrees while keeping immutable checkpoints.
+Inspect with `git show <checkpointRef>:path`. Integration additionally saves a
+pre-write backup ref. A failed integration can leave partial source changes or
+conflicts; core does not reset the caller's checkout. Integrations serialize
+within the process, without locking parent edits or other processes.
 
-A `merge` node accepts multiple predecessors and an optional prompt/model. It
-operates in the source checkout, with guarded `write`/`edit` and local `git`
-commands (`add`, `commit`, `merge`, `cherry-pick`, `apply`, `restore`, plus
-inspection). The agent decides which changes to use and how to integrate them.
-Core never automatically merges or cherry-picks. The agent must call
-`finish_merge` with `integrated`, `discarded`, or `archived` and a reason for every
-source. Tool errors and conflicts go back to the agent for recovery. Failed
-predecessors pass errors and partial work along unconditional edges.
-
-Core removes processed source worktrees after the merge agent finishes. After
-declared nodes settle, unchanged worktrees are released as `discarded` with reason
-`No changes from snapshot`, retaining recovery refs. Only remaining worktrees
-with changes trigger a final merge agent, so analysis-only graphs keep their
-declared terminal outputs without an extra model call. Explicit merge nodes run
-even for unchanged sources.
-Its model, tool calls, budgets, events, and usage behave like any other node.
-Missing finish calls, unresolved conflicts, or archived sources fail the merge.
-Cancellation, timeout, and failure archive remaining changes and clean worktrees;
-they do not start new merge agents after graph cancellation.
-
-`braid_status` includes core's `workspaces` map with workspace paths, states,
-reasons, `checkpointRef`, and pre-merge `backupRef`. The panel distinguishes active
-worktrees from cleaned workspaces. Worktrees use
-`os.tmpdir()/braid-workspaces-*/<unique-id>`; after removal their contents remain
-recoverable from `refs/braid/checkpoints/*`. Use `git show <checkpointRef>:<path>`
-or `git diff <snapshotCommit> <checkpointRef>` to inspect archived changes.
-Remove individual recovery refs with `git update-ref -d <ref>` once reviewed.
-Explicit read-only nodes appear with mode `read-only` and state `ready`, without
-checkpoint or backup refs; their files stay in the source directory.
-
-A failed merge does not reset partial changes or conflict state in the source
-checkout. Its `backupRef` preserves the pre-agent snapshot. Cleanup errors report
-retained paths instead of silently claiming success. A process crash cannot run
-cleanup. The merge mutex coordinates runs in the same process only; avoid parent
-edits to the source checkout while a merge agent is running.
-
-File writes reject external paths, Git metadata, symlinks, hard links, and special
-files. Read access follows Pi's normal permissions. This does not replace an OS
-sandbox against concurrent filesystem attacks. For programmatic use, pass
-`createPiRunner(...)` to core `braid(..., { cwd, runner })`; calling the runner
-directly without a core workspace gives read-only capabilities.
+Pi's guarded writes reject external paths, Git metadata, symlinks, hard links,
+and special files. This is a capability boundary, not an OS sandbox. A custom
+runner must honor the core write barrier so cancellation can drain writes before
+cleanup. Calling the Pi runner without an assigned workspace stays read-only.
 
 Tool and time budgets are unlimited by default in Pi. To set finite hard limits,
 pass any of these fields in the `braid` tool's `options`:
@@ -326,10 +269,11 @@ pass any of these fields in the `braid` tool's `options`:
 | `maxToolRounds` | Maximum assistant responses containing tool calls, per node |
 | `maxToolCalls` | Maximum total requested tool calls, per node |
 | `nodeTimeoutMs` | Time allowed for each node after it starts, in milliseconds |
-| `graphTimeoutMs` | Time allowed for the entire graph, including queueing, in milliseconds |
+| `graphTimeoutMs` | Time allowed for the entire graph, including queueing and pauses, in milliseconds |
+| `maxExecutions` | Total materialized execution records, including skips; default 1000, positive safe integer |
 
 For example, `options: { maxToolRounds: 20, maxToolCalls: 60, nodeTimeoutMs: 120000 }`.
-Omit a field for no limit; programmatic runner/job options also accept `Infinity`.
+Omit tool/time fields for no tool/time limit; programmatic time/tool options also accept `Infinity`. The total execution limit is always finite.
 Tool limits must be positive safe integers. Counts include `decide`, `git`,
 `finish_merge`, and rejected
 tool requests. A batch exceeding either tool limit is rejected before execution

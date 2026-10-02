@@ -81,7 +81,7 @@ async function git(
     ...(options.signal ? { signal: options.signal } : {}),
     maxBuffer: 8 * 1024 * 1024,
   });
-  return stdout.trim();
+  return args.includes("-z") ? stdout : stdout.trim();
 }
 
 /** Read-only, bounded output. A large diff cannot fail workspace preparation or flood the model. */
@@ -102,12 +102,13 @@ async function gitPreview(cwd: string, args: string[], limit: number): Promise<G
   return { text: output.slice(0, limit), truncated: overflow || output.length > limit };
 }
 
-/** Writable workers share a snapshot; explicit read-only workers inspect the live cwd. */
+/** Each execution owns a fresh worktree derived from immutable predecessor checkpoints. */
 export class GitWorkspaces {
   private snapshots = new Map<string, Promise<Snapshot | undefined>>();
   private records = new Map<string, NodeWorkspace>();
   private locations = new Map<string, Snapshot>();
   private allocated = new Set<Snapshot>();
+  private mergeParents = new Map<string, string[]>();
 
   constructor(
     private readonly cwd: string,
@@ -115,7 +116,7 @@ export class GitWorkspaces {
   ) {}
 
   private report(workspace: NodeWorkspace): void {
-    this.records.set(workspace.nodeId, workspace);
+    this.records.set(workspace.executionId ?? workspace.nodeId, workspace);
     try {
       this.onWorkspace?.({ ...workspace });
     } catch {
@@ -146,7 +147,7 @@ export class GitWorkspaces {
     return realpath(sourceRoot);
   }
 
-  private async snapshot(): Promise<Snapshot | undefined> {
+  private async snapshot(extraFiles: string[] = []): Promise<Snapshot | undefined> {
     const sourceRoot = await this.sourceRoot();
     if (!sourceRoot) return undefined;
     const commonDirectory = await realpath(resolve(sourceRoot, await git(sourceRoot, ["rev-parse", "--git-common-dir"])));
@@ -180,6 +181,15 @@ export class GitWorkspaces {
       // A temporary index captures tracked edits/deletions and non-ignored new files
       // without changing the parent's real index, branch, or working files.
       await git(sourceRoot, ["add", "--all", "--", "."], options);
+      // Include ignored files contributed by selected sources, without capturing the
+      // caller's unrelated ignored build products or dependencies.
+      const existing: string[] = [];
+      for (const file of extraFiles) {
+        try { await access(join(sourceRoot, file)); existing.push(file); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      }
+      for (let index = 0; index < existing.length; index += 256)
+        await git(sourceRoot, ["add", "--force", "--all", "--", ...existing.slice(index, index + 256)], options);
       const tree = await git(sourceRoot, ["write-tree"], options);
       const baseTree = baseCommit ? await git(sourceRoot, ["rev-parse", `${baseCommit}^{tree}`]) : undefined;
       const snapshotCommit = tree === baseTree ? baseCommit! : await git(sourceRoot, [
@@ -203,58 +213,73 @@ export class GitWorkspaces {
     }
   }
 
-  async prepare(request: ModelRequest): Promise<NodeWorkspace> {
-    request.signal.throwIfAborted();
-    if (request.node.type !== "merge" && request.node.workspace === "read-only") {
-      const sourceRoot = await this.sourceRoot();
-      request.signal.throwIfAborted();
-      const workspace: NodeWorkspace = {
-        nodeId: request.node.id, mode: "read-only", workingDirectory: this.cwd, state: "ready",
-        ...(sourceRoot ? { sourceRoot } : {}),
-      };
-      this.report(workspace);
-      return workspace;
+  /** Freeze the job's root snapshot before any invocation can write to the checkout. */
+  async initialize(runId: string): Promise<void> {
+    if (!this.snapshots.has(runId)) this.snapshots.set(runId, this.snapshot());
+    await this.snapshots.get(runId);
+  }
+
+  private id(request: ModelRequest): string {
+    return request.execution.executionId ?? request.node.id;
+  }
+
+  private async inputCommit(request: ModelRequest, snapshot: Snapshot): Promise<string> {
+    const commits = [...new Set(request.predecessors.map(value => value.workspace?.checkpointCommit).filter((value): value is string => !!value))];
+    if (!commits.length) return snapshot.snapshotCommit;
+    const trees = await Promise.all(commits.map(commit => git(snapshot.sourceRoot, ["rev-parse", `${commit}^{tree}`])));
+    if (new Set(trees).size === 1) return commits[0]!;
+    for (const candidate of commits) {
+      let containsAll = true;
+      for (const ancestor of commits) {
+        try { await git(snapshot.sourceRoot, ["merge-base", "--is-ancestor", ancestor, candidate]); }
+        catch (error) {
+          if ((error as { code?: number }).code !== 1) throw error;
+          containsAll = false;
+          break;
+        }
+      }
+      if (containsAll) return candidate;
     }
-    let pending = this.snapshots.get(request.execution.runId);
-    if (!pending) {
-      // Do not bind the shared snapshot to one node's cancellation signal.
-      pending = this.snapshot();
-      this.snapshots.set(request.execution.runId, pending);
-    }
-    const snapshot = await pending;
+    throw new WorkspaceInputError("Multiple independent predecessor snapshots require an explicit merge node");
+  }
+
+  async prepare(request: ModelRequest, merge = false): Promise<NodeWorkspace> {
     request.signal.throwIfAborted();
+    await this.initialize(request.execution.runId);
+    const snapshot = await this.snapshots.get(request.execution.runId);
+    const executionId = this.id(request);
     if (!snapshot) {
       const workspace: NodeWorkspace = {
-        nodeId: request.node.id, mode: "read-only", workingDirectory: this.cwd, state: "ready",
+        nodeId: request.node.id, executionId, mode: "read-only", workingDirectory: this.cwd, state: "ready",
       };
       this.report(workspace);
       return workspace;
     }
+    const commit = merge ? snapshot.snapshotCommit : await this.inputCommit(request, snapshot);
+    request.signal.throwIfAborted();
     const worktreeRoot = join(snapshot.directory, crypto.randomUUID());
+    const readOnly = request.node.type !== "merge" && request.node.type !== "integrate" && request.node.workspace === "read-only";
     const workspace: NodeWorkspace = {
-      nodeId: request.node.id, mode: "worktree", state: "preparing",
+      nodeId: request.node.id, executionId, mode: readOnly ? "read-only" : "worktree", state: "preparing",
       sourceRoot: snapshot.sourceRoot, worktreeRoot,
       workingDirectory: resolve(worktreeRoot, snapshot.cwdSuffix),
-      snapshotCommit: snapshot.snapshotCommit,
+      snapshotCommit: commit,
       ...(snapshot.baseCommit ? { baseCommit: snapshot.baseCommit } : {}),
     };
-    this.locations.set(request.node.id, snapshot);
+    this.locations.set(executionId, snapshot);
     this.report(workspace);
     try {
-      // Finish registration even if cancellation arrives during creation. Report
-      // the retained path before observing cancellation, so it can be recovered.
       await withWorktreeLock(snapshot.commonDirectory, async () => {
         request.signal.throwIfAborted();
-        await git(snapshot.sourceRoot, ["worktree", "add", "--detach", worktreeRoot, snapshot.snapshotCommit], {
+        await git(snapshot.sourceRoot, ["worktree", "add", "--detach", worktreeRoot, commit], {
           hooksDirectory: snapshot.hooksDirectory,
         });
       });
-      // The original cwd may be an empty or ignored directory absent from Git.
       await mkdir(workspace.workingDirectory, { recursive: true });
       workspace.state = "ready";
     } catch (error) {
       workspace.state = "failed";
-      throw new Error(`Cannot prepare isolated node worktree at ${worktreeRoot}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      throw new Error(`Cannot prepare isolated execution worktree at ${worktreeRoot}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     } finally {
       this.report(workspace);
     }
@@ -262,20 +287,53 @@ export class GitWorkspaces {
     return workspace;
   }
 
+  /** Seal before releasing any downstream execution, including failures with partial writes. */
+  async seal(request: ModelRequest): Promise<void> {
+    try { await this.sealCheckpoint(request); }
+    catch (error) { throw new WorkspaceCheckpointError(error instanceof Error ? error.message : String(error), { cause: error }); }
+  }
+
+  private async sealCheckpoint(request: ModelRequest): Promise<void> {
+    const workspace = this.records.get(this.id(request));
+    if (!workspace || workspace.checkpointRef || workspace.state === "failed") return;
+    if (workspace.mode === "integrate") {
+      const baseline = (await this.snapshots.get(request.execution.runId))!;
+      const selected = this.mergeParents.get(this.id(request)) ?? [];
+      const files = new Set<string>();
+      for (const commit of selected) {
+        const paths = await git(baseline.sourceRoot, ["diff", "--name-only", "-z", baseline.snapshotCommit, commit, "--"]);
+        for (const path of paths.split("\0").filter(Boolean)) files.add(path);
+      }
+      const after = await this.snapshot([...files]);
+      if (!after) throw new Error("Integration checkout disappeared");
+      const parents = [...new Set([after.snapshotCommit, ...selected])];
+      const commit = parents.length === 1 ? after.snapshotCommit : await git(after.sourceRoot, [
+        "-c", "user.name=Braid", "-c", "user.email=braid@localhost", "-c", "commit.gpgsign=false",
+        "commit-tree", after.snapshotTree, ...parents.flatMap(parent => ["-p", parent]), "-m", "Braid integration checkpoint",
+      ], { hooksDirectory: after.hooksDirectory });
+      workspace.checkpointCommit = commit;
+      workspace.checkpointRef = `refs/braid/checkpoints/${crypto.randomUUID()}`;
+      await git(after.sourceRoot, ["update-ref", workspace.checkpointRef, commit]);
+      this.report(workspace);
+    } else if (workspace.worktreeRoot) {
+      await this.checkpoint(workspace);
+    }
+  }
+
   all(): Record<string, NodeWorkspace> {
-    return Object.fromEntries([...this.records].map(([id, workspace]) => [id, { ...workspace }]));
+    return structuredClone(Object.fromEntries(this.records));
   }
 
   pending(): string[] {
     return [...this.records.values()]
-      .filter(workspace => workspace.mode === "worktree" && ["preparing", "ready", "failed"].includes(workspace.state))
-      .map(workspace => workspace.nodeId);
+      .filter(workspace => workspace.worktreeRoot && ["preparing", "ready", "failed"].includes(workspace.state))
+      .map(workspace => workspace.executionId ?? workspace.nodeId);
   }
 
   /** Checkpoint every file, including ignored node outputs, before releasing a worktree. */
   private async checkpoint(workspace: NodeWorkspace): Promise<void> {
     if (workspace.checkpointRef) return;
-    const location = this.locations.get(workspace.nodeId)!;
+    const location = this.locations.get(workspace.executionId ?? workspace.nodeId)!;
     const cwd = workspace.worktreeRoot!;
     const options = { hooksDirectory: location.hooksDirectory };
     // A Git tree stores only a submodule commit, never files written inside it.
@@ -292,9 +350,11 @@ export class GitWorkspaces {
     }
     await git(cwd, ["add", "--force", "--all", "--", "."], options);
     const tree = await git(cwd, ["write-tree"], options);
-    const commit = tree === location.snapshotTree ? workspace.snapshotCommit! : await git(cwd, [
+    const baseTree = await git(cwd, ["rev-parse", `${workspace.snapshotCommit}^{tree}`]);
+    const parents = [...new Set([workspace.snapshotCommit!, ...(this.mergeParents.get(workspace.executionId ?? workspace.nodeId) ?? [])])];
+    const commit = tree === baseTree && parents.length === 1 ? workspace.snapshotCommit! : await git(cwd, [
       "-c", "user.name=Braid", "-c", "user.email=braid@localhost", "-c", "commit.gpgsign=false",
-      "commit-tree", tree, "-p", workspace.snapshotCommit!, "-m", `Braid node checkpoint: ${workspace.nodeId}`,
+      "commit-tree", tree, ...parents.flatMap(parent => ["-p", parent]), "-m", `Braid node checkpoint: ${workspace.nodeId}`,
     ], options);
     const suffix = createHash("sha256").update(cwd).digest("hex");
     const ref = `refs/braid/checkpoints/${suffix}`;
@@ -302,23 +362,6 @@ export class GitWorkspaces {
     workspace.checkpointCommit = commit;
     workspace.checkpointRef = ref;
     this.report(workspace);
-  }
-
-  /** Run only after declared nodes settle, so consumers retain their source paths. */
-  async discardUnchanged(): Promise<void> {
-    const errors: unknown[] = [];
-    for (const id of this.pending()) {
-      const workspace = this.records.get(id)!;
-      // Incomplete preparation must follow the existing failure/recovery path.
-      // A failed invocation with a successfully prepared workspace is still ready.
-      if (workspace.state !== "ready") continue;
-      try {
-        await this.checkpoint(workspace);
-        if (workspace.checkpointCommit === workspace.snapshotCommit)
-          await this.release(id, "discarded", "No changes from snapshot");
-      } catch (error) { errors.push(error); }
-    }
-    if (errors.length) throw new AggregateError(errors, "Some workspaces could not be checked or removed; their paths are retained in workspaces");
   }
 
   private async release(id: string, disposition: MergeDisposition["disposition"], reason: string): Promise<void> {
@@ -366,7 +409,7 @@ export class GitWorkspaces {
       // Ownership is explicit; a POSIX path prefix would miss retained Windows
       // worktrees and recursively delete data after checkpoint/cleanup failure.
       const live = [...this.records.values()].some(workspace =>
-        workspace.mode === "worktree" && this.locations.get(workspace.nodeId) === snapshot &&
+        !!workspace.worktreeRoot && this.locations.get(workspace.executionId ?? workspace.nodeId) === snapshot &&
         ["ready", "preparing", "failed"].includes(workspace.state));
       if (!live) {
         try { await rm(snapshot.directory, { recursive: true, force: true }); }
@@ -383,8 +426,8 @@ export class GitWorkspaces {
     if (input !== undefined && typeof input !== "string") throw new Error("Git input must be a string");
     const mutate = ["add", "commit", "merge", "cherry-pick", "apply", "restore"];
     const command = args[0]!;
-    if (!gitCommands(request.node.type === "merge").includes(command))
-      throw unavailableGitCommand(command, request.node.type === "merge");
+    if (!gitCommands(request.node.type === "merge" || request.node.type === "integrate").includes(command))
+      throw unavailableGitCommand(command, request.node.type === "merge" || request.node.type === "integrate");
     const blockedOptions = ["--output", "--ext-diff", "--textconv", "--unsafe-paths", "--directory", "--strategy", "--gpg-sign", "--work-tree", "--git-dir"];
     // Git accepts abbreviated long options (e.g. --out) and attached short
     // values (-scustom). Apply the same boundary to those spellings.
@@ -396,8 +439,8 @@ export class GitWorkspaces {
       throw new Error("Git arguments cannot override filesystem boundaries, execute external helpers, or select external strategies");
     const workspace = request.workspace!;
     const cwd = workspace.mode === "read-only" ? workspace.workingDirectory
-      : workspace.mode === "merge" ? workspace.sourceRoot! : workspace.worktreeRoot!;
-    const location = this.locations.get(request.node.id);
+      : workspace.mode === "integrate" ? workspace.sourceRoot! : workspace.worktreeRoot!;
+    const location = this.locations.get(this.id(request));
     const actualArgs = [command,
       ...(["diff", "show", "log"].includes(command) ? ["--no-ext-diff", "--no-textconv"] : []),
       ...args.slice(1),
@@ -426,46 +469,43 @@ export class GitWorkspaces {
     finish: (dispositions: MergeDisposition[]) => Promise<void>;
     complete: (success: boolean) => Promise<void>;
   }> {
-    // Discover the source without allocating a merge worktree: agents integrate
-    // directly in the caller's checkout, under a repository-scoped mutex.
-    let pending = this.snapshots.get(request.execution.runId);
-    if (!pending) { pending = this.snapshot(); this.snapshots.set(request.execution.runId, pending); }
-    let snapshot = await pending;
-    const unlock = snapshot ? await lock(snapshot.sourceRoot, request.signal) : () => {};
+    await this.initialize(request.execution.runId);
+    const baseline = await this.snapshots.get(request.execution.runId);
+    const integrating = request.node.type === "integrate";
+    const unlock = integrating && baseline ? await lock(baseline.sourceRoot, request.signal) : () => {};
     let finished = false;
-    let resolutions: MergeDisposition[] | undefined;
-    const ids = sourceIds.filter(id => this.pending().includes(id));
+    let resolutions: MergeDisposition[] = [];
+    const ids = [...new Set(sourceIds)].filter(id => this.records.get(id)?.checkpointRef);
     try {
       request.signal.throwIfAborted();
-      if (snapshot) {
-        snapshot = await this.snapshot();
-        this.snapshots.set(request.execution.runId, Promise.resolve(snapshot));
+      if (integrating && baseline) {
+        const before = (await this.snapshot())!;
+        const workspace: NodeWorkspace = {
+          nodeId: request.node.id, executionId: this.id(request), mode: "integrate",
+          workingDirectory: resolve(before.sourceRoot, before.cwdSuffix), sourceRoot: before.sourceRoot,
+          snapshotCommit: before.snapshotCommit, state: "ready",
+          backupRef: `refs/braid/merge-backups/${crypto.randomUUID()}`,
+        };
+        await git(before.sourceRoot, ["update-ref", workspace.backupRef!, before.snapshotCommit]);
+        this.locations.set(this.id(request), before);
+        this.report(workspace);
+        request.workspace = workspace;
+      } else {
+        request.workspace = await this.prepare(request, true);
       }
-      for (const id of ids) await this.checkpoint(this.records.get(id)!);
-      const workspace: NodeWorkspace = snapshot ? {
-        nodeId: request.node.id, mode: "merge", workingDirectory: snapshot.sourceRoot,
-        sourceRoot: snapshot.sourceRoot, snapshotCommit: snapshot.snapshotCommit, state: "ready",
-      } : { nodeId: request.node.id, mode: "read-only", workingDirectory: this.cwd, state: "ready" };
-      if (snapshot) {
-        workspace.backupRef = `refs/braid/merge-backups/${crypto.randomUUID()}`;
-        await git(snapshot.sourceRoot, ["update-ref", workspace.backupRef, snapshot.snapshotCommit], { hooksDirectory: snapshot.hooksDirectory });
-      }
-      request.workspace = workspace;
-      if (snapshot) this.locations.set(request.node.id, snapshot);
-      this.report(workspace);
-      const sourceStatus = snapshot ? await gitPreview(snapshot.sourceRoot, ["status", "--porcelain=v1", "--untracked-files=all"], 4_000) : undefined;
+      const target = request.workspace.worktreeRoot ?? request.workspace.sourceRoot;
       const sources: MergeSource[] = [];
       for (const id of ids) {
         const source = this.records.get(id)!;
-        const diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", source.snapshotCommit!, source.checkpointRef!, "--"];
+        const diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", baseline!.snapshotCommit, source.checkpointRef!, "--"];
         const count = Math.max(1, ids.length);
         const files = await gitPreview(source.sourceRoot!, [...diffArgs.slice(0, -1), "--name-only", "-z", "--"], Math.floor(8_000 / count));
         const stat = await gitPreview(source.sourceRoot!, [...diffArgs.slice(0, -1), "--stat", "--"], Math.floor(4_000 / count));
         const diff = await gitPreview(source.sourceRoot!, diffArgs, Math.min(6_000, Math.floor(24_000 / count)));
-        // Truncated NUL output must not invent a partial filename.
         const names = files.text.slice(0, files.text.lastIndexOf("\0") + 1).split("\0").filter(Boolean);
         sources.push({ ...source, changes: { files: names, filesTruncated: files.truncated, stat, diff } });
       }
+      const sourceStatus = integrating && target ? await gitPreview(target, ["status", "--porcelain=v1", "--untracked-files=all"], 4_000) : undefined;
       return {
         sources,
         ...(sourceStatus ? { sourceStatus: { ...sourceStatus, dirty: sourceStatus.text.length > 0 || sourceStatus.truncated } } : {}),
@@ -473,33 +513,27 @@ export class GitWorkspaces {
           request.signal.throwIfAborted();
           if (finished) throw new Error("finish_merge must be called exactly once");
           validateMergeDispositions(ids, decisions);
-          if (snapshot && await git(snapshot.sourceRoot, ["ls-files", "--unmerged"]))
-            throw new Error("Unresolved Git conflicts remain in the source checkout");
+          if (target && await git(target, ["ls-files", "--unmerged"])) throw new Error("Unresolved Git conflicts remain in the target workspace");
           resolutions = structuredClone(decisions);
+          const workspace = this.records.get(this.id(request))!;
+          workspace.dispositions = structuredClone(decisions);
+          this.report(workspace);
           finished = true;
         },
         complete: async success => {
           try {
-            const errors: unknown[] = [];
-            // Check again after all tracked writes have drained: an adapter can
-            // invoke more tools after finish_merge in the same model response.
-            if (success && snapshot && await git(snapshot.sourceRoot, ["ls-files", "--unmerged"])) {
-              success = false;
-              errors.push(new Error("Unresolved Git conflicts remain in the source checkout"));
-            }
-            for (const id of ids) {
-              const decision = success && finished ? resolutions!.find(value => value.nodeId === id)! : undefined;
-              try {
-                await this.release(id, decision?.disposition ?? "archived", decision?.reason ?? "Merge agent did not complete; changes preserved in checkpointRef");
-              } catch (error) { errors.push(error); }
-            }
-            this.snapshots.delete(request.execution.runId);
-            if (errors.length) throw new AggregateError(errors, "Some merge sources could not be cleaned up; their paths are retained in workspaces");
-            if (success && (!finished || resolutions!.some(value => value.disposition === "archived")))
-              throw new Error("Merge agent did not integrate or explicitly discard every source; remaining changes were archived");
-          } finally { unlock(); }
+            if (target && await git(target, ["ls-files", "--unmerged"])) throw new Error("Unresolved Git conflicts remain in the target workspace");
+            if (success && (!finished || resolutions.some(value => value.disposition === "archived")))
+              throw new Error("Merge agent did not integrate or explicitly discard every source");
+            if (success) this.mergeParents.set(this.id(request), resolutions.filter(value => value.disposition === "integrated").map(value => this.records.get(value.executionId)!.checkpointCommit!));
+          } finally {
+            try { await this.seal(request); } finally { unlock(); }
+          }
         },
       };
     } catch (error) { unlock(); throw error; }
   }
 }
+
+export class WorkspaceInputError extends Error {}
+export class WorkspaceCheckpointError extends Error {}

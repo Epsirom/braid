@@ -43,7 +43,7 @@ test("extension registers background tools, a panel command, and guidance to wai
   const fake = extension();
   assert.deepEqual(
     [...fake.tools.keys()],
-    ["braid", "braid_status", "braid_cancel"],
+    ["braid", "braid_status", "braid_cancel", "braid_update", "braid_resume"],
   );
   assert.ok(fake.commands.has("braid"));
   assert.equal(fake.handlers.has("input"), false);
@@ -57,19 +57,19 @@ test("extension registers background tools, a panel command, and guidance to wai
     /two or more concerns can be handled independently/,
   );
   assert.match(prompt.systemPrompt, /do not poll repeatedly/);
-  assert.match(prompt.systemPrompt, /individual writable worktree/);
-  assert.match(prompt.systemPrompt, /Outside Git, nodes have read and ls, plus grep\/find when their local dependencies are available/);
-  assert.match(prompt.systemPrompt, /Merge nodes operate in the source checkout/);
+  assert.match(prompt.systemPrompt, /fresh worktree/);
+  assert.match(prompt.systemPrompt, /Outside Git all filesystem access is read-only/);
+  assert.match(prompt.systemPrompt, /integrate writes selected changes to the invoking checkout/);
   const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
   assert.deepEqual(tool.parameters.properties.nodes.items.properties.workspace.enum, ["read-only", "worktree"]);
   assert.equal(tool.parameters.properties.nodes.items.properties.notifyOnCompletion.type, "boolean");
   assert.match(prompt.systemPrompt, /notifyOnCompletion=true/);
   for (const guidance of [prompt.systemPrompt, tool.description, tool.promptGuidelines!.join("\n")]) {
     assert.match(guidance, /workspace=read-only/);
-    assert.match(guidance, /live source directory/);
-    assert.match(guidance, /read-only execute node to summarize/);
-    assert.match(guidance, /Do not set workspace on merge nodes/);
-    assert.match(guidance, /only for remaining changed worktrees/);
+    assert.match(guidance, /predecessor execution checkpoint/);
+    assert.match(guidance, /Set workspace=read-only to disable writes/);
+    assert.match(guidance, /Do not set workspace on merge\/integrate nodes/);
+    assert.match(guidance, /no automatic final integration/);
   }
   assert.match(
     prompt.systemPrompt,
@@ -114,15 +114,15 @@ for (const idle of [true, false]) {
       const { message, options } = await fake.reminder.promise;
       await otherStarted.promise;
       assert.equal(message.customType, "braid-node-completed");
-      const details = message.details as { jobId: string; handle: string; nodeId: string; status: string; eventSequence: number; errorCode?: string };
+      const details = message.details as { jobId: string; handle: string; executionId: string; nodeId: string; status: string; eventSequence: number; errorCode?: string };
       assert.equal(details.jobId, submitted.details!.jobId);
       assert.equal(details.nodeId, nodeId);
       assert.equal(details.status, failed ? "failed" : "completed");
       assert.equal(details.errorCode, failed ? "MODEL_ERROR" : undefined);
       assert.ok(details.eventSequence > 0);
-      assert.ok(String(message.content).includes(`braid_status(${JSON.stringify({ jobId: details.handle, nodeId })})`));
+      assert.ok(String(message.content).includes(`braid_status(${JSON.stringify({ jobId: details.handle, executionId: details.executionId })})`));
       assert.deepEqual(options, { triggerTurn: true, deliverAs: "followUp" });
-      const read = await status.execute("read", { jobId: details.handle, nodeId }, undefined, undefined, ctx);
+      const read = await status.execute("read", { jobId: details.handle, executionId: details.executionId }, undefined, undefined, ctx);
       const block = read.content[0]!;
       assert.equal(block.type, "text");
       const result = JSON.parse(block.type === "text" ? block.text : "");
