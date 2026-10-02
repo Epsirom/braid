@@ -129,10 +129,10 @@ export function compileGraph(input: BraidInput): Graph {
     fields(
       node,
       node.type === "decision"
-        ? ["type", "id", "prompt", "model", "choices", "workspace"]
+        ? ["type", "id", "prompt", "model", "choices", "workspace", "notifyOnCompletion"]
         : node.type === "execute"
-          ? ["type", "id", "prompt", "model", "workspace"]
-          : ["type", "id", "prompt", "model"],
+          ? ["type", "id", "prompt", "model", "workspace", "notifyOnCompletion"]
+          : ["type", "id", "prompt", "model", "notifyOnCompletion"],
       "Node",
     );
     requireValid(text(node.id), "Node id must be a non-empty string");
@@ -146,6 +146,10 @@ export function compileGraph(input: BraidInput): Graph {
     );
     const workspace = node.type === "merge" ? undefined : node.workspace;
     requireValid(
+      node.notifyOnCompletion === undefined || typeof node.notifyOnCompletion === "boolean",
+      `Invalid notifyOnCompletion on '${node.id}': expected a boolean`,
+    );
+    requireValid(
       workspace === undefined || workspace === "read-only" || workspace === "worktree",
       `Invalid workspace on '${node.id}'`,
     );
@@ -153,6 +157,7 @@ export function compileGraph(input: BraidInput): Graph {
       id: node.id,
       prompt,
       ...(node.model !== undefined ? { model: node.model } : {}),
+      ...(node.notifyOnCompletion !== undefined ? { notifyOnCompletion: node.notifyOnCompletion } : {}),
       ...(workspace !== undefined ? { workspace } as const : {}),
     };
     if (node.type === "decision") {

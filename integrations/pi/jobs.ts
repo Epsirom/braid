@@ -12,6 +12,8 @@ import {
   validateGraph,
   type BraidInput,
   type BraidResult,
+  type ExecutionError,
+  type NodeResult,
   type NodeWorkspace as PiNodeWorkspace,
 } from "@chrok/braid";
 import {
@@ -50,6 +52,17 @@ interface Job extends JobSnapshot {
   controller: AbortController;
   done: Promise<void>;
   usageClaimed: boolean;
+  nodeResults: Map<string, NodeResult>;
+}
+
+export interface NodeCompletion {
+  jobId: string;
+  handle: string;
+  nodeId: string;
+  status: "completed" | "failed";
+  /** Identifies the terminal event within this job; nodes currently execute once. */
+  eventSequence: number;
+  errorCode?: ExecutionError["code"];
 }
 
 /** Jobs belong to one extension/session lifetime, independently of foreground turns. */
@@ -62,6 +75,7 @@ export class BraidJobs {
 
   constructor(
     private readonly onFinished: (job: JobSnapshot) => void = () => {},
+    private readonly onNodeFinished: (completion: NodeCompletion) => void = () => {},
   ) {}
 
   subscribe(listener: () => void): () => void {
@@ -105,6 +119,7 @@ export class BraidJobs {
       controller: new AbortController(),
       done: Promise.resolve(),
       usageClaimed: false,
+      nodeResults: new Map(snapshot.nodes.map((node) => [node.id, { id: node.id, status: "pending" }])),
     };
     this.jobs.set(job.jobId, job);
     this.handles.set(job.handle, job.jobId);
@@ -122,6 +137,7 @@ export class BraidJobs {
     model?: string,
   ): Promise<void> {
     const reports: Usage[] = [];
+    const notifyNodes = new Set(input.nodes.filter((node) => node.notifyOnCompletion).map((node) => node.id));
     try {
       // Return the submission to Pi before doing provider work or sending reminders.
       await nextTurn();
@@ -155,7 +171,31 @@ export class BraidJobs {
             });
           }
           applyEvent(job.live, event);
+          if ("nodeId" in event && Object.hasOwn(job.live.nodes, event.nodeId)) {
+            // The panel keeps short previews; node retrieval needs the complete
+            // output/error before the rest of the graph finishes.
+            job.nodeResults.set(event.nodeId, {
+              ...job.live.nodes[event.nodeId]!,
+              ...("output" in event ? { output: event.output } : {}),
+              ...(event.type === "node_failed" ? { error: { ...event.error } } : {}),
+            });
+          }
           this.changed();
+          if (!this.disposed && (event.type === "node_completed" || event.type === "node_failed") &&
+              notifyNodes.has(event.nodeId)) {
+            try {
+              void Promise.resolve(this.onNodeFinished({
+                jobId: job.jobId,
+                handle: job.handle,
+                nodeId: event.nodeId,
+                status: event.type === "node_completed" ? "completed" : "failed",
+                eventSequence: event.sequence,
+                ...(event.type === "node_failed" ? { errorCode: event.error.code } : {}),
+              })).catch(() => {});
+            } catch {
+              /* Notification failures must not affect scheduling or results. */
+            }
+          }
         },
       });
       if (reports.length) job.usage = sumPiUsage(reports);
@@ -209,6 +249,7 @@ export class BraidJobs {
       controller: _controller,
       done: _done,
       usageClaimed: _claimed,
+      nodeResults: _nodeResults,
       ...snapshot
     } = job;
     const copy = structuredClone(snapshot);
@@ -217,6 +258,19 @@ export class BraidJobs {
       copy.live.latencyMs = copy.live.observedAt - job.createdAt;
     }
     return copy;
+  }
+
+  getNode(jobId: string, nodeId: string): NodeResult {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    const node = job.result && Object.hasOwn(job.result.nodes, nodeId)
+      ? job.result.nodes[nodeId] : job.nodeResults.get(nodeId);
+    if (!node) throw new Error(`Unknown Braid node: ${JSON.stringify(nodeId)} in ${job.handle}. Use braid_status with only jobId to list nodes.`);
+    return structuredClone({
+      ...node,
+      ...(job.workspaces && Object.hasOwn(job.workspaces, nodeId)
+        ? { workspace: job.workspaces[nodeId] } : {}),
+    });
   }
 
   list(): Pick<JobSnapshot, "jobId" | "handle" | "goal" | "status" | "createdAt">[] {

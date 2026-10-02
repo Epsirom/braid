@@ -4,7 +4,8 @@ This optional Pi integration runs Braid graphs as background jobs. It registers:
 
 - `braid` — submit a complete DAG and immediately receive a `jobId`.
 - `braid_status` — retrieve progress and results with `{ "jobId": "..." }`, or
-  omit the ID to list jobs in the current session.
+  add `"nodeId": "..."` for a single node's full output/error. Omit both IDs to
+  list jobs in the current session.
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
 
@@ -42,6 +43,60 @@ Templates are scoped to this submission, with no saved registry. See the
 [core template guide](https://github.com/Epsirom/braid#reusable-prompt-templates)
 for a complete graph and validation rules.
 
+## Node completion reminders
+
+Set `notifyOnCompletion: true` on selected execute, decision, or merge nodes to
+receive a reminder as soon as each node succeeds or fails:
+
+```json
+{
+  "goal": "Investigate two independent areas",
+  "nodes": [
+    {
+      "type": "execute",
+      "id": "survey",
+      "prompt": "Identify areas that need deeper investigation.",
+      "workspace": "read-only",
+      "notifyOnCompletion": true
+    },
+    {
+      "type": "execute",
+      "id": "tests",
+      "prompt": "Review test coverage and report gaps.",
+      "workspace": "read-only"
+    }
+  ],
+  "edges": []
+}
+```
+
+The setting defaults to `false`. A `braid-node-completed` system reminder names
+the job handle, node, and `completed`/`failed` status (with an error code on
+failure). Its details include the UUID and completion event sequence. Each node
+currently executes once per job, so the job and node IDs identify the execution.
+The reminder resumes an idle parent or queues a follow-up during streaming,
+using the same delivery and dropped-message retry mechanism as job reminders.
+Delivered reminders are not retried, and notification failures do not fail nodes.
+
+Use `braid_status({"jobId":"job-1","nodeId":"survey"})` to retrieve the full
+node output or error immediately, even while other nodes run. The returned
+`node` includes its status, available output/error, timing, and workspace data.
+Large responses are bounded and include a path to the complete JSON. The normal
+job query keeps its compact live previews and final results. Focused node reads
+do not claim usage; retrieve the finished whole job to account for its usage.
+
+Running nodes that fail due to timeout or cancellation also notify, with their
+error code. Nodes skipped without executing (inactive branches, blocked paths,
+or queued work skipped on cancellation/timeout) do not notify. Automatically
+appended merge nodes have no opt-in and do not send node reminders. Session
+shutdown suppresses both node and job reminders.
+
+Whole-job completion reminders remain enabled, including when the last node
+also requests a reminder. A node reminder does not mean the job has finished.
+It does not pause downstream work or allow editing the running graph; submit
+the complete DAG as before. Scheduling gates and JIT graph updates are separate
+future work tracked in [#31](https://github.com/Epsirom/braid/issues/31).
+
 ## Live flow panel
 
 Run `/braid` to open the newest job, or `/braid <jobId>` to open a specific job.
@@ -64,7 +119,7 @@ Braid owns graph validation, scheduling, joins, routing, skip/failure propagatio
 timeouts, Git worktree/checkpoint/merge lifecycle, and result metadata. Pi owns
 model lookup, credentials/OAuth, provider transport, filesystem tool execution,
 and token/cost accounting. The first
-`braid_status` retrieval of a finished job reports its accumulated Pi usage;
+whole-job `braid_status` retrieval of a finished job reports its accumulated Pi usage;
 subsequent retrievals do not count the same usage again.
 
 ## When Pi will use Braid

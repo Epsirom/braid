@@ -3,6 +3,8 @@ export interface ExecuteNode {
   id: string;
   prompt: string;
   model?: string;
+  /** Ask the parent adapter for a completion reminder on success or failure. Default: false. */
+  notifyOnCompletion?: boolean;
   /** Read the live cwd without a worktree; defaults to worktree in Git, read-only elsewhere. */
   workspace?: "read-only" | "worktree";
 }
@@ -13,6 +15,8 @@ export interface DecisionNode {
   prompt: string;
   choices: readonly string[];
   model?: string;
+  /** Ask the parent adapter for a completion reminder on success or failure. Default: false. */
+  notifyOnCompletion?: boolean;
   /** Read the live cwd without a worktree; defaults to worktree in Git, read-only elsewhere. */
   workspace?: "read-only" | "worktree";
 }
@@ -23,6 +27,8 @@ export interface MergeNode {
   /** Defaults to reviewing and integrating all predecessor workspaces. */
   prompt?: string;
   model?: string;
+  /** Ask the parent adapter for a completion reminder on success or failure. Default: false. */
+  notifyOnCompletion?: boolean;
 }
 
 export type BraidNode = ExecuteNode | DecisionNode | MergeNode;

@@ -7,6 +7,13 @@
   string variables, validates every rendered prompt before execution, and keeps
   existing plain-string/default merge prompts and runner contracts. Shared
   instructions no longer need repeating in each node's tool-call arguments (#29).
+- Add opt-in `notifyOnCompletion` on execute, decision, and merge nodes. Pi sends
+  parent reminders on node success/failure, including timeout/cancellation of
+  running nodes, with delivery acknowledgement and dropped-message retries.
+  Skipped nodes stay silent; whole-job reminders remain enabled. Add
+  `braid_status({jobId, nodeId})` for full intermediate outputs/errors, with
+  overflow results saved to a private temporary file. Scheduling and submitted
+  graphs remain unchanged; this implements the reminder portion of #31.
 
 ## 0.1.3 — 2026-09-29
 

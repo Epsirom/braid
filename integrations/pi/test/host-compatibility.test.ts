@@ -20,8 +20,8 @@ import {
 import braidExtension from "../index.js";
 import { deferred, input, response } from "./helpers.js";
 
-for (const templated of [false, true]) {
-test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and continues once after a completion during settling`, { timeout: 15_000 }, async (t) => {
+for (const templated of [false, true]) for (const notifyNode of [false, true]) {
+test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and continues once per ${notifyNode ? "node and job" : "job"} completion during settling`, { timeout: 15_000 }, async (t) => {
   const submittedInput = templated ? {
     ...input,
     promptTemplates: { inspect: "Inspect {{target}}." },
@@ -32,12 +32,22 @@ test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and 
   const workerStarted = deferred<void>();
   const releaseWorker = deferred<void>();
   const reminderSent = deferred<void>();
+  const releaseOther = deferred<void>();
+  const jobReminderSent = deferred<void>();
   const finished = deferred<void>();
   let foregroundCalls = 0;
   let workerCalls = 0;
   let reminders = 0;
   let settling = false;
-  let firstSettle = true;
+  let settleCount = 0;
+  const submission = notifyNode ? {
+    ...submittedInput,
+    nodes: [
+      { ...submittedInput.nodes[0]!, notifyOnCompletion: true },
+      { type: "execute", id: "other", prompt: "Keep working" },
+    ],
+    edges: [{ from: "a", to: "other" }],
+  } : submittedInput;
   const failures: unknown[] = [];
   const modelRuntime = await ModelRuntime.create({
     credentials: new InMemoryCredentialStore(),
@@ -69,12 +79,12 @@ test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and 
             assert.ok(tools.includes("read"));
             assert.ok(!tools.includes("braid"));
             assert.match(JSON.stringify(context.messages), /Investigate in background/);
-            if (templated) {
+            if (templated && workerCalls === 1) {
               assert.match(JSON.stringify(context.messages), /Inspect runtime\./);
               assert.doesNotMatch(JSON.stringify(context.messages), /\{\{target\}\}/);
             }
             workerStarted.resolve();
-            await releaseWorker.promise;
+            await (workerCalls === 1 ? releaseWorker.promise : releaseOther.promise);
             message.content = [{ type: "text", text: "worker result" }];
           } else {
             assert.equal(settling, false, "Pi must defer continuation until all settled handlers finish");
@@ -82,13 +92,32 @@ test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and 
             if (foregroundCalls === 1) {
               assert.match(prompt, /Braid execution policy/);
               assert.ok(tools.includes("braid"));
-              message.content = [{ type: "toolCall", id: "launch", name: "braid", arguments: submittedInput }];
+              message.content = [{ type: "toolCall", id: "launch", name: "braid", arguments: submission }];
               message.stopReason = "toolUse";
             } else if (foregroundCalls === 2) {
               message.content = [{ type: "text", text: "Waiting for the background result." }];
             } else if (foregroundCalls === 3) {
               assert.match(JSON.stringify(context.messages), /Braid job .* finished with status completed/);
-              message.content = [{ type: "text", text: "Completion reminder received." }];
+              if (notifyNode) {
+                assert.ok(JSON.stringify(context.messages).includes("This is a node reminder"));
+                assert.ok(!JSON.stringify(context.messages).includes("Braid job job-1 finished with status"));
+                message.content = [{ type: "toolCall", id: "read-node", name: "braid_status", arguments: { jobId: "job-1", nodeId: "a" } }];
+                message.stopReason = "toolUse";
+              } else {
+                message.content = [{ type: "text", text: "Completion reminder received." }];
+              }
+            } else if (notifyNode && foregroundCalls === 4) {
+              const result = context.messages.find((item) => item.role === "toolResult" && item.toolCallId === "read-node");
+              assert.ok(result && result.role === "toolResult");
+              const block = result.content[0]!;
+              assert.equal(block.type, "text");
+              const nodeStatus = JSON.parse(block.type === "text" ? block.text : "");
+              assert.equal(nodeStatus.status, "running");
+              assert.equal(nodeStatus.node.output, "worker result");
+              message.content = [{ type: "text", text: "Intermediate result received; waiting for the job." }];
+            } else if (notifyNode && foregroundCalls === 5) {
+              assert.ok(JSON.stringify(context.messages).includes("Braid job job-1 finished with status completed"));
+              message.content = [{ type: "text", text: "Job completion received." }];
             } else {
               assert.fail("Unexpected extra foreground continuation");
             }
@@ -122,16 +151,23 @@ test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and 
         pi.sendMessage(message, options);
         reminders++;
         reminderSent.resolve();
+        if (message.customType === "braid-completed") jobReminderSent.resolve();
       } });
       pi.on("agent_settled", async (_event, ctx) => {
-        if (firstSettle) {
-          firstSettle = false;
+        settleCount++;
+        if (settleCount === 1) {
           settling = true;
           await workerStarted.promise;
           releaseWorker.resolve();
           await reminderSent.promise;
           assert.equal(ctx.isIdle(), true);
           assert.equal(foregroundCalls, 2);
+          settling = false;
+        } else if (notifyNode && settleCount === 2) {
+          settling = true;
+          releaseOther.resolve();
+          await jobReminderSent.promise;
+          assert.equal(foregroundCalls, 4);
           settling = false;
         } else {
           finished.resolve();
@@ -147,18 +183,20 @@ test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and 
     settingsManager, resourceLoader, sessionManager: SessionManager.inMemory(cwd),
     noTools: "builtin",
   });
-  t.after(async () => { releaseWorker.resolve(); await session.abort(); session.dispose(); });
+  t.after(async () => { releaseWorker.resolve(); releaseOther.resolve(); await session.abort(); session.dispose(); });
   assert.deepEqual(extensionsResult.errors, []);
   await session.bindExtensions({ onError: (error) => failures.push(error) });
   await session.prompt("Run one Braid background job.");
   await finished.promise;
   await session.waitForIdle();
   assert.deepEqual(failures, []);
-  assert.equal(workerCalls, 1);
-  assert.equal(foregroundCalls, 3);
-  assert.equal(reminders, 1);
+  assert.equal(workerCalls, notifyNode ? 2 : 1);
+  assert.equal(foregroundCalls, notifyNode ? 5 : 3);
+  assert.equal(reminders, notifyNode ? 2 : 1);
   const delivered = session.messages.filter((message) =>
     message.role === "custom" && message.customType === "braid-completed");
   assert.equal(delivered.length, 1);
+  assert.equal(session.messages.filter((message) =>
+    message.role === "custom" && message.customType === "braid-node-completed").length, notifyNode ? 1 : 0);
 });
 }
