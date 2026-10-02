@@ -6,6 +6,40 @@ copies of the API payloads; committing a change to them does not apply it to
 GitHub automatically. Update the existing ruleset in Settings or through the
 REST API after reviewing a policy change, then verify the live settings.
 
+## Repository identity and npm links
+
+The GitHub About section describes the current `main` capabilities:
+
+> TypeScript runtime for LLM agent graphs with bounded loops, live updates,
+> isolated Git worktrees, and explicit integration. Framework-agnostic core,
+> OpenAI-compatible runner, and Pi extension.
+
+The repository website points to
+[@chrok/braid on npm](https://www.npmjs.com/package/@chrok/braid). The root README
+links both published packages and displays their npm version badges. Topics are
+`llm`, `ai-agents`, `agent-runtime`, `agent-orchestration`, `multi-agent`,
+`graph-execution`, `bounded-loops`, `git-worktree`, `parallel-execution`,
+`typescript`, `nodejs`, `openai-compatible`, and `pi-package`.
+The old DAG-only and workflow-engine labels do not describe the 0.2 scope.
+
+Both packages publish to `https://registry.npmjs.org`:
+
+| Package | Repository location |
+| --- | --- |
+| [@chrok/braid](https://www.npmjs.com/package/@chrok/braid) | Repository root |
+| [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid) | `integrations/pi` |
+
+Each manifest declares `repository`, `homepage`, and `bugs`; Pi additionally sets
+`repository.directory`. These fields link npm pages back to the correct source
+and issue tracker. Descriptions and keywords take effect on npm when a new
+version is published; editing `main` does not change existing registry versions.
+
+GitHub's **Packages** section represents its separate registry. It does not list
+an npmjs package just because that package points to this repository. The project
+uses npmjs only; no GitHub Packages mirror or additional package scope is
+maintained. See [GitHub's npm registry guide](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry)
+and the [release guide](releasing.md#registry-and-source-association).
+
 ## Main branch
 
 [Protect main](https://github.com/Epsirom/braid/rules/24072177) applies to `main`,

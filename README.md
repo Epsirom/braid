@@ -1,16 +1,45 @@
 # Braid
 
-Braid is a small execution runtime for dynamically constructed graphs of isolated
-model invocations. A parent submits a graph and can update it while it runs. Braid resolves
-routing and dependencies, runs independent nodes concurrently, supports bounded
-loops, and retains the outputs and checkpoints of each execution. It is an agent primitive, not a workflow
-builder.
+Braid is a small TypeScript runtime for LLM agent graphs with bounded loops,
+live updates, and isolated Git worktrees. A parent submits a graph, runs
+independent invocations concurrently, and can revise the graph or pause and
+resume handoffs while it runs. Each execution retains its own outputs and
+checkpoints; explicit `integrate` nodes apply selected work to the source checkout.
 
 [![CI](https://github.com/Epsirom/braid/actions/workflows/ci.yml/badge.svg)](https://github.com/Epsirom/braid/actions/workflows/ci.yml)
+[![npm core](https://img.shields.io/npm/v/%40chrok%2Fbraid?label=%40chrok%2Fbraid)](https://www.npmjs.com/package/@chrok/braid)
+[![npm Pi](https://img.shields.io/npm/v/%40chrok%2Fpi-braid?label=%40chrok%2Fpi-braid)](https://www.npmjs.com/package/@chrok/pi-braid)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**v0.2:** Experimental, TypeScript, Node.js 22+, ESM, no runtime dependencies.
-The core has no Pi, provider SDK, or framework dependency.
+**0.2 development:** Experimental, Node.js 22+, ESM. The framework-agnostic core
+has no runtime dependencies; the OpenAI-compatible runner and Pi extension are
+optional integrations. This branch documents the upcoming 0.2 API. The npm
+badges show published versions; npm `latest` is currently 0.1.3. For that
+release's API, use the [0.1.3 documentation](https://github.com/Epsirom/braid/tree/v0.1.3).
+Try 0.2 by [building from source](#develop-from-source), and read the
+[0.1 → 0.2 migration guide](docs/compatibility.md#migrating-from-01-to-02).
+
+| Package | Purpose |
+| --- | --- |
+| [@chrok/braid](https://www.npmjs.com/package/@chrok/braid) | Core runtime and optional OpenAI-compatible runner |
+| [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid) | Pi background jobs, execution controls, reminders, and live flow panel; installs the matching core dependency |
+
+## What changed in 0.2?
+
+- **Editable graphs, captured executions.** `startBraid` exposes revision-checked
+  updates and pause/resume; `executionId` identifies a particular invocation,
+  while `nodeId` identifies its reusable definition.
+- **Bounded refinement loops.** Explicit feedback edges revisit nodes with fresh
+  workspaces. Each loop has a finite iteration limit, and `maxExecutions` caps
+  materialized executions across the whole run, including live updates.
+- **Explicit workspace integration.** Read-only workers inspect isolated
+  predecessor snapshots. `merge` combines changes in a new worktree;
+  `integrate` writes to the source checkout. Final integration is never implicit.
+- **Per-execution failure policy.** Optional failures keep their errors and
+  partial work for recovery. Set `requireSuccess: true` to fail the whole run.
+
+See [execution control](docs/execution-control.md) for the full contract and
+[ROADMAP.md](ROADMAP.md) for the current scope and remaining work.
 
 ## Why Braid?
 
@@ -80,7 +109,9 @@ pi install npm:@chrok/pi-braid
 ```
 
 Run `/reload`, ask Pi to analyze a task with Braid, and open `/braid` to inspect
-the job. The extension includes the matching core runtime; no checkout is needed.
+the job. npm installs the exact matching core dependency; no checkout is needed
+for published versions. To try 0.2 before publication, follow the
+[local Pi installation guide](integrations/pi/README.md#install-this-local-checkout-in-pi).
 
 ![Braid Pi flow panel with an offline example](docs/assets/pi-panel.svg)
 
@@ -254,8 +285,8 @@ by the core API and Pi's `braid` tool:
   blank rendered prompts throw `GraphValidationError` before any model call.
   All declared templates are syntax-checked, including unused ones. Errors
   identify the template and, for node references/rendering, the affected node.
-- Templates work on execute, decision, and explicit merge prompts. Omitted
-  merge prompts retain their default. Plain-string prompts are never rendered,
+- Templates work on execute, decision, merge, and integrate prompts. Omitted
+  merge/integrate prompts retain their defaults. Plain-string prompts are never rendered,
   even when they contain `{{...}}`.
 
 Templates reduce duplicate text in graph/tool-call arguments; every worker still
@@ -264,8 +295,8 @@ before asynchronous execution. Templates are local to one submission, with no
 saved registry or new runtime dependencies.
 
 `BraidInputNode`, `NodePrompt`, and `PromptTemplateReference` describe compact
-inputs. Existing `BraidNode`, `ExecuteNode`, `DecisionNode`, `MergeNode`, and
-`ModelRequest.node` keep their string-prompt types for runners. Core applies the
+inputs. `BraidNode`, `ExecuteNode`, `DecisionNode`, `MergeNode`, `IntegrateNode`,
+and `ModelRequest.node` keep their string-prompt types for runners. Core applies the
 same non-empty prompt validation after rendering; it does not impose a prompt
 length or token cap (see [resource limits](docs/resource-limits.md)).
 
@@ -328,7 +359,7 @@ and merge agents to inspect errors and recover partial work. Failed decisions
 cannot activate choice-labelled edges; their unconditional successors can run.
 There are no automatic retries. Failures are optional by default; a
 `requireSuccess: true` execution failure aborts the whole run, cancels siblings,
-and drains writes and cleanup. The policy is captured when the instance starts.
+and drains writes and cleanup. The policy is captured when the instance is admitted.
 Graph deadlines and execution limits remain active while paused.
 
 Nodes are mutable definitions; execution instances retain captured prompts and

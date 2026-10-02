@@ -1,8 +1,88 @@
 # Roadmap
 
-Braid is a small execution primitive for mutable graphs with bounded loops
-of isolated model calls. The goal is a predictable core and thin host adapters.
-This is a direction for discussion, not a delivery schedule.
+Braid is a small runtime for mutable agent graphs with bounded loops, isolated
+executions, and explicit workspace integration. The goal is a predictable core
+and thin host adapters. This is a direction for discussion, not a delivery schedule.
+
+## Release status
+
+The 0.2 execution-control implementation is merged into `main`; 0.2.0 has not
+been published yet. The latest published core and Pi packages are 0.1.3. Source
+availability and npm availability are separate milestones. Check
+[GitHub releases](https://github.com/Epsirom/braid/releases),
+[@chrok/braid](https://www.npmjs.com/package/@chrok/braid), and
+[@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid) for published versions.
+
+## 0.2 implemented foundation
+
+- [x] Separate editable node definitions from captured execution instances,
+  retaining exact predecessor identities, historical outputs, and checkpoints.
+- [x] Bounded structured loops with explicit decision feedback, fresh workspaces
+  per visit, finite iteration limits, and a total execution budget.
+- [x] Revision-checked live updates, `pauseAfter` gates, and atomic update/resume.
+- [x] Derive Git workspaces, including read-only workspaces, from predecessor
+  checkpoints instead of reading the live caller checkout.
+- [x] Separate isolated `merge` from source-checkout `integrate`; require explicit
+  integration and preserve reusable source checkpoints until cleanup.
+- [x] Optional invocation failures by default and captured `requireSuccess`
+  fail-fast policy, with writes and cleanup drained before returning.
+- [x] Submission-local prompt templates and execution-specific Pi reminders,
+  result retrieval, live graph controls, and topology display.
+- [x] Document the breaking changes and provide an offline loop/update example.
+
+See [execution control](docs/execution-control.md) for the contract and
+[0.1 → 0.2 migration](docs/compatibility.md#migrating-from-01-to-02) before upgrading.
+
+## Before publishing 0.2.0
+
+- [ ] Run the complete supported Node/platform matrix and isolated package
+  installation checks on the final release commit.
+- [ ] Finalize dated release notes, publish both matching packages, and verify
+  registry availability, provenance, and clean installation through the
+  [release workflow](docs/releasing.md).
+- [ ] Update the README and Pi guide's development notices when npm `latest`
+  actually points to 0.2.0.
+
+## Next candidates
+
+- Exercise real edit → review → refine → integrate tasks and use the results to
+  improve migration examples, update-conflict diagnostics, and recovery guidance.
+- Refresh scheduler measurements for 0.2 before optimizing data structures.
+  Include execution history, updates, and loops; measure Git workspace costs
+  separately. The [checked-in benchmark](docs/benchmark.md) is a 0.1 baseline.
+- Explore explicit retention and cleanup policies for execution history, Git
+  recovery refs, and Pi temporary result files without breaking result retrieval,
+  reusable checkpoints, or usage accounting.
+- Discuss definition, prompt/output, and event-log size limits and host-wide
+  admission controls. `maxExecutions` already bounds materialized instances;
+  it does not bound all memory, disk, or concurrent jobs.
+- Define token/spend budget semantics that account for missing usage, failed
+  requests, and in-flight calls before adding enforcement.
+- Improve provider diagnostics and add adapters backed by real compatibility
+  tests. Keep SDK dependencies outside the core.
+- Migrate both packages from TypeScript 5 to 7 in one dedicated change. Explicitly
+  load Node types, review compiler default changes, and validate public declaration
+  consumption, package builds, and the complete Node/platform matrix. Keep Node
+  declarations on 22.x while Node 22 remains the minimum supported runtime.
+
+## Scope after 0.2
+
+The original fixed-DAG-only boundary no longer applies. Bounded loops, live
+graph changes, parent-controlled pause/resume, and execution history are part of
+the core. The following boundaries still apply:
+
+| Supported | Outside the current scope |
+| --- | --- |
+| Declared loops with finite limits; sequential and independent loops | Arbitrary cycles and nested/overlapping loops |
+| In-memory updates and pause/resume before finalization | Durable workflow recovery, restart/resume, or reopening finalized jobs |
+| Git checkpoints and backup refs for inspecting/recovering files | Persistence of scheduler state or host sessions |
+| Per-execution workspace capabilities and isolated model context | A security sandbox, arbitrary code nodes, or recursive worker delegation |
+| Submission-local templates and host tools/panels | A saved template registry or graphical workflow editor |
+
+New proposals should explain why the behavior belongs in the core rather than
+the caller or host adapter. Useful contributions include minimal reproductions,
+platform testing, real-world examples, and documentation fixes. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 0.1 release foundation
 
@@ -12,41 +92,7 @@ This is a direction for discussion, not a delivery schedule.
 - [x] Clean builds and standalone package installation checks.
 - [x] CI configuration, contribution policies, examples, and compatibility docs.
 - [x] Reproducible scheduler benchmark and explicit resource limits.
-- [x] Confirm hosted CI on Linux, macOS, Windows, and the minimum Node version.
+- [x] Hosted CI on Linux, macOS, Windows, and the minimum Node version.
 
-Published versions are listed in [GitHub releases](https://github.com/Epsirom/braid/releases).
-
-## 0.2 execution control
-
-- [x] Separate node definitions from immutable execution instances and history.
-- [x] Bounded structured loops with explicit feedback and fresh workspaces.
-- [x] Revision-checked graph updates, pause gates, and atomic update/resume.
-- [x] Separate isolated `merge` from source-checkout `integrate`; remove implicit integration.
-- [x] Optional failures by default and captured `requireSuccess` fail-fast policy.
-- [x] Execution-specific Pi reminders, retrieval, controls, and live topology.
-
-## Next candidates
-
-- Migrate both packages from TypeScript 5 to 7 in one dedicated change. Explicitly
-  load Node types, review compiler default changes, and validate public declaration
-  consumption, package builds, and the complete Node/platform matrix. Keep Node
-  declarations on 22.x while Node 22 remains the minimum supported runtime.
-- Measure real applications before changing scheduler data structures.
-- Discuss optional per-run definition/output limits and host-wide admission controls.
-- Define budget semantics that account for missing usage and in-flight calls
-  before adding token or spend enforcement.
-- Improve provider diagnostics and add adapters backed by real compatibility
-  tests. Keep SDK dependencies outside the core.
-- Explore explicit job retention and temporary-result cleanup policies for long
-  Pi sessions without breaking result retrieval or usage accounting.
-
-## Scope
-
-Arbitrary cycles, nested/overlapping loops, durable workflow recovery, graphical
-workflow editing, arbitrary code nodes, and recursive worker delegation remain
-outside the current scope. In-memory updates/resume and Git recovery checkpoints
-are supported. Proposals should explain why a
-small runtime primitive needs the behavior rather than a caller or host adapter.
-
-Useful early contributions include minimal bug reproductions, platform testing,
-small real-world examples, and documentation fixes. See [CONTRIBUTING.md](CONTRIBUTING.md).
+These are historical milestones; the 0.2 contracts above supersede the original
+workspace, failure, and graph-lifecycle assumptions.

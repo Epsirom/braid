@@ -4,6 +4,34 @@ Core and Pi are separate public npm packages built from one commit. Both use the
 same version. The core has no runtime dependencies. Pi declares an exact
 `@chrok/braid` dependency and includes only its own compiled integration code.
 
+## Registry and source association
+
+The public packages are [@chrok/braid](https://www.npmjs.com/package/@chrok/braid)
+and [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid) on npmjs.
+Keep `publishConfig.registry` set to `https://registry.npmjs.org`. Both manifests
+link to `Epsirom/braid`; Pi's `repository.directory` is `integrations/pi`.
+The repository About website and README badges provide the reverse links.
+GitHub Packages is a separate registry and is not a mirror in this release flow.
+
+Package descriptions, keywords, source links, and README content are uploaded
+with the package release. A commit on `main` does not update the published npm
+metadata. Keep development-version notices accurate until publication, and link
+users of the current npm release to its tagged documentation.
+
+To inspect the public release without npm account credentials:
+
+```sh
+npm view @chrok/braid dist-tags description repository homepage gitHead dist.attestations --json
+npm view @chrok/pi-braid dist-tags description repository homepage gitHead dist.attestations --json
+```
+
+For a release, query the exact `@X.Y.Z` versions too. Confirm both `gitHead`
+values match the release commit, the source links point to this repository, and
+provenance identifies this repository's release workflow. The successful
+[Publish runs](https://github.com/Epsirom/braid/actions/workflows/release.yml)
+and public npm attestations provide release evidence; inspecting or changing
+the trusted-publisher account settings requires npm authentication.
+
 ## Prepare a release
 
 Version tags (`v*`) cannot be moved or deleted. New GitHub releases are immutable:
@@ -18,7 +46,10 @@ corrections require a new version. See [repository settings](repository-settings
    licenses, and Pi registration in a temporary consumer outside the checkout.
    A temporary local registry serves the unpublished core tarball; installing
    only the Pi tarball must fetch core transitively through its version dependency.
-3. Update the changelog and supported Pi version. Commit and review the changes;
+3. Update the changelog, migration guidance, package descriptions/keywords, and
+   supported Pi version. Reconcile README/Pi development notices and ROADMAP
+   status with the release being prepared; mark publication complete only after
+   both packages are available. Commit and review the changes;
    require the CI matrix to pass before tagging that commit `vX.Y.Z`.
 4. Inspect `npm pack --dry-run` and `npm pack --dry-run` from `integrations/pi`.
    `prepack` rebuilds each package. Never publish stale prebuilt output.

@@ -1,12 +1,24 @@
 # Braid for Pi (`@chrok/pi-braid`)
 
-This optional Pi integration runs Braid graphs as background jobs. It registers:
+[![npm](https://img.shields.io/npm/v/%40chrok%2Fpi-braid?label=%40chrok%2Fpi-braid)](https://www.npmjs.com/package/@chrok/pi-braid)
 
-- `braid_update` / `braid_resume` — edit live definitions or release paused executions.
+This optional Pi extension runs Braid agent graphs as background jobs with
+bounded loops, live updates, pause/resume, and a live flow panel.
+
+**0.2 development:** This guide describes the upcoming 0.2 API; npm `latest`
+is currently 0.1.3. Use the [published guide](https://github.com/Epsirom/braid/blob/v0.1.3/integrations/pi/README.md)
+for that version, or [install this checkout](#install-this-local-checkout-in-pi)
+to try 0.2. Review the [migration guide](https://github.com/Epsirom/braid/blob/main/docs/compatibility.md#migrating-from-01-to-02)
+before upgrading an existing graph.
+
+It registers:
+
 - `braid` — submit a graph with optional bounded loops and immediately receive a `jobId`.
 - `braid_status` — retrieve progress and results with `{ "jobId": "..." }`, or
-  add `"nodeId": "..."` for a single node's full output/error. Omit both IDs to
-  list jobs in the current session.
+  add `"executionId": "..."` for an exact invocation's full output/error.
+  `"nodeId": "..."` selects that definition's latest invocation. Omit all IDs
+  to list jobs in the current session.
+- `braid_update` / `braid_resume` — edit live definitions or release paused executions.
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
 
