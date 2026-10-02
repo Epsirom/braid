@@ -2,6 +2,7 @@ export { braid } from "./runtime.js";
 export { validateGraph, GraphValidationError } from "./validate.js";
 export type {
   BraidInput,
+  BraidInputNode,
   BraidNode,
   BraidOptions,
   BraidResult,
@@ -22,9 +23,11 @@ export type {
   NodeWorkspace,
   GitResult,
   NodeOutput,
+  NodePrompt,
   NodeResult,
   NodeStatus,
   PredecessorOutput,
+  PromptTemplateReference,
   TokenUsage,
 } from "./types.js";
 

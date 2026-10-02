@@ -163,19 +163,29 @@ output. The graph has no special fork, branch, or join nodes.
 ### Graph schema
 
 ```ts
-type BraidNode =
-  | { type: "execute"; id: string; prompt: string; model?: string;
+type NodePrompt = string | {
+  template: string;
+  variables: Readonly<Record<string, string>>;
+};
+type BraidInputNode =
+  | { type: "execute"; id: string; prompt: NodePrompt; model?: string;
       workspace?: "read-only" | "worktree" }
-  | { type: "decision"; id: string; prompt: string;
+  | { type: "decision"; id: string; prompt: NodePrompt;
       choices: readonly string[]; model?: string; workspace?: "read-only" | "worktree" }
-  | { type: "merge"; id: string; prompt?: string; model?: string };
+  | { type: "merge"; id: string; prompt?: NodePrompt; model?: string };
 
 type Edge = { from: string; to: string; choice?: string };
-type BraidInput = { goal: string; nodes: readonly BraidNode[]; edges: readonly Edge[] };
+type BraidInput = {
+  goal: string;
+  nodes: readonly BraidInputNode[];
+  edges: readonly Edge[];
+  promptTemplates?: Readonly<Record<string, string>>;
+};
 ```
 
-IDs are unique, non-empty strings. Prompts, goals, models, and choices must be
-non-empty strings when present. Decision choices must be non-empty and unique.
+IDs are unique, non-empty strings. Goals, models, choices, plain-string prompts,
+and rendered prompts must be non-empty strings when present. Decision choices
+must be non-empty and unique.
 `workspace` is optional on execute/decision nodes and forbidden on merge nodes.
 Use `"read-only"` for analysis, review, routing, and synthesis. Omit it or use
 `"worktree"` for the existing behavior: an isolated writable worktree in Git,
@@ -191,6 +201,66 @@ outgoing edges, and decisions may themselves be terminal.
 `braid` throw `GraphValidationError` for invalid graphs, before invoking a model.
 Invalid runtime options throw `TypeError`. Execution failures return a result
 with `status: "failed"` instead of discarding the run's successful outputs.
+
+### Reusable prompt templates
+
+Define shared instructions once in `promptTemplates`, then give each node a
+template name and explicit string variables. The same representation is accepted
+by the core API and Pi's `braid` tool:
+
+```json
+{
+  "goal": "Review the runtime and validation code",
+  "promptTemplates": {
+    "review": "Review {{target}} for {{focus}}. Inspect source and tests, then report findings with file references and supporting evidence."
+  },
+  "nodes": [
+    {
+      "type": "execute", "id": "runtime", "workspace": "read-only",
+      "prompt": {
+        "template": "review",
+        "variables": { "target": "src/runtime.ts", "focus": "scheduling and cancellation" }
+      }
+    },
+    {
+      "type": "execute", "id": "validation", "workspace": "read-only",
+      "prompt": {
+        "template": "review",
+        "variables": { "target": "src/validate.ts", "focus": "input validation" }
+      }
+    }
+  ],
+  "edges": []
+}
+```
+
+- Placeholders use `{{name}}`, with optional surrounding whitespace inside the
+  braces. Names match `[A-Za-z_][A-Za-z0-9_]*`; repeated placeholders reuse the
+  same value. Template names are any non-empty strings.
+- `variables` is required, including `{}` for a constant template. Values must
+  be strings and must match the template's variables exactly. Empty values are
+  allowed if the complete rendered prompt is still non-empty.
+- Values are inserted literally once: no expressions, recursive expansion,
+  escaping, environment lookup, or access to other nodes' outputs. To insert
+  literal double braces into a template, pass them as a variable value.
+- Unknown templates, missing/unused variables, invalid template syntax, and
+  blank rendered prompts throw `GraphValidationError` before any model call.
+  All declared templates are syntax-checked, including unused ones. Errors
+  identify the template and, for node references/rendering, the affected node.
+- Templates work on execute, decision, and explicit merge prompts. Omitted
+  merge prompts retain their default. Plain-string prompts are never rendered,
+  even when they contain `{{...}}`.
+
+Templates reduce duplicate text in graph/tool-call arguments; every worker still
+receives its fully rendered prompt. Rendering and input snapshotting happen
+before asynchronous execution. Templates are local to one submission, with no
+saved registry or new runtime dependencies.
+
+`BraidInputNode`, `NodePrompt`, and `PromptTemplateReference` describe compact
+inputs. Existing `BraidNode`, `ExecuteNode`, `DecisionNode`, `MergeNode`, and
+`ModelRequest.node` keep their string-prompt types for runners. Core applies the
+same non-empty prompt validation after rendering; it does not impose a prompt
+length or token cap (see [resource limits](docs/resource-limits.md)).
 
 ### Options
 

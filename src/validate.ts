@@ -39,6 +39,70 @@ function fields(
   }
 }
 
+interface PromptTemplate {
+  parts: (string | { variable: string })[];
+  variables: Set<string>;
+}
+
+function compileTemplates(value: unknown): Map<string, PromptTemplate> {
+  const templates = new Map<string, PromptTemplate>();
+  if (value === undefined) return templates;
+  requireValid(isRecord(value), "Graph promptTemplates must be an object");
+  for (const [name, source] of Object.entries(value)) {
+    requireValid(text(name), "Prompt template name must be a non-empty string");
+    const label = `Prompt template '${name}'`;
+    requireValid(text(source), `${label} must be a non-empty string`);
+    const parts: PromptTemplate["parts"] = [];
+    const variables = new Set<string>();
+    let offset = 0;
+    while (offset < source.length) {
+      const open = source.indexOf("{{", offset);
+      const close = source.indexOf("}}", offset);
+      requireValid(close === -1 || (open !== -1 && close > open), `${label} has an unmatched '}}'`);
+      if (open === -1) {
+        parts.push(source.slice(offset));
+        break;
+      }
+      requireValid(close !== -1, `${label} has an unclosed '{{'`);
+      const variable = source.slice(open + 2, close).trim();
+      requireValid(/^[A-Za-z_][A-Za-z0-9_]*$/.test(variable), `${label} has invalid variable '${variable}'`);
+      parts.push(source.slice(offset, open), { variable });
+      variables.add(variable);
+      offset = close + 2;
+    }
+    templates.set(name, { parts, variables });
+  }
+  return templates;
+}
+
+function renderPrompt(value: unknown, nodeId: string, templates: Map<string, PromptTemplate>): string {
+  const nodeLabel = `Node '${nodeId}'`;
+  if (typeof value === "string") {
+    requireValid(text(value), `${nodeLabel} needs a non-empty prompt`);
+    return value;
+  }
+  requireValid(isRecord(value), `${nodeLabel} needs a non-empty prompt or template reference`);
+  fields(value, ["template", "variables"], `${nodeLabel} prompt`);
+  requireValid(text(value.template), `${nodeLabel} prompt needs a non-empty template reference`);
+  const label = `${nodeLabel} prompt template '${value.template}'`;
+  const template = templates.get(value.template);
+  requireValid(template, `${label} is unknown`);
+  requireValid(isRecord(value.variables), `${label} variables must be an object`);
+  const variables = new Map<string, string>();
+  for (const [name, variable] of Object.entries(value.variables)) {
+    requireValid(typeof variable === "string", `${label} variable '${name}' must be a string`);
+    requireValid(template.variables.has(name), `${label} has unused variable '${name}'`);
+    variables.set(name, variable);
+  }
+  for (const name of template.variables) {
+    requireValid(variables.has(name), `${label} is missing variable '${name}'`);
+  }
+  // One pass over the parsed template: inserted values are never parsed or evaluated.
+  const rendered = template.parts.map(part => typeof part === "string" ? part : variables.get(part.variable)!).join("");
+  requireValid(text(rendered), `${label} renders an empty prompt`);
+  return rendered;
+}
+
 /** Throws before execution for malformed graphs, references, choices, or cycles. */
 export function validateGraph(input: BraidInput): void {
   compileGraph(input);
@@ -46,13 +110,14 @@ export function validateGraph(input: BraidInput): void {
 
 export function compileGraph(input: BraidInput): Graph {
   requireValid(isRecord(input), "Graph must be an object");
-  fields(input, ["goal", "nodes", "edges"], "Graph");
+  fields(input, ["goal", "nodes", "edges", "promptTemplates"], "Graph");
   requireValid(text(input.goal), "Graph goal must be a non-empty string");
   requireValid(
     Array.isArray(input.nodes) && input.nodes.length > 0,
     "Graph needs at least one node",
   );
   requireValid(Array.isArray(input.edges), "Graph edges must be an array");
+  const templates = compileTemplates(input.promptTemplates);
 
   const byId = new Map<string, BraidNode>();
   for (const node of input.nodes) {
@@ -72,10 +137,9 @@ export function compileGraph(input: BraidInput): Graph {
     );
     requireValid(text(node.id), "Node id must be a non-empty string");
     requireValid(!byId.has(node.id), `Duplicate node id '${node.id}'`);
-    requireValid(
-      text(node.prompt) || (node.type === "merge" && node.prompt === undefined),
-      `Node '${node.id}' needs a non-empty prompt`,
-    );
+    const prompt = node.type === "merge" && node.prompt === undefined
+      ? "Review all predecessor changes, decide how to integrate them into the source repository, and account for every source with finish_merge."
+      : renderPrompt(node.prompt, node.id, templates);
     requireValid(
       node.model === undefined || text(node.model),
       `Invalid model on '${node.id}'`,
@@ -87,7 +151,7 @@ export function compileGraph(input: BraidInput): Graph {
     );
     const common = {
       id: node.id,
-      prompt: node.prompt ?? "Review all predecessor changes, decide how to integrate them into the source repository, and account for every source with finish_merge.",
+      prompt,
       ...(node.model !== undefined ? { model: node.model } : {}),
       ...(workspace !== undefined ? { workspace } as const : {}),
     };

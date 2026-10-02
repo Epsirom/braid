@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add submission-local `promptTemplates` and explicit template-reference prompts
+  to core and Pi's `braid` tool. Core expands `{{name}}` placeholders using literal
+  string variables, validates every rendered prompt before execution, and keeps
+  existing plain-string/default merge prompts and runner contracts. Shared
+  instructions no longer need repeating in each node's tool-call arguments (#29).
+
 ## 0.1.3 — 2026-09-29
 
 - Add per-node `workspace: "read-only" | "worktree"` for execute/decision nodes.

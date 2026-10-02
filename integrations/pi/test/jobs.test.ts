@@ -8,6 +8,21 @@ import { context, deferred, input, response } from "./helpers.js";
 
 const bounds = { timeout: 2_000 };
 
+test("invalid template submissions fail before allocating a job or invoking a provider", bounds, async (t) => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  let calls = 0;
+  const ctx = context(async () => { calls++; return response(); });
+  const { braidTool } = createBraidTools(jobs);
+  await assert.rejects(braidTool.execute("bad-template", {
+    ...input,
+    promptTemplates: { inspect: "Inspect {{target}}." },
+    nodes: [...input.nodes, { type: "execute", id: "invalid", prompt: { template: "inspect", variables: {} } }],
+  }, undefined, undefined, ctx), /Node 'invalid'.*template 'inspect'.*missing variable 'target'/);
+  assert.deepEqual(jobs.list(), []);
+  assert.equal(calls, 0);
+});
+
 test(
   "submission returns before the provider starts; foreground abort does not cancel the job",
   bounds,
