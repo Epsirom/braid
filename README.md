@@ -11,13 +11,13 @@ checkpoints; explicit `integrate` nodes apply selected work to the source checko
 [![npm Pi](https://img.shields.io/npm/v/%40chrok%2Fpi-braid?label=%40chrok%2Fpi-braid)](https://www.npmjs.com/package/@chrok/pi-braid)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**0.2 development:** Experimental, Node.js 22+, ESM. The framework-agnostic core
+**0.2 API:** Experimental, Node.js 22+, ESM. The framework-agnostic core
 has no runtime dependencies; the OpenAI-compatible runner and Pi extension are
-optional integrations. This branch documents the upcoming 0.2 API. The npm
-badges show published versions; npm `latest` is currently 0.1.3. For that
-release's API, use the [0.1.3 documentation](https://github.com/Epsirom/braid/tree/v0.1.3).
-Try 0.2 by [building from source](#develop-from-source), and read the
-[0.1 → 0.2 migration guide](docs/compatibility.md#migrating-from-01-to-02).
+optional integrations. The npm badges show published versions; see
+[GitHub releases](https://github.com/Epsirom/braid/releases) for release notes.
+Read the [0.1 → 0.2 migration guide](docs/compatibility.md#migrating-from-01-to-02)
+before upgrading. For the previous API, use the
+[0.1.3 documentation](https://github.com/Epsirom/braid/tree/v0.1.3).
 
 | Package | Purpose |
 | --- | --- |

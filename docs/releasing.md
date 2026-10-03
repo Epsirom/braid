@@ -53,6 +53,40 @@ corrections require a new version. See [repository settings](repository-settings
    require the CI matrix to pass before tagging that commit `vX.Y.Z`.
 4. Inspect `npm pack --dry-run` and `npm pack --dry-run` from `integrations/pi`.
    `prepack` rebuilds each package. Never publish stale prebuilt output.
+5. Prepare the GitHub release draft using the release-note policy below. After
+   publishing, verify both registry versions, `latest` tags, provenance, and a
+   clean install before reporting the release complete.
+
+## Release notes and contributor credit
+
+Every release must describe user-visible features, fixes, and breaking changes
+in both `CHANGELOG.md` and the GitHub release notes. For each item, link the
+implementing pull request and credit its author by GitHub handle, for example:
+`Add graph-local prompt templates ([#33](https://github.com/Epsirom/braid/pull/33)) — @Epsirom.`
+Use the PR author, not the person who merged it. Issue links can add context but
+do not replace PR links. Credit each relevant PR/author when an item combines
+several contributions; credit direct-commit authors with commit links if no PR
+exists. Keep dependency and release maintenance separate from feature summaries.
+
+Compare the previous release tag with the exact candidate commit. Inspect the
+merged PRs in that range and their authors; GitHub's generated release notes
+are a useful starting point, not a substitute for checking the actual changes.
+Keep the changelog and GitHub notes consistent, include migration guidance for
+breaking changes, and link the full tag-to-tag comparison.
+
+Mark a human author's first contribution to this repository with
+`**First-time contributor**` next to their credit. Also add a **New Contributors**
+section that thanks them and links their first included PR (or direct commit).
+Verify this against all earlier merged PRs and commit history through the
+previous release, not just the latest release notes. An existing contributor's
+first PR in this release is not their first repository contribution. Exclude
+bot accounts from newcomer thanks, while retaining their maintenance credits.
+If there are no first-time human contributors, say so in that section; do not
+infer newcomer status from a missing credit in an older release.
+
+Before publishing the draft, check that every feature/fix has its implementing
+PR link and author, newcomer labels match the history, and version, date,
+comparison, and migration links refer to the release being published.
 
 ## First publication
 
