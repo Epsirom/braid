@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Maintenance
+
+- Upgrade the Pi validation target to 1.0.1 and refresh the workspace lockfile
+  so Pi's minimatch resolves the patched brace-expansion 5.0.12. Add a separate
+  dependency-security check covering development dependencies and reporting
+  scanner failures explicitly
+  ([#38](https://github.com/Epsirom/braid/pull/38)) — @Epsirom.
+
 ## 0.2.0 — 2026-10-02
 
 ### Features and breaking changes

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mockClock } from "../../../test/clock.js";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import type { Context } from "@earendil-works/pi-ai";
 import type { BraidResult } from "@chrok/braid";
 import { createBraidTools } from "../index.js";
@@ -31,6 +31,8 @@ for (const scenario of [
     const ctx = {
       cwd: readOnlyCwd,
       model,
+      tools: [],
+      async executeTool() { assert.fail("Unexpected nested host tool call in Braid test"); },
       modelRegistry: {
         find: () => model,
         complete: async (_model: unknown, context: Context) => {
@@ -60,7 +62,7 @@ for (const scenario of [
           };
         },
       },
-    } as unknown as ExtensionContext;
+    } as unknown as ExtensionToolContext;
     const jobs = new BraidJobs();
     t.after(() => jobs.dispose());
     const { braidTool } = createBraidTools(jobs);
