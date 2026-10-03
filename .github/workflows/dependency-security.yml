@@ -1,0 +1,30 @@
+name: Dependency security
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: dependency-security-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install the locked tree including development dependencies
+        run: npm ci --include=dev --include=optional --include=peer --ignore-scripts --no-audit
+      - name: Audit all dependencies and report scanner failures
+        run: npm run audit:dependencies

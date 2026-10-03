@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,7 +42,7 @@ export function response(output = "done"): AssistantMessage {
 
 export function context(
   complete: (signal: AbortSignal) => Promise<AssistantMessage>,
-): ExtensionContext {
+): ExtensionToolContext {
   const model = { provider: "fake", id: "model", contextWindow: 100_000 };
   return {
     cwd: readOnlyCwd,
@@ -51,6 +51,8 @@ export function context(
     hasUI: true,
     isIdle: () => true,
     hasPendingMessages: () => false,
+    tools: [],
+    async executeTool() { throw new Error("Unexpected nested host tool call in Braid test"); },
     modelRegistry: {
       find: () => model,
       complete: (
@@ -59,7 +61,7 @@ export function context(
         options: { signal: AbortSignal },
       ) => complete(options.signal),
     },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
 }
 
 export const input = {

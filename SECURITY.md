@@ -13,6 +13,32 @@ advisory where appropriate. There is no response-time guarantee or bounty progra
 Only the latest released 0.x minor series receives fixes; older series should
 upgrade. Before the first release, report issues against the current main branch.
 
+## Dependency security
+
+Audit the development tree as well as runtime dependencies with
+`npm ci` followed by `npm run audit:dependencies`. Scanner errors are incomplete
+results and fail the check; they must not be treated as zero vulnerabilities.
+
+The Pi development dependencies are pinned together to 1.0.1. Its
+[published npm tarball](https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.0.1.tgz)
+removes `npm-shrinkwrap.json` and directly pins `brace-expansion` 5.0.12, fixing
+[GHSA-q2hr-2g5m-vwhr](https://github.com/advisories/GHSA-q2hr-2g5m-vwhr) and related
+advisories tracked in [issue #37](https://github.com/Epsirom/braid/issues/37).
+The regenerated Braid lockfile resolves Pi's `minimatch 10.2.6` to
+`brace-expansion 5.0.12` after a clean `npm ci`, verified on 2026-10-03.
+
+An upstream release does not update an existing Braid lockfile or installation.
+When upgrading Pi, inspect the published package (including any shrinkwrap),
+update the Pi development dependencies together, regenerate the root lockfile,
+and inspect `npm ls brace-expansion --all` after a clean `npm ci`. Confirm the
+version resolved by Pi's installed minimatch, run `npm run verify`, and review
+`npm run audit:dependencies` before declaring a dependency issue fixed.
+
+These Braid lockfile entries are development dependencies. This does not
+establish exposure in a separately installed Pi host; inspect that host's actual
+dependency tree independently. A production-only audit of this repository cannot
+answer that question.
+
 ## Trust boundaries
 
 - Braid isolates invocation context; it is not a process or filesystem sandbox.

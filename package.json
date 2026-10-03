@@ -33,6 +33,7 @@
     "build": "node scripts/build.mjs",
     "check": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts test/*.test.mjs",
+    "audit:dependencies": "node scripts/audit-dependencies.mjs",
     "demo": "tsx examples/basic.ts",
     "check:pi": "npm run build && npm run check --workspace @chrok/pi-braid",
     "test:pi": "npm run build && npm test --workspace @chrok/pi-braid",
