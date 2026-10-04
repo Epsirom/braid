@@ -416,10 +416,11 @@ provides `request.merge.sources` and `request.merge.finish(dispositions)` to
 merge agents. Adapters must enforce workspace capabilities and wrap mutating
 file tools in `request.withWorkspaceWrite(operation)`, so cleanup waits for
 in-flight writes and rejects later writes. Core Git mutations use this barrier.
-The included Pi adapter provides guarded `write`/`edit` alongside its read tools.
+The included Pi adapter provides guarded `write`/`edit` and Pi shell tools alongside its read tools.
 For read-only workspaces, adapters must omit mutating tools; the core write
-barrier also rejects writes. This includes all nodes outside Git. Pi never provides
-`bash`, `powershell`, or a test runner to nodes.
+barrier also rejects writes. This includes all nodes outside Git. Writable Pi nodes
+can use `bash` (and `powershell` on Windows) to build and run tests. Shell calls
+participate in the write barrier and forward cancellation to their processes.
 
 `request.predecessors` contains direct active predecessors in incoming-edge
 order, including failures on unconditional edges with an `error` field. Each source appears once:
@@ -467,7 +468,10 @@ The model-facing Git tool separates `command` from `args`, for example
 accepts the complete argument array. Duplicate command prefixes, network Git,
 branch switching, and filesystem-boundary overrides are rejected.
 
-Instances checkpoint before downstream admission. All source checkpoints remain
+Instances checkpoint tracked changes and non-ignored new files before downstream
+admission. Ignored dependencies, caches, and build products are discarded on cleanup;
+files already tracked or explicitly force-added remain tracked under normal Git rules.
+All source checkpoints remain
 reusable; no merge consumes or deletes a predecessor's result. Job cleanup
 archives and removes owned worktrees, retaining refs under
 `refs/braid/checkpoints/`. Integration additionally captures a pre-write
@@ -489,19 +493,22 @@ isolated from those source edits. See [execution control](docs/execution-control
 
 **The adapter is a trust boundary, not a security sandbox.** It must avoid shared
 conversation state, expose only its declared capabilities, and forward `signal` to its provider.
-The core never gives the model arbitrary code execution or a recursive Braid
-tool. An optional Pi adapter translates this same contract without changing the
-runtime; the core package does not depend on Pi. See
+The core does not supply shell tools or a recursive Braid tool; adapters choose
+their tool capabilities. The Pi adapter supplies shell tools to writable nodes
+without changing the runtime; the core package does not depend on Pi. See
 [`integrations/pi/README.md`](integrations/pi/README.md) for installation and testing.
 
 The included OpenAI-compatible adapter uses fresh Chat Completions contexts,
 a strict `decide({ choice })` tool and one tool-free continuation for decisions.
 Merge/integrate nodes use a local `git` / `finish_merge` tool loop; ordinary OpenAI nodes
-have no filesystem tools. Pi exposes read and guarded write tools plus these
-core Git/merge tools. Tool errors go back to merge agents for recovery. Both
+have no filesystem tools. Pi exposes read, guarded write, and shell tools plus
+these core Git/merge tools. Tool errors go back to nodes for recovery. Both
 adapters sum usage across their model calls and forward cancellation.
 Pi writes reject external paths, Git metadata, symlinks, hard links, and special
-files. These checks are not an OS sandbox against concurrent filesystem attacks.
+files. Shell tools can bypass these checks and run with host permissions; prompts
+require nodes to respect workspace boundaries, shared Git state, and external
+resources. Parent extension/MCP tools and hooks are not inherited. These checks
+and cooperation rules are not an OS sandbox.
 See the [Pi filesystem capabilities](integrations/pi/README.md#node-filesystem-capabilities).
 
 Pi tool and time budgets are unlimited by default. Its `options.maxToolRounds`

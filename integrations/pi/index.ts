@@ -68,7 +68,7 @@ const BRAID_FILESYSTEM_GUIDANCE =
   "Every execute/decision activation gets a fresh worktree in Git, based on its predecessor execution checkpoint (roots use the initial job snapshot). Set workspace=read-only to disable writes. Multiple independent code snapshots require an explicit merge node. " +
   "merge combines selected predecessor checkpoints into a new isolated worktree; integrate writes selected changes to the invoking checkout while preserving user edits. Both must call finish_merge using executionId for each source. There is no automatic final integration. " +
   "Do not set workspace on merge/integrate nodes. Checkpoints remain recoverable after cleanup. Optional failed predecessors pass errors and partial work along unconditional edges; requireSuccess=true makes failure abort the job. " +
-  "Nodes have local read/ls and Git inspection; writable nodes have write/edit, merge/integrate have local Git integration tools. Search tools require local rg/fd. Outside Git all filesystem access is read-only. Shell, tests, network Git, and recursive Braid calls are unavailable. Run tests in the parent after explicit integration.";
+  "Nodes have local read/ls and Git inspection; writable nodes have write/edit and Pi shell tools for dependencies, builds, and tests, while merge/integrate also have local Git integration tools. Search tools require local rg/fd. Outside Git all filesystem access is read-only; read-only nodes have no shell. Worktrees are not an OS sandbox: prompts constrain shell writes and shared resources. Checkpoints omit ignored new files. Parent extension/MCP tools and recursive Braid calls are not provided. Nodes should verify their changes; the parent reviews results and performs any remaining validation after integration.";
 
 const BRAID_USAGE_GUIDANCE = [
   "Braid is a proactive execution primitive, not only a user-requested command.",
@@ -77,7 +77,7 @@ const BRAID_USAGE_GUIDANCE = [
   "For repeated instructions, define promptTemplates once and use prompt={template: name, variables: {name: value}} on nodes. Values are strings inserted literally into {{name}} placeholders; plain-string prompts remain supported.",
   "When Braid fits, submit a graph: use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. The tool returns a jobId immediately. Continue independent work or finish your turn while it runs; do not poll repeatedly. A completion reminder will resume you. Use braid_status with the jobId to retrieve terminal outputs before relying on them.",
   "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Use braid_status({jobId, executionId}) to retrieve the exact execution; nodeId selects the latest instance. Use pauseAfter=true to hold outgoing scheduling. Definitions can always be changed with braid_update using expectedRevision; existing executions retain their captured inputs. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes.",
-  "Do not use braid for a simple one-step answer, a trivial direct edit, shell work, or when decomposition adds no value. The parent reviews results, runs tests, and executes shell commands after Braid completes.",
+  "Do not use braid for a simple one-step answer, a trivial direct edit, a single shell command, or when decomposition adds no value. Writable nodes can implement and test their work. The parent reviews results and performs any remaining validation after Braid completes.",
 ].join("\n");
 
 export function createBraidTools(jobs: BraidJobs) {
@@ -92,7 +92,7 @@ export function createBraidTools(jobs: BraidJobs) {
         "For repeated prompts, define promptTemplates and set node prompt to {template: name, variables: {name: value}}; core renders {{name}} placeholders using explicit string variables before execution. " +
         "Unlabelled edges are unconditional. Joins wait for all possible predecessor paths to resolve. " +
         "Nodes see only the goal, their prompt, labelled direct-predecessor outputs, and their filesystem capabilities: " +
-        "no parent history, shell, tests, or recursive Braid calls. " +
+        "no parent history, inherited extension/MCP tools, or recursive Braid tools. " +
         BRAID_FILESYSTEM_GUIDANCE + " " +
         "Do not use it for a simple one-step answer or trivial direct edit. " +
         "Use braid_status(jobId) for progress and results, or braid_cancel(jobId) to stop it. A completion reminder resumes the agent if idle; do independent work or end your turn instead of polling. Humans can open /braid for the live flow panel. " +
@@ -103,7 +103,7 @@ export function createBraidTools(jobs: BraidJobs) {
       promptGuidelines: [
         "Call braid before direct repository inspection when a code task has two or more separable review, debugging, design, test-planning, or implementation concerns; the Braid nodes can inspect the project and edit isolated Git worktrees.",
         "Use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. The user does not need to mention Braid or design the graph.",
-        "Do not use braid for simple one-step answers or trivial direct edits. Keep shell commands and test execution in the parent; use merge nodes for integration.",
+        "Do not use braid for simple one-step answers or trivial direct edits. Let writable nodes run shell commands and tests for their work; use merge nodes to combine and validate snapshots before explicit integration.",
         BRAID_FILESYSTEM_GUIDANCE,
         "Decision nodes additionally receive decide. Nodes cannot call recursive Braid.",
         "Tool and time budgets are unlimited by default. Set maxToolRounds, maxToolCalls, nodeTimeoutMs, or graphTimeoutMs in options to impose hard limits; nodes receive system reminders of their remaining budgets before each model call.",

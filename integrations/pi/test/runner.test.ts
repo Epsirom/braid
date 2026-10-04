@@ -326,7 +326,7 @@ test("Pi runner executes read-only node tools and returns their results to the m
   );
 });
 
-test("Pi runner keeps write and shell tools unavailable", async () => {
+test("Pi runner keeps write and shell tools unavailable without an assigned writable workspace", async () => {
   const fake = fakeRegistry([
     message(
       [

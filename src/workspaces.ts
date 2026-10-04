@@ -181,7 +181,7 @@ export class GitWorkspaces {
       // A temporary index captures tracked edits/deletions and non-ignored new files
       // without changing the parent's real index, branch, or working files.
       await git(sourceRoot, ["add", "--all", "--", "."], options);
-      // Include ignored files contributed by selected sources, without capturing the
+      // Include ignored files deliberately tracked by selected sources, without capturing the
       // caller's unrelated ignored build products or dependencies.
       const existing: string[] = [];
       for (const file of extraFiles) {
@@ -330,7 +330,7 @@ export class GitWorkspaces {
       .map(workspace => workspace.executionId ?? workspace.nodeId);
   }
 
-  /** Checkpoint every file, including ignored node outputs, before releasing a worktree. */
+  /** Preserve tracked changes and non-ignored new files before releasing a worktree. */
   private async checkpoint(workspace: NodeWorkspace): Promise<void> {
     if (workspace.checkpointRef) return;
     const location = this.locations.get(workspace.executionId ?? workspace.nodeId)!;
@@ -348,7 +348,7 @@ export class GitWorkspaces {
         if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
       }
     }
-    await git(cwd, ["add", "--force", "--all", "--", "."], options);
+    await git(cwd, ["add", "--all", "--", "."], options);
     const tree = await git(cwd, ["write-tree"], options);
     const baseTree = await git(cwd, ["rev-parse", `${workspace.snapshotCommit}^{tree}`]);
     const parents = [...new Set([workspace.snapshotCommit!, ...(this.mergeParents.get(workspace.executionId ?? workspace.nodeId) ?? [])])];

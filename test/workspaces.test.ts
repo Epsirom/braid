@@ -53,6 +53,32 @@ function request(id: string, signal = new AbortController().signal, runId = "run
   };
 }
 
+test("checkpoints honor ignore rules while preserving tracked edits and deletions", async t => {
+  const fixture = await repository(t);
+  await writeFile(join(fixture.root, ".gitignore"), "ignored.txt\ntracked.txt\nnode_modules/\n");
+  await writeFile(join(fixture.root, "tracked.txt"), "tracked despite ignore rules\n");
+  await git(fixture.root, "add", "--force", "tracked.txt");
+  const manager = new GitWorkspaces(fixture.root, fixture.onWorkspace);
+  const invocation = request("build");
+  invocation.workspace = await manager.prepare(invocation);
+  const cwd = invocation.workspace.worktreeRoot!;
+  await writeFile(join(cwd, "tracked.txt"), "tracked edit\n");
+  await writeFile(join(cwd, "ignored.txt"), "temporary output\n");
+  await mkdir(join(cwd, "node_modules"));
+  await writeFile(join(cwd, "node_modules", "dependency.js"), "dependency\n");
+  await writeFile(join(cwd, "new.txt"), "new source\n");
+  await rm(join(cwd, "deleted.txt"));
+  await manager.seal(invocation);
+  const checkpoint = manager.all().build!.checkpointRef!;
+  assert.equal(await git(fixture.root, "show", `${checkpoint}:tracked.txt`), "tracked edit");
+  assert.equal(await git(fixture.root, "show", `${checkpoint}:new.txt`), "new source");
+  for (const path of ["ignored.txt", "node_modules/dependency.js", "deleted.txt"])
+    await assert.rejects(git(fixture.root, "show", `${checkpoint}:${path}`));
+  await manager.archivePending("Test completed");
+  await manager.close();
+  await assert.rejects(readFile(join(cwd, "ignored.txt")), { code: "ENOENT" });
+});
+
 for (const source of ["unborn", "linked"] as const) {
   test(`read-only allocation supports a ${source} checkout with an isolated snapshot`, async t => {
     const fixture = await repository(t, source === "unborn");
