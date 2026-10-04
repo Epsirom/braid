@@ -102,7 +102,7 @@ before running a custom adapter against a repository.
 
 ## Install in Pi
 
-With Pi 0.87.1 and Node.js 22.19+:
+With Pi 1.0.1 and Node.js 22.19+:
 
 ```sh
 pi install npm:@chrok/pi-braid

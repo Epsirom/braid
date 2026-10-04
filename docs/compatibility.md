@@ -3,7 +3,7 @@
 | Surface | Supported / tested contract |
 | --- | --- |
 | Core runtime | Node.js 22+, ESM imports, TypeScript declarations, no runtime dependencies |
-| Pi package | Node.js 22.19+, Pi 0.87.1 is the pinned validation target |
+| Pi package | Node.js 22.19+, Pi 1.0.1 is the pinned validation target |
 | CI | Core minimum Node 22.0; both packages on Node 22.19 and 24 on Linux, macOS, Windows |
 | OpenAI-compatible runner | Chat Completions text and function-tool calls; decisions and merge/integrate nodes require tool calling |
 | Browsers / CommonJS | No supported browser build or CommonJS entry point in 0.2 |
@@ -14,7 +14,7 @@ that every provider advertising OpenAI compatibility supports its tool schema.
 Run a small opt-in live test with your chosen provider before relying on it.
 
 Pi's upstream packaging guide requires `*` peer dependencies for packages the
-host provides. Braid follows that convention and pins dev dependencies to 0.87.1.
+host provides. Braid follows that convention and pins dev dependencies to 1.0.1.
 The wildcard is a loader/distribution convention, **not a claim that every Pi
 version works**. Test the whole Pi suite before updating the supported target.
 The offline host compatibility test loads the extension into a real Pi session
@@ -23,7 +23,7 @@ exactly one automatic continuation per node/job reminder delivered during
 `agent_settled`, including retrieval of a node output while its job still runs.
 This covers the Pi 0.86/0.87 transcript and settling changes without provider
 credentials or network model calls. Version 0.1.0 was originally validated with
-Pi 0.85.1; the current checkout's pinned validation target is 0.87.1.
+Pi 0.85.1; the current checkout's pinned validation target is 1.0.1.
 The Pi npm package declares an exact dependency on the matching `@chrok/braid`
 release. npm installs the core automatically; Pi does not bundle another copy of
 its runtime and does not need a source checkout.

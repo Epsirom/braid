@@ -34,6 +34,15 @@ checkout. That last check needs registry access for Pi dependencies but never
 calls a model. `npm test` is the fast core-only loop; `npm run test:pi` tests Pi.
 `npm run bench` measures the scheduler without a provider.
 
+Run `npm run audit:dependencies` after `npm ci` to scan the complete dependency
+tree, including development dependencies. The separate Dependency security
+workflow runs this on pull requests, pushes to main, and weekly. The command
+exits 1 for vulnerabilities and 2 for scanner failures or incomplete reports;
+both fail the workflow, with details in its log and a separate result summary.
+This registry-backed check is separate from `verify` so deterministic tests do
+not depend on audit service availability. See [dependency security](SECURITY.md#dependency-security)
+for the known Pi shrinkwrap issue and the required upgrade verification.
+
 ## Changes and reviews
 
 Submit changes to `main` through a pull request, including maintainer changes.
