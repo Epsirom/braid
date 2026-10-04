@@ -224,7 +224,9 @@ export class BraidJobs {
         job.result.error?.code === "CANCELLED"
           ? "cancelled"
           : job.result.status;
-      const full = JSON.stringify({ ...job.result, workspaces: job.workspaces }, null, 2);
+      // Core metadata counts usage returned by runners; Pi also records completed
+      // provider rounds from workers that later fail or time out.
+      const full = JSON.stringify({ ...job.result, workspaces: job.workspaces, piUsage: job.usage }, null, 2);
       const preview = JSON.stringify(
         { ...this.get(job.jobId), status },
         null,
@@ -239,6 +241,8 @@ export class BraidJobs {
       job.status = status;
     } catch (error) {
       job.status = "failed";
+      job.live.status = "failed";
+      job.live.pausedExecutionIds = [];
       job.error = error instanceof Error ? error.message : String(error);
       if (reports.length) job.usage = sumPiUsage(reports);
     }

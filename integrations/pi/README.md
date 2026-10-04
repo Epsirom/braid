@@ -26,17 +26,57 @@ Submission and completion reminders use short session handles such as `job-1`.
 Status, cancellation and the panel accept either that exact handle or the original
 UUID. Unknown IDs report available handles; IDs are never guessed or fuzzy-matched.
 
+Invalid submissions show the validation error directly in the tool result,
+including failures before a background job is created. Correct the indicated
+field or graph relationship and resubmit. `braid_status` lookup failures also
+display their error text.
+
 The parent can continue independent work or finish its response while a job runs.
 On completion, failure, or cancellation, the extension sends a custom
 `system-reminder` containing the job ID and a request to retrieve its results.
-Pi queues it as a follow-up during streaming; when idle, it starts a new agent
-turn automatically. The agent should wait for this reminder rather than poll.
+Pi queues it as steering during streaming: it enters context after the current
+assistant response and its entire tool batch, before the next model step. It
+does not wait for the whole foreground task to finish or skip remaining tools.
+When idle, it starts a new agent turn automatically. The agent should wait for
+this reminder rather than poll.
 Stopping the foreground response does not stop background jobs.
 
 Jobs live in memory for the current Pi session. Quitting, reloading extensions,
 or switching/forking sessions aborts outstanding work and suppresses its
 reminders. Job IDs cannot be retrieved after that lifecycle ends. They are not
 persistent processes outside Pi.
+
+## Graph definitions
+
+Each node has a unique `id` and one of these four shapes:
+
+| `type` | `prompt` | `choices` | `workspace` |
+| --- | --- | --- | --- |
+| `execute` | Required | Omit | Optional: `read-only` or `worktree` |
+| `decision` | Required | Required, non-empty, distinct strings | Optional: `read-only` or `worktree` |
+| `merge` | Optional | Omit | Omit; combines changes in an isolated worktree |
+| `integrate` | Optional | Omit | Omit; applies changes to the invoking checkout |
+
+All four types accept `model`, `notifyOnCompletion`, `pauseAfter`, and
+`requireSuccess`. Omit optional fields when unused. Execute/decision nodes
+default to writable worktrees in Git; outside Git, all workers are read-only.
+The model-facing schema exposes these fields in one object with a `type` enum;
+core validation enforces the type-specific requirements before a submission or
+update takes effect. Submission/update replies echo the accepted node types,
+model overrides, policies, and edges without repeating prompts. If a definition
+problem repeats, inspect/report the mismatch instead of launching more probe jobs.
+
+Edges use exact node IDs in `from` and `to`. `choice` is an exact label declared
+by the source decision; omitting it makes the edge unconditional. Pass `edges: []`
+for independent roots. Historical `executionId` pins are available only in
+`braid_update`, after the source execution exists.
+
+A retry cycle needs a `loops` definition and exactly one feedback edge from a
+decision back to the loop entry, carrying both `choice` and `feedback: "<loop-id>"`.
+The decision needs another choice to exit. `maxIterations` counts the first round
+as well as retries. The body must be acyclic after removing the feedback edge;
+external edges enter only at the entry and leave only through that decision.
+Loops cannot nest or overlap. See the [loop example](../../docs/execution-control.md#structured-loops).
 
 ## Shared prompts
 
@@ -85,11 +125,33 @@ expectedRevision, executionIds})`. Definitions can be changed while executions
 are running or waiting, including inside a loop. Existing instances keep their
 captured prompt, inputs, and policy; completion routes through the latest graph.
 Rejected revisions/changes have no effects. Finalized jobs cannot be reopened.
+Include new nodes and their dependencies/loops in the same update. A new node
+without incoming edges is a runnable root; another node's `pauseAfter` does not
+hold it. After a rejected update, retry the complete corrected patch, including
+edges, loops, and resume IDs, instead of staging disconnected nodes separately.
+Pause reminders describe the event when it occurred: check current status and
+paused IDs before attempting an update/resume, since the job can time out or be
+cancelled before the parent handles the reminder.
+
+Focused `braid_status` reads also include the current control fields; the
+returned `node.revision` is the revision captured when that invocation started.
+Use `execution.revision` for updates even when inspecting an older invocation.
+After cancellation or finalization there are no resumable paused executions;
+the event log still records where pauses occurred.
+
+`upsertNodes` replaces whole node definitions, so include all required fields.
+`promptTemplates` and `loops` replace their entire map/list when supplied;
+omitting them preserves the current definitions. `removeEdges` matches exact
+identities, including any `choice`, `feedback`, or `executionId`: omitted fields
+are not wildcards. `resume` and `braid_resume.executionIds` take paused execution
+IDs, not node IDs.
 
 `requireSuccess` defaults to false. Optional failures retain artifacts and allow
 unconditional recovery; required failures cancel siblings and fail the job after
 cleanup. All loops declare a finite `maxIterations`; total `maxExecutions`
 defaults to 1000 and spans updates. Deadlines keep running through pauses.
+The graph timeout includes time waiting for the parent to inspect and update a
+paused graph, and resuming does not extend it. Reserve time for integration.
 
 See [execution control](../../docs/execution-control.md) for loop schemas, exact
 update semantics, historical dependencies, and workspace lineage. There is no
@@ -109,6 +171,8 @@ The panel renders a Mermaid flowchart, node states, elapsed times, context-token
 estimates or provider-reported usage, context-window sizes, filesystem tool-call
 counts, and the execution log. Active nodes are marked `▶ ACTIVE`. The status
 tool also renders a flowchart; expand its result to see more log events.
+When selecting `nodeId` or `executionId`, it instead shows that invocation's
+output/error, with the full text available on expansion.
 
 `/braid` now opens this panel; it no longer arms the next prompt. To request
 Braid explicitly, ask the agent to analyze the task using Braid.
@@ -119,6 +183,11 @@ model lookup, credentials/OAuth, provider transport, filesystem tool execution,
 and token/cost accounting. The first
 whole-job `braid_status` retrieval of a finished job reports its accumulated Pi usage;
 subsequent retrievals do not count the same usage again.
+Use the status response's `usage` for Pi totals, including completed provider
+rounds from nodes that later fail or time out. Saved final result files expose
+the same accounting as `piUsage`; core `metadata.usage` only includes usage
+returned by runners. Large running status reads save a complete snapshot too,
+so truncation never requires waiting for job completion to inspect the graph.
 
 ## When Pi will use Braid
 

@@ -143,6 +143,44 @@ test("undeclared cycles and unbounded loops fail validation", () => {
   assert.throws(() => validateGraph({ ...loop(), loops: [{ id: "refine", entry: "work", maxIterations: Infinity }] }), /maxIterations/);
 });
 
+test("loop validation identifies the bad feedback target and an external edge bypassing entry", () => {
+  // Reduced from the Pi session: changing entry alone must not hide the second error.
+  const input: BraidInput = { goal: "review", nodes: [node("merge1"), node("fix"),
+    { type: "decision", id: "accept", prompt: "review", choices: ["pass", "fail"] }, node("integrate")],
+    edges: [{ from: "merge1", to: "accept" }, { from: "fix", to: "accept" },
+      { from: "accept", to: "fix", choice: "fail", feedback: "review" },
+      { from: "accept", to: "integrate", choice: "pass" }],
+    loops: [{ id: "review", entry: "accept", maxIterations: 3 }] };
+  assert.throws(() => validateGraph(input), /feedback edge 'accept' -> 'fix'.*entry 'accept'/);
+  const correctedEntry = { ...input, loops: [{ id: "review", entry: "fix", maxIterations: 3 }] };
+  assert.throws(() => validateGraph(correctedEntry), /edge 'merge1' -> 'accept' bypasses entry 'fix'/);
+  assert.doesNotThrow(() => validateGraph({ ...correctedEntry,
+    edges: [{ from: "merge1", to: "fix" }, ...input.edges.slice(1)] }));
+});
+
+test("cancelling a paused graph clears resumable holds but retains pause history", async t => {
+  let run!: BraidRun;
+  let pausedId: string | undefined;
+  run = startBraid({ goal: "cancel hold", nodes: [{ ...node("a"), pauseAfter: true }, node("tail")],
+    edges: [{ from: "a", to: "tail" }] }, {
+    cwd: await outsideGit(t), runner: async () => ({ output: "retained" }),
+    onEvent(event) {
+      if (event.type === "execution_paused") {
+        pausedId = event.executionId;
+        assert.deepEqual(run.snapshot().pausedExecutionIds, [pausedId]);
+        run.cancel();
+      }
+    },
+  });
+  const result = await run.result;
+  assert.ok(pausedId);
+  assert.equal(result.error?.code, "CANCELLED");
+  assert.equal(result.nodes.tail!.skipReason, "cancelled");
+  assert.deepEqual(run.snapshot().pausedExecutionIds, []);
+  assert.ok(result.events.some(event => event.type === "execution_paused" && event.executionId === pausedId));
+  assert.ok(!result.events.some(event => event.type === "execution_resumed"));
+});
+
 test("updates share a finite execution budget and cannot mutate retained event history", async t => {
   let run!: BraidRun;
   let edits = 0;

@@ -94,7 +94,14 @@ export interface GitPreview {
 
 export interface MergeSource extends NodeWorkspace {
   /** Inspection-only summaries relative to the job’s initial snapshot; omitted by custom runners. */
-  changes?: { files: string[]; filesTruncated: boolean; stat: GitPreview; diff: GitPreview };
+  changes?: {
+    /** Exact preview/diff baseline, including caller edits; supplied by built-in workspaces. */
+    baseCommit?: string;
+    files: string[];
+    filesTruncated: boolean;
+    stat: GitPreview;
+    diff: GitPreview;
+  };
 }
 
 export interface SourceCheckoutStatus extends GitPreview {

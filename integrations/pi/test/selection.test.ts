@@ -121,7 +121,7 @@ for (const idle of [true, false]) {
       assert.equal(details.errorCode, failed ? "MODEL_ERROR" : undefined);
       assert.ok(details.eventSequence > 0);
       assert.ok(String(message.content).includes(`braid_status(${JSON.stringify({ jobId: details.handle, executionId: details.executionId })})`));
-      assert.deepEqual(options, { triggerTurn: true, deliverAs: "followUp" });
+      assert.deepEqual(options, { triggerTurn: true, deliverAs: "steer" });
       const read = await status.execute("read", { jobId: details.handle, executionId: details.executionId }, undefined, undefined, ctx);
       const block = read.content[0]!;
       assert.equal(block.type, "text");
@@ -165,7 +165,7 @@ for (const idle of [true, false]) {
         new RegExp(submitted.details!.handle),
       );
       assert.match(String(message.content), /braid_status/);
-      assert.deepEqual(options, { triggerTurn: true, deliverAs: "followUp" });
+      assert.deepEqual(options, { triggerTurn: true, deliverAs: "steer" });
       assert.equal(fake.reminders(), 1);
       fake.handlers.get("session_shutdown")!({} as never, ctx);
     },

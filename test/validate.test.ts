@@ -145,6 +145,16 @@ for (const [name, input] of invalid) {
   });
 }
 
+test("validation errors identify the invalid node or edge and explain undeclared cycles", () => {
+  assert.throws(() => validateGraph({
+    goal: "Merge", nodes: [{ type: "merge", id: "combine", workspace: "worktree" }], edges: [],
+  } as unknown as BraidInput), /Node 'combine' \(merge\): unsupported field 'workspace'/);
+  assert.throws(() => validateGraph({
+    ...graph([execute("a"), execute("b")]), edges: [{ from: "a", to: "b", condition: "ok" }],
+  } as unknown as BraidInput), /Edge 'a' -> 'b': unsupported field 'condition'/);
+  assert.throws(() => validateGraph(graph([execute("a")], [{ from: "a", to: "a" }])), /Declare a bounded loop.*choice and feedback=loopId/);
+});
+
 test("validation allows terminal decisions, unconnected roots, conditional fan-out, and distinct edges to one target", () => {
   assert.doesNotThrow(() => validateGraph(graph([decision()])));
   assert.doesNotThrow(() => validateGraph(graph([execute("a"), execute("b")])));

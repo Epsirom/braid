@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type {
   BraidResult,
+  ExecutionError,
   ExecutionEvent,
   NodeResult,
   NodeWorkspace as PiNodeWorkspace,
@@ -20,7 +21,8 @@ export const MAX_VISIBLE_NODES = 80;
 
 /** Only previews are retained here; final results contain the full core log. */
 export interface BraidLiveState {
-  status: "running";
+  status: "running" | "completed" | "failed";
+  error?: ExecutionError;
   nodes: Record<string, NodeResult>;
   nodeTypes: Record<string, "execute" | "decision" | "merge" | "integrate">;
   edges: Array<{ from: string; to: string; choice?: string }>;
@@ -433,6 +435,12 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
       ...(event.choice ? { choice: event.choice } : {}),
     });
   if (state.events.length > MAX_VISIBLE_EVENTS) state.events.shift();
+  if (event.type === "graph_completed" || event.type === "graph_failed") {
+    state.status = event.type === "graph_completed" ? "completed" : "failed";
+    state.pausedExecutionIds = [];
+    if (event.type === "graph_failed") state.error = { ...event.error };
+    return;
+  }
   if (event.type === "node_created") {
     Object.defineProperty(state.nodes, event.nodeId, {
       value: {
@@ -519,6 +527,23 @@ export function applyProgress(
   });
 }
 
+/** Focused status reads must show the requested execution, including historical ones. */
+export function renderNodeResult(node: NodeResult, expanded: boolean, theme: Palette, fullOutputPath?: string): Component {
+  const failed = node.status === "failed";
+  const clean = (value: string) => stripTerminalSequences(value).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, "");
+  const lines = [
+    theme.fg(failed ? "error" : "accent", `${failed ? "✗" : node.status === "completed" ? "✓" : "○"} Braid node ${compact(node.id, 80)} · ${node.status}`),
+    ...(node.executionId ? [theme.fg("dim", `execution: ${compact(node.executionId, 80)}`)] : []),
+    ...(node.decision ? [theme.fg("accent", `decision: ${compact(node.decision, 80)}`)] : []),
+    ...(node.error ? [theme.fg("error", `${node.error.code}: ${clean(node.error.message)}`)] : []),
+    ...(node.skipReason ? [theme.fg("muted", `skipped: ${node.skipReason}`)] : []),
+    ...(node.output ? [expanded ? clean(node.output) : compact(node.output, 400)] : []),
+    ...(!expanded && node.output && (node.output.length > 400 || node.output.includes("\n")) ? [theme.fg("dim", "Expand for full node output")] : []),
+    ...(fullOutputPath ? [theme.fg("dim", `full node result: ${compact(fullOutputPath, 240)}`)] : []),
+  ];
+  return new Text(lines.join("\n"), 0, 0);
+}
+
 export function renderGraphResult(
   result: BraidToolDetails,
   expanded: boolean,
@@ -552,7 +577,9 @@ export function renderGraphResult(
       ? theme.fg("warning", "⟳ Braid executing")
       : result.status === "completed"
         ? theme.fg("success", "✓ Braid completed")
-        : theme.fg("error", "✗ Braid failed");
+        : result.error?.code === "CANCELLED"
+          ? theme.fg("warning", "■ Braid cancelled")
+          : theme.fg("error", "✗ Braid failed");
   const lines = [
     title,
     theme.fg(
@@ -566,14 +593,8 @@ export function renderGraphResult(
       lines.push(
         theme.fg("accent", `terminals: ${compact(terminals.join(", "), 120)}`),
       );
-    if (result.error)
-      lines.push(
-        theme.fg(
-          "error",
-          `${result.error.code}: ${compact(result.error.message, 120)}`,
-        ),
-      );
   }
+  if (result.error) lines.push(theme.fg("error", `${result.error.code}: ${compact(result.error.message, 120)}`));
   if ("pausedExecutionIds" in result && result.pausedExecutionIds?.length) lines.push(theme.fg("warning", `${result.pausedExecutionIds.length} paused executions · revision ${result.revision ?? 0}`));
   if ("executions" in result) lines.push(theme.fg("dim", `${Object.keys(result.executions).length} executions · revision ${result.revision}`));
   const chartStart = lines.length;

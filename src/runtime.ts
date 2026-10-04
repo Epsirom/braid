@@ -681,6 +681,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       await Promise.all(running.values());
     } finally {
       status = "finalizing";
+      // Terminal holds are no longer resumable; the event log retains pause history.
+      paused.clear();
       try { await workspaces.archivePending("Execution checkpoint retained for inspection and future recovery"); }
       catch (error) { cleanupError = { code: "CLEANUP_FAILED", message: error instanceof Error ? error.message : String(error) }; }
       try { await workspaces.close(); }
