@@ -40,11 +40,11 @@
     "@deepseek-ai/dsh-typert-registry": "0.2.0-rc.2",
     "@types/jsdom": "21.1.7",
     "@types/node": "^22.0.0",
-    "@types/react": "18.3.28",
+    "@types/react": "19.3.0",
     "@types/react-dom": "18.3.7",
     "esbuild": "0.25.12",
     "jsdom": "26.1.0",
-    "react": "18.3.1",
+    "react": "19.3.0",
     "react-dom": "18.3.1",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"
