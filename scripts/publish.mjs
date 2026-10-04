@@ -8,7 +8,8 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 // Resolve the active npm executable without shell interpolation.
 const npm = process.env.npm_execpath ?? execFileSync(process.platform === "win32" ? "where.exe" : "which", ["npm"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
 const gitHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-for (const cwd of [root, join(root, "integrations/pi")]) {
+const workspaces = JSON.parse(readFileSync(join(root, "package.json"))).workspaces;
+for (const cwd of [root, ...workspaces.map(workspace => join(root, workspace))]) {
   const { name, version } = JSON.parse(readFileSync(join(cwd, "package.json")));
   const args = [npm, "view", `${name}@${version}`, "version", "--json", "--registry=https://registry.npmjs.org"];
   const existing = spawnSync(process.execPath, args, { encoding: "utf8" });

@@ -4,7 +4,7 @@ Braid coordinates multiple LLM agents as a graph. Define each agent's task and
 which results it needs; Braid runs independent tasks in parallel and passes
 their outputs to the next step.
 
-Use it as a TypeScript/JavaScript library or as an extension for the Pi coding agent.
+Use it as a TypeScript/JavaScript library or as a plugin for Pi or DeepSeek Harness.
 
 [![CI](https://github.com/Epsirom/braid/actions/workflows/ci.yml/badge.svg)](https://github.com/Epsirom/braid/actions/workflows/ci.yml)
 [![npm core](https://img.shields.io/npm/v/%40chrok%2Fbraid?label=%40chrok%2Fbraid)](https://www.npmjs.com/package/@chrok/braid)
@@ -37,6 +37,7 @@ and [execution control](docs/execution-control.md) when you need those features.
 | --- | --- |
 | In your own application | [Install `@chrok/braid`](#install-in-your-application) and supply a model runner |
 | In Pi | [Install `@chrok/pi-braid`](#install-in-pi) to run agents in the background and inspect them in a live panel |
+| In DeepSeek Harness | [Install `@chrok/dsh-braid` from source](integrations/dsh/README.md#install) for background agents and a native Web graph panel |
 
 ## Install in your application
 
@@ -548,6 +549,7 @@ is needed for the test suite; its HTTP requests are intercepted in tests.
 - [`src/workspaces.ts`](src/workspaces.ts): Git snapshots, checkpoint refs, merge
   serialization, local Git tools, and worktree cleanup.
 - [`src/adapters/openai.ts`](src/adapters/openai.ts): optional provider translation.
+- [`integrations/dsh/`](integrations/dsh/): native DeepSeek Harness model/tool adapter, agent-scoped jobs, reminders, and a native Web graph panel.
 - [`integrations/pi/`](integrations/pi/): thin Pi model-registry/tool adapter, Mermaid graph renderer, and live execution renderer (`display.ts`).
 - [`test/`](test/): deterministic scheduling, execution-event, and intercepted HTTP/tool tests.
 

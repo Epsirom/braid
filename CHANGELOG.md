@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Features
+
+- Add the `@chrok/dsh-braid` DeepSeek Harness plugin with background graphs,
+  isolated workers, revision-checked updates, pause/resume, cancellation, and
+  completion reminders through DSH's native model, tool, and job services.
+- Add a native DSH Web panel with live graphs, execution history, paged outputs,
+  usage, and controls. Braid tool cards preserve recorded operation summaries
+  and open the corresponding job, node, or execution in the live panel.
+
 ### Documentation
 
 - Introduce Braid with a parallel code-review example and clear installation
