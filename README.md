@@ -110,7 +110,7 @@ pi install npm:@chrok/pi-braid
 
 Run `/reload`, ask Pi to analyze a task with Braid, and open `/braid` to inspect
 the job. npm installs the exact matching core dependency; no checkout is needed
-for published versions. To try 0.2 before publication, follow the
+for published versions. To try the current source checkout, follow the
 [local Pi installation guide](integrations/pi/README.md#install-this-local-checkout-in-pi).
 
 ![Braid Pi flow panel with an offline example](docs/assets/pi-panel.svg)

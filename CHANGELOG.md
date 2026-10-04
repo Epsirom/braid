@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.1 — 2026-10-04
+
 ### Maintenance
 
 - Upgrade the Pi validation target to 1.0.1 and refresh the workspace lockfile
@@ -9,6 +11,15 @@
   dependency-security check covering development dependencies and reporting
   scanner failures explicitly
   ([#38](https://github.com/Epsirom/braid/pull/38)) — @Epsirom.
+
+No Braid API or runtime behavior changes. Pi 1.0.1 is the tested host version;
+updating Braid does not upgrade a separately installed Pi host.
+
+### New Contributors
+
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.2.0...v0.2.1).
 
 ## 0.2.0 — 2026-10-02
 
