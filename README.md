@@ -11,20 +11,38 @@ checkpoints; explicit `integrate` nodes apply selected work to the source checko
 [![npm Pi](https://img.shields.io/npm/v/%40chrok%2Fpi-braid?label=%40chrok%2Fpi-braid)](https://www.npmjs.com/package/@chrok/pi-braid)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**0.2 API:** Experimental, Node.js 22+, ESM. The framework-agnostic core
+**0.3 API:** Experimental, Node.js 22+, ESM. The framework-agnostic core
 has no runtime dependencies; the OpenAI-compatible runner and Pi extension are
 optional integrations. The npm badges show published versions; see
 [GitHub releases](https://github.com/Epsirom/braid/releases) for release notes.
-Read the [0.1 → 0.2 migration guide](docs/compatibility.md#migrating-from-01-to-02)
-before upgrading. For the previous API, use the
-[0.1.3 documentation](https://github.com/Epsirom/braid/tree/v0.1.3).
+Read the [0.2 → 0.3 migration guide](docs/compatibility.md#migrating-from-02-to-03)
+before upgrading; users coming from 0.1 also need the
+[0.1 → 0.2 guide](docs/compatibility.md#migrating-from-01-to-02).
+For the previous release, use the
+[0.2.1 documentation](https://github.com/Epsirom/braid/tree/v0.2.1).
 
 | Package | Purpose |
 | --- | --- |
 | [@chrok/braid](https://www.npmjs.com/package/@chrok/braid) | Core runtime and optional OpenAI-compatible runner |
 | [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid) | Pi background jobs, execution controls, reminders, and live flow panel; installs the matching core dependency |
 
-## What changed in 0.2?
+## What changed in 0.3?
+
+- **Shell tools in writable Pi nodes.** Workers can install dependencies, build,
+  test, and repair in their assigned workspaces. Read-only nodes remain shell-free;
+  worktrees use host permissions and are not security sandboxes.
+- **Git-aware checkpoints.** Tracked changes and non-ignored new files are
+  checkpointed. Keep artifacts needed by successors in non-ignored or deliberately
+  tracked paths; ignored dependencies and build outputs are no longer preserved.
+- **Pi reminders between steps.** Completion and pause reminders arrive after
+  the current response and tool batch, before the next model step.
+- **Clearer errors and status.** Invalid graphs show actionable errors; focused
+  reads show the selected execution's output/error and current control state.
+  Full status exports retain snapshots and failed-worker usage.
+
+See the [changelog](CHANGELOG.md#030--2026-10-04) for all fixes and credits.
+
+## Execution-control foundation from 0.2
 
 - **Editable graphs, captured executions.** `startBraid` exposes revision-checked
   updates and pause/resume; `executionId` identifies a particular invocation,
