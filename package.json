@@ -1,6 +1,6 @@
 {
   "name": "@chrok/braid",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "license": "MIT",
   "description": "TypeScript runtime for LLM agent graphs with bounded loops, live updates, and isolated Git worktrees",
   "type": "module",
