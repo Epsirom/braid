@@ -7,11 +7,13 @@ and thin host adapters. This is a direction for discussion, not a delivery sched
 ## Release status
 
 The 0.3 workspace and Pi reliability changes are implemented on top of the 0.2
-execution-control foundation. Source availability and npm availability are
+execution-control foundation. The 0.3.1 release adds DeepSeek Harness integration
+and a native Web graph panel. Source availability and npm availability are
 separate milestones. Check
 [GitHub releases](https://github.com/Epsirom/braid/releases),
-[@chrok/braid](https://www.npmjs.com/package/@chrok/braid), and
-[@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid) for published versions.
+[@chrok/braid](https://www.npmjs.com/package/@chrok/braid),
+[@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid), and
+[@chrok/dsh-braid](https://www.npmjs.com/package/@chrok/dsh-braid) for published versions.
 
 ## 0.3 implemented changes
 
@@ -21,6 +23,10 @@ separate milestones. Check
 - [x] Pi completion/pause reminders between model steps, with actionable graph
   errors and complete focused status reads and exports.
 - [x] Cumulative merge-source baselines and atomic update/retry guidance.
+- [x] DeepSeek Harness integration with background graphs, isolated workers,
+  live controls, native jobs, and completion/pause reminders.
+- [x] Native DSH Web panel and tool cards for live graphs, execution history,
+  outputs, usage, and controls, targeting DSH 0.2.0-rc.2.
 
 Read the [0.2 → 0.3 migration guide](docs/compatibility.md#migrating-from-02-to-03)
 for workspace capabilities and artifact preservation.
@@ -47,7 +53,7 @@ See [execution control](docs/execution-control.md) for the contract and
 
 Each release follows the [release checklist](docs/releasing.md): validate the
 supported Node/platform matrix and isolated package installation, credit PR
-authors and first-time contributors, then verify both registry versions,
+authors and first-time contributors, then verify all registry versions,
 provenance, and clean installation before marking publication complete.
 
 ## Next candidates
@@ -68,7 +74,7 @@ provenance, and clean installation before marking publication complete.
   requests, and in-flight calls before adding enforcement.
 - Improve provider diagnostics and add adapters backed by real compatibility
   tests. Keep SDK dependencies outside the core.
-- Migrate both packages from TypeScript 5 to 7 in one dedicated change. Explicitly
+- Migrate all packages from TypeScript 5 to 7 in one dedicated change. Explicitly
   load Node types, review compiler default changes, and validate public declaration
   consumption, package builds, and the complete Node/platform matrix. Keep Node
   declarations on 22.x while Node 22 remains the minimum supported runtime.

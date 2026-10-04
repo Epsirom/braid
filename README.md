@@ -9,6 +9,7 @@ Use it as a TypeScript/JavaScript library or as a plugin for Pi or DeepSeek Harn
 [![CI](https://github.com/Epsirom/braid/actions/workflows/ci.yml/badge.svg)](https://github.com/Epsirom/braid/actions/workflows/ci.yml)
 [![npm core](https://img.shields.io/npm/v/%40chrok%2Fbraid?label=%40chrok%2Fbraid)](https://www.npmjs.com/package/@chrok/braid)
 [![npm Pi](https://img.shields.io/npm/v/%40chrok%2Fpi-braid?label=%40chrok%2Fpi-braid)](https://www.npmjs.com/package/@chrok/pi-braid)
+[![npm DSH](https://img.shields.io/npm/v/%40chrok%2Fdsh-braid?label=%40chrok%2Fdsh-braid)](https://www.npmjs.com/package/@chrok/dsh-braid)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Why Braid?
@@ -37,7 +38,7 @@ and [execution control](docs/execution-control.md) when you need those features.
 | --- | --- |
 | In your own application | [Install `@chrok/braid`](#install-in-your-application) and supply a model runner |
 | In Pi | [Install `@chrok/pi-braid`](#install-in-pi) to run agents in the background and inspect them in a live panel |
-| In DeepSeek Harness | [Install `@chrok/dsh-braid` from source](integrations/dsh/README.md#install) for background agents and a native Web graph panel |
+| In DeepSeek Harness | [Install `@chrok/dsh-braid`](#install-in-deepseek-harness) for background agents and a native Web graph panel |
 
 ## Install in your application
 
@@ -97,6 +98,21 @@ for published versions. To try the current source checkout, follow the
 This snapshot uses the actual panel renderer and fake responses. See the
 [Pi guide](integrations/pi/README.md) for background jobs, cancellation, and local
 installation, and [compatibility](docs/compatibility.md) for the tested versions.
+
+## Install in DeepSeek Harness
+
+Requires Node.js 22.19+ and DeepSeek Harness 0.2.0-rc.2, the pinned developer-preview
+host version. DSH support starts with Braid 0.3.1; the npm badge shows availability.
+
+```sh
+dsh plugin --profile web add @chrok/dsh-braid
+```
+
+Restart the profile, ask DSH to run a task with Braid, and open **Braid** in the
+session header or right sidebar. Use your own profile name in place of `web`.
+npm installs the matching core dependency automatically. See the
+[DSH guide](integrations/dsh/README.md) for tools, live controls, the Web panel,
+and installation from a local checkout.
 
 ## API
 

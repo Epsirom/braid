@@ -6,9 +6,10 @@ an exact `@chrok/braid` dependency and includes its own compiled integration cod
 
 ## Registry and source association
 
-The public packages are [@chrok/braid](https://www.npmjs.com/package/@chrok/braid)
-and [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid) on npmjs.
-`@chrok/dsh-braid` is a new package awaiting its first publication.
+The public packages are [@chrok/braid](https://www.npmjs.com/package/@chrok/braid),
+[@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid), and
+[@chrok/dsh-braid](https://www.npmjs.com/package/@chrok/dsh-braid) on npmjs.
+DSH joins the coordinated release starting with 0.3.1.
 Keep `publishConfig.registry` set to `https://registry.npmjs.org`. All manifests
 link to `Epsirom/braid`; integration `repository.directory` values are
 `integrations/pi` and `integrations/dsh`.

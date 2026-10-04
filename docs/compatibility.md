@@ -4,9 +4,10 @@
 | --- | --- |
 | Core runtime | Node.js 22+, ESM imports, TypeScript declarations, no runtime dependencies |
 | Pi package | Node.js 22.19+, Pi 1.0.1 is the pinned validation target |
-| CI | Core minimum Node 22.0; both packages on Node 22.19 and 24 on Linux, macOS, Windows |
+| DSH package | Node.js 22.19+, DeepSeek Harness 0.2.0-rc.2 is the pinned developer-preview host target; native Web panel |
+| CI | Core minimum Node 22.0; all three packages on Node 22.19 and 24 on Linux, macOS, Windows |
 | OpenAI-compatible runner | Chat Completions text and function-tool calls; decisions and merge/integrate nodes require tool calling |
-| Browsers / CommonJS | No supported browser build or CommonJS entry point in 0.3 |
+| Browsers / CommonJS | No standalone core browser build or CommonJS entry point in 0.3; the DSH `./client` export is loaded by DSH's Web host |
 
 The CI matrix describes configured checks; see actual workflow results for each
 commit. Offline HTTP fixtures validate the adapter contract. They do not prove
@@ -27,6 +28,13 @@ Pi 0.85.1; the current checkout's pinned validation target is 1.0.1.
 The Pi npm package declares an exact dependency on the matching `@chrok/braid`
 release. npm installs the core automatically; Pi does not bundle another copy of
 its runtime and does not need a source checkout.
+
+The DSH integration starts at 0.3.1 and pins host peers to DSH 0.2.0-rc.2 because
+the host is in developer preview. It installs the exact matching core version
+and uses DSH's model, tool, and job services. Its browser entry is a native DSH
+Web plugin, not a standalone browser runtime. See the
+[DSH guide](../integrations/dsh/README.md) for installation and host requirements.
+Existing 0.3.0 core and Pi users need no migration for 0.3.1.
 
 Git must be installed for workspace execution inside a Git checkout. Non-Git
 text-only runs do not require Git workspace management.
@@ -102,7 +110,7 @@ paused execution because the reminder describes the state when it was queued.
 
 ## Versioning
 
-Core and Pi release together with matching versions. During 0.x, patch releases
+Core, Pi, and DSH release together with matching versions. During 0.x, patch releases
 preserve documented behavior; breaking API or semantic changes require a minor
 version bump, a changelog entry, and migration guidance. New optional fields or
 fixes that restore the documented contract may ship in a patch.

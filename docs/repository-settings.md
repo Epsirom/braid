@@ -12,24 +12,25 @@ The GitHub About section describes the current `main` capabilities:
 
 > TypeScript runtime for LLM agent graphs with bounded loops, live updates,
 > isolated Git worktrees, and explicit integration. Framework-agnostic core,
-> OpenAI-compatible runner, and Pi extension.
+> OpenAI-compatible runner, and plugins for Pi and DeepSeek Harness.
 
 The repository website points to
 [@chrok/braid on npm](https://www.npmjs.com/package/@chrok/braid). The root README
-links both published packages and displays their npm version badges. Topics are
+links all packages and displays their npm version badges. Topics are
 `llm`, `ai-agents`, `agent-runtime`, `agent-orchestration`, `multi-agent`,
 `graph-execution`, `bounded-loops`, `git-worktree`, `parallel-execution`,
-`typescript`, `nodejs`, `openai-compatible`, and `pi-package`.
+`typescript`, `nodejs`, `openai-compatible`, `pi-package`, and `dsh-plugin`.
 The old DAG-only and workflow-engine labels do not describe the 0.2 scope.
 
-Both packages publish to `https://registry.npmjs.org`:
+All packages publish to `https://registry.npmjs.org`:
 
 | Package | Repository location |
 | --- | --- |
 | [@chrok/braid](https://www.npmjs.com/package/@chrok/braid) | Repository root |
 | [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid) | `integrations/pi` |
+| [@chrok/dsh-braid](https://www.npmjs.com/package/@chrok/dsh-braid) | `integrations/dsh` |
 
-Each manifest declares `repository`, `homepage`, and `bugs`; Pi additionally sets
+Each manifest declares `repository`, `homepage`, and `bugs`; integrations additionally set
 `repository.directory`. These fields link npm pages back to the correct source
 and issue tracker. Descriptions and keywords take effect on npm when a new
 version is published; editing `main` does not change existing registry versions.
