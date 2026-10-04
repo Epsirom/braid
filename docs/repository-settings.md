@@ -12,14 +12,15 @@ The GitHub About section describes the current `main` capabilities:
 
 > TypeScript runtime for LLM agent graphs with bounded loops, live updates,
 > isolated Git worktrees, and explicit integration. Framework-agnostic core,
-> OpenAI-compatible runner, and Pi extension.
+> OpenAI-compatible runner, and plugins for Pi and DeepSeek Harness.
 
 The repository website points to
 [@chrok/braid on npm](https://www.npmjs.com/package/@chrok/braid). The root README
 links all packages and displays their npm version badges. Topics are
 `llm`, `ai-agents`, `agent-runtime`, `agent-orchestration`, `multi-agent`,
 `graph-execution`, `bounded-loops`, `git-worktree`, `parallel-execution`,
-`typescript`, `nodejs`, `openai-compatible`, and `pi-package`.
+`typescript`, `nodejs`, `openai-compatible`, `pi-package`, `deepseek-harness`,
+and `dsh-plugin`.
 The old DAG-only and workflow-engine labels do not describe the 0.2 scope.
 
 All packages publish to `https://registry.npmjs.org`:
