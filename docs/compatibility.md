@@ -6,7 +6,7 @@
 | Pi package | Node.js 22.19+, Pi 1.0.1 is the pinned validation target |
 | CI | Core minimum Node 22.0; both packages on Node 22.19 and 24 on Linux, macOS, Windows |
 | OpenAI-compatible runner | Chat Completions text and function-tool calls; decisions and merge/integrate nodes require tool calling |
-| Browsers / CommonJS | No supported browser build or CommonJS entry point in 0.2 |
+| Browsers / CommonJS | No supported browser build or CommonJS entry point in 0.3 |
 
 The CI matrix describes configured checks; see actual workflow results for each
 commit. Offline HTTP fixtures validate the adapter contract. They do not prove
@@ -19,10 +19,10 @@ The wildcard is a loader/distribution convention, **not a claim that every Pi
 version works**. Test the whole Pi suite before updating the supported target.
 The offline host compatibility test loads the extension into a real Pi session
 with an in-memory model provider. It checks worker prompt/tool normalization and
-exactly one automatic continuation per node/job reminder delivered during
-`agent_settled`, including retrieval of a node output while its job still runs.
-This covers the Pi 0.86/0.87 transcript and settling changes without provider
-credentials or network model calls. Version 0.1.0 was originally validated with
+reminder delivery between model steps after the current tool batch, idle
+continuation, and acknowledgement, including retrieval of a node output while
+its job still runs. These fixtures run without provider credentials or network
+model calls. Version 0.1.0 was originally validated with
 Pi 0.85.1; the current checkout's pinned validation target is 1.0.1.
 The Pi npm package declares an exact dependency on the matching `@chrok/braid`
 release. npm installs the core automatically; Pi does not bundle another copy of
@@ -32,7 +32,7 @@ Git must be installed for workspace execution inside a Git checkout. Non-Git
 text-only runs do not require Git workspace management.
 ## Migrating from 0.1 to 0.2
 
-This release deliberately changes the execution and workspace contracts:
+Version 0.2 deliberately changed the execution and workspace contracts:
 
 - Replace old source-checkout `merge` nodes with `integrate`. The new `merge`
   combines inputs in a fresh isolated worktree.
@@ -71,9 +71,9 @@ separate gate reminder; when both preferences are enabled it supplies the single
 completion reminder for that instance. Cancellation still sends failure reminders
 for opted-in running instances.
 
-## Upcoming workspace capability changes
+## Migrating from 0.2 to 0.3
 
-The Unreleased changes target the next minor release; they are not part of 0.2.1:
+Version 0.3 changes workspace capabilities and checkpoint contents:
 
 - Writable Pi nodes now receive `bash` and, on Windows, `powershell`, allowing
   dependency installation, builds, and tests within a node. If a graph relies on
@@ -94,7 +94,11 @@ The Unreleased changes target the next minor release; they are not part of 0.2.1
   one foreground command and clean it up before returning. Detached daemons and
   external services are not contained by this lifecycle.
 
-No graph field, result shape, or event schema changes are required.
+No graph field, result shape, or event schema migration is required. Pi now
+delivers completion/pause reminders after the current assistant response and
+tool batch, before the next model step, rather than waiting for the entire
+foreground task to finish. Fetch current status before updating or resuming a
+paused execution because the reminder describes the state when it was queued.
 
 ## Versioning
 

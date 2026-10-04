@@ -6,11 +6,24 @@ and thin host adapters. This is a direction for discussion, not a delivery sched
 
 ## Release status
 
-The 0.2 execution-control foundation is implemented. Source availability and npm
-availability are separate milestones. Check
+The 0.3 workspace and Pi reliability changes are implemented on top of the 0.2
+execution-control foundation. Source availability and npm availability are
+separate milestones. Check
 [GitHub releases](https://github.com/Epsirom/braid/releases),
 [@chrok/braid](https://www.npmjs.com/package/@chrok/braid), and
 [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid) for published versions.
+
+## 0.3 implemented changes
+
+- [x] Shell tools for writable Pi nodes, with cancellation and checkpoint write
+  barriers; keep read-only nodes shell-free.
+- [x] Git-aware checkpoints that preserve tracked changes and non-ignored files.
+- [x] Pi completion/pause reminders between model steps, with actionable graph
+  errors and complete focused status reads and exports.
+- [x] Cumulative merge-source baselines and atomic update/retry guidance.
+
+Read the [0.2 → 0.3 migration guide](docs/compatibility.md#migrating-from-02-to-03)
+for workspace capabilities and artifact preservation.
 
 ## 0.2 implemented foundation
 
@@ -41,9 +54,10 @@ provenance, and clean installation before marking publication complete.
 
 - Exercise real edit → review → refine → integrate tasks and use the results to
   improve migration examples, update-conflict diagnostics, and recovery guidance.
-- Refresh scheduler measurements for 0.2 before optimizing data structures.
-  Include execution history, updates, and loops; measure Git workspace costs
-  separately. The [checked-in benchmark](docs/benchmark.md) is a 0.1 baseline.
+- Refresh scheduler measurements for the current execution model before
+  optimizing data structures. Include execution history, updates, and loops;
+  measure Git workspace costs separately. The [checked-in benchmark](docs/benchmark.md)
+  is a 0.1 baseline.
 - Explore explicit retention and cleanup policies for execution history, Git
   recovery refs, and Pi temporary result files without breaking result retrieval,
   reusable checkpoints, or usage accounting.
@@ -59,7 +73,7 @@ provenance, and clean installation before marking publication complete.
   consumption, package builds, and the complete Node/platform matrix. Keep Node
   declarations on 22.x while Node 22 remains the minimum supported runtime.
 
-## Scope after 0.2
+## Scope after 0.3
 
 The original fixed-DAG-only boundary no longer applies. Bounded loops, live
 graph changes, parent-controlled pause/resume, and execution history are part of

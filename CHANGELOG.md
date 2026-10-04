@@ -2,52 +2,71 @@
 
 ## Unreleased
 
-### Features and behavior changes
+## 0.3.0 — 2026-10-04
+
+### Features and breaking changes
 
 - Give writable Pi nodes built-in shell tools for dependency installation, builds,
   tests, and repair. Shell calls participate in cancellation and the workspace
   write barrier before checkpointing; prompts describe workspace boundaries and
   shared resources. Read-only nodes still have no shell, and parent extension/MCP
-  tools are not inherited.
+  tools are not inherited
+  ([#41](https://github.com/Epsirom/braid/pull/41)) — @Epsirom.
 - Checkpoint tracked changes and non-ignored new files using normal Git staging
   semantics. Ignored dependencies, caches, and build outputs are no longer
   automatically archived or passed to successors; already tracked and deliberately
-  force-added files remain tracked.
+  force-added files remain tracked
+  ([#41](https://github.com/Epsirom/braid/pull/41)) — @Epsirom.
 
-These changes require the next minor release under the compatibility policy.
-See [migration guidance](docs/compatibility.md#upcoming-workspace-capability-changes)
-for callers relying on shell-free workers or preservation of ignored outputs.
+See the [0.2 → 0.3 migration guide](docs/compatibility.md#migrating-from-02-to-03)
+before upgrading if you rely on shell-free workers or preservation of ignored
+outputs. Use read-only nodes or a custom runner to restrict worker capabilities,
+and keep successor artifacts in non-ignored or deliberately tracked paths.
 
 ### Fixes
 
 - Include `changes.baseCommit` in merge-source previews and explain cumulative
   diffs versus invocation snapshots. Read-only review checkpoints can otherwise
   suggest an empty patch; multi-parent checkpoints also need an explicit
-  strategy instead of a bare cherry-pick.
+  strategy instead of a bare cherry-pick
+  ([#42](https://github.com/Epsirom/braid/pull/42)) — @Epsirom.
 - Display Pi submission and status errors even when the host supplies empty
   result details; failed graph definitions no longer appear as background jobs
   with an undefined ID/status. Validation errors identify offending nodes/edges
-  and explain how to declare feedback cycles.
+  and explain how to declare feedback cycles
+  ([#42](https://github.com/Epsirom/braid/pull/42)) — @Epsirom.
 - Clarify Pi node requirements, loop/template parameters, and revision controls
   while retaining a flat provider-facing node schema with type-specific core
   validation. Restrict historical execution pins to updates. Submission/update
-  replies echo accepted graph types and policies.
+  replies echo accepted graph types and policies
+  ([#42](https://github.com/Epsirom/braid/pull/42)) — @Epsirom.
 - Deliver Pi completion/pause reminders at the next model step using steering,
   after the current tool batch, instead of queuing follow-ups behind the entire
-  foreground task. Clarify that pause reminders need a current-state check.
+  foreground task. Clarify that pause reminders need a current-state check
+  ([#42](https://github.com/Epsirom/braid/pull/42)) — @Epsirom.
 - Explain atomic update failures and retrying complete patches: new nodes and
   their edges/loops must be submitted together to avoid starting disconnected
   roots while another execution is paused. Discourage repeated replacement jobs
-  when a definition problem recurs.
+  when a definition problem recurs
+  ([#42](https://github.com/Epsirom/braid/pull/42)) — @Epsirom.
 - Show the requested execution's output/error in focused Pi status reads and
   include the current revision and paused IDs, separately from its captured
-  revision. Preserve this rendering for older saved Pi sessions.
+  revision. Preserve this rendering for older saved Pi sessions
+  ([#42](https://github.com/Epsirom/braid/pull/42)) — @Epsirom.
 - Keep errors, control fields, and Pi usage ahead of large status payloads;
   save complete running snapshots and include failed-worker provider usage as
-  `piUsage` in exported final results.
+  `piUsage` in exported final results
+  ([#42](https://github.com/Epsirom/braid/pull/42)) — @Epsirom.
 - Update live status on graph completion/failure and clear resumable pause IDs
   when finalizing, while retaining pause history in the event log. Loop
-  validation now names feedback targets and edges that bypass the loop entry.
+  validation now names feedback targets and edges that bypass the loop entry
+  ([#42](https://github.com/Epsirom/braid/pull/42)) — @Epsirom.
+
+### New Contributors
+
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.2.1...v0.3.0).
 
 ## 0.2.1 — 2026-10-04
 
