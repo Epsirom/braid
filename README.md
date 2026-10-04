@@ -1,86 +1,46 @@
 # Braid
 
-Braid is a small TypeScript runtime for LLM agent graphs with bounded loops,
-live updates, and isolated Git worktrees. A parent submits a graph, runs
-independent invocations concurrently, and can revise the graph or pause and
-resume handoffs while it runs. Each execution retains its own outputs and
-checkpoints; explicit `integrate` nodes apply selected work to the source checkout.
+Braid coordinates multiple LLM agents as a graph. Define each agent's task and
+which results it needs; Braid runs independent tasks in parallel and passes
+their outputs to the next step.
+
+Use it as a TypeScript/JavaScript library or as an extension for the Pi coding agent.
 
 [![CI](https://github.com/Epsirom/braid/actions/workflows/ci.yml/badge.svg)](https://github.com/Epsirom/braid/actions/workflows/ci.yml)
 [![npm core](https://img.shields.io/npm/v/%40chrok%2Fbraid?label=%40chrok%2Fbraid)](https://www.npmjs.com/package/@chrok/braid)
 [![npm Pi](https://img.shields.io/npm/v/%40chrok%2Fpi-braid?label=%40chrok%2Fpi-braid)](https://www.npmjs.com/package/@chrok/pi-braid)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**0.3 API:** Experimental, Node.js 22+, ESM. The framework-agnostic core
-has no runtime dependencies; the OpenAI-compatible runner and Pi extension are
-optional integrations. The npm badges show published versions; see
-[GitHub releases](https://github.com/Epsirom/braid/releases) for release notes.
-Read the [0.2 → 0.3 migration guide](docs/compatibility.md#migrating-from-02-to-03)
-before upgrading; users coming from 0.1 also need the
-[0.1 → 0.2 guide](docs/compatibility.md#migrating-from-01-to-02).
-For the previous release, use the
-[0.2.1 documentation](https://github.com/Epsirom/braid/tree/v0.2.1).
-
-| Package | Purpose |
-| --- | --- |
-| [@chrok/braid](https://www.npmjs.com/package/@chrok/braid) | Core runtime and optional OpenAI-compatible runner |
-| [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid) | Pi background jobs, execution controls, reminders, and live flow panel; installs the matching core dependency |
-
-## What changed in 0.3?
-
-- **Shell tools in writable Pi nodes.** Workers can install dependencies, build,
-  test, and repair in their assigned workspaces. Read-only nodes remain shell-free;
-  worktrees use host permissions and are not security sandboxes.
-- **Git-aware checkpoints.** Tracked changes and non-ignored new files are
-  checkpointed. Keep artifacts needed by successors in non-ignored or deliberately
-  tracked paths; ignored dependencies and build outputs are no longer preserved.
-- **Pi reminders between steps.** Completion and pause reminders arrive after
-  the current response and tool batch, before the next model step.
-- **Clearer errors and status.** Invalid graphs show actionable errors; focused
-  reads show the selected execution's output/error and current control state.
-  Full status exports retain snapshots and failed-worker usage.
-
-See the [changelog](CHANGELOG.md#030--2026-10-04) for all fixes and credits.
-
-## Execution-control foundation from 0.2
-
-- **Editable graphs, captured executions.** `startBraid` exposes revision-checked
-  updates and pause/resume; `executionId` identifies a particular invocation,
-  while `nodeId` identifies its reusable definition.
-- **Bounded refinement loops.** Explicit feedback edges revisit nodes with fresh
-  workspaces. Each loop has a finite iteration limit, and `maxExecutions` caps
-  materialized executions across the whole run, including live updates.
-- **Explicit workspace integration.** Read-only workers inspect isolated
-  predecessor snapshots. `merge` combines changes in a new worktree;
-  `integrate` writes to the source checkout. Final integration is never implicit.
-- **Per-execution failure policy.** Optional failures keep their errors and
-  partial work for recovery. Set `requireSuccess: true` to fail the whole run.
-
-See [execution control](docs/execution-control.md) for the full contract and
-[ROADMAP.md](ROADMAP.md) for the current scope and remaining work.
-
 ## Why Braid?
 
-For a code review, run correctness and test-coverage analysis independently,
-then pass both results to a synthesis node. Add a decision when some tasks need
-only a brief answer. Braid handles dependency readiness, conditional skips,
-failed joins, per-node context, cancellation, and accounting around those calls.
+For a code review, one agent can check correctness while another checks test
+coverage. A third waits for both results and writes the final review:
 
 ```mermaid
 flowchart LR
-    route{Choose depth} -->|detailed| correctness[Correctness]
-    route -->|detailed| tests[Test coverage]
-    correctness --> review[Final review]
-    tests --> review
-    route -->|brief| brief[Short answer]
+    correctness[Check correctness] --> review[Write final review]
+    tests[Check test coverage] --> review
 ```
 
-Use it when independent reasoning branches and explicit handoffs help. A direct
-model call or `Promise.all` is enough for a simple answer or independent calls
-without routing or joins. Braid adds no persistence, workflow editor, or agent
-framework. [Runnable examples](docs/examples.md) show the tradeoffs.
+Each box is a task (a **node**); each arrow passes a result to a dependent task
+(an **edge**). Braid manages when tasks run and gives each agent its own context.
+For agents that edit code, it also provides separate Git worktrees; an explicit
+`integrate` task applies selected changes to your checkout.
+
+Graphs can also branch on an agent's decision, repeat work with a fixed iteration
+limit, and be edited or paused while running. See [runnable examples](docs/examples.md)
+and [execution control](docs/execution-control.md) when you need those features.
+
+## Get started
+
+| Where you want to use Braid | Start here |
+| --- | --- |
+| In your own application | [Install `@chrok/braid`](#install-in-your-application) and supply a model runner |
+| In Pi | [Install `@chrok/pi-braid`](#install-in-pi) to run agents in the background and inspect them in a live panel |
 
 ## Install in your application
+
+Requires Node.js 22+ and ESM imports. The core has no runtime dependencies.
 
 ```sh
 npm install @chrok/braid
@@ -136,31 +96,6 @@ for published versions. To try the current source checkout, follow the
 This snapshot uses the actual panel renderer and fake responses. See the
 [Pi guide](integrations/pi/README.md) for background jobs, cancellation, and local
 installation, and [compatibility](docs/compatibility.md) for the tested versions.
-
-## Develop from source
-
-```sh
-git clone https://github.com/Epsirom/braid.git
-cd braid
-npm ci
-npm run check
-npm test
-npm run build
-npm run demo
-```
-
-The demo uses a deterministic fake model runner and makes no network calls. To
-run the same graph with an OpenAI-compatible Chat Completions endpoint:
-
-```sh
-# Set OPENAI_API_KEY and BRAID_MODEL in your environment first.
-npm run demo -- --live
-```
-
-`OPENAI_BASE_URL` optionally changes the API root (for example,
-`https://your-provider.example/v1`). Live mode makes billable model requests.
-The adapter requires a model with function/tool calling support. No live provider
-is needed for the test suite; its HTTP requests are intercepted in tests.
 
 ## API
 
@@ -578,6 +513,31 @@ stop an uncooperative remote request: providers must honor cancellation to stop
 resource consumption. Concurrency limits cover runtime-managed invocations;
 uncancelled provider work after timeout can outlive a slot.
 
+## Develop from source
+
+```sh
+git clone https://github.com/Epsirom/braid.git
+cd braid
+npm ci
+npm run check
+npm test
+npm run build
+npm run demo
+```
+
+The demo uses a deterministic fake model runner and makes no network calls. To
+run the same graph with an OpenAI-compatible Chat Completions endpoint:
+
+```sh
+# Set OPENAI_API_KEY and BRAID_MODEL in your environment first.
+npm run demo -- --live
+```
+
+`OPENAI_BASE_URL` optionally changes the API root (for example,
+`https://your-provider.example/v1`). Live mode makes billable model requests.
+The adapter requires a model with function/tool calling support. No live provider
+is needed for the test suite; its HTTP requests are intercepted in tests.
+
 ## Internal architecture and scope
 
 - [`src/types.ts`](src/types.ts): public graph, provider, and result types.
@@ -605,6 +565,15 @@ scheduler event bus.
 Out of scope: arbitrary/unstructured cycles, nested/overlapping loops, arbitrary
 code nodes, durable workflow recovery, saved templates, a graphical editing UI,
 and recursive Braid calls from model nodes.
+
+## Releases and upgrades
+
+The 0.3 API is experimental. See the [changelog](CHANGELOG.md) for version changes
+and [GitHub releases](https://github.com/Epsirom/braid/releases) for published releases.
+
+- Upgrading from 0.2: read the [0.2 → 0.3 migration guide](docs/compatibility.md#migrating-from-02-to-03).
+- Upgrading from 0.1: also follow the [0.1 → 0.2 guide](docs/compatibility.md#migrating-from-01-to-02).
+- Using the previous release: see the [0.2.1 documentation](https://github.com/Epsirom/braid/tree/v0.2.1).
 
 ## Contributing and project status
 
