@@ -40,11 +40,14 @@
     "prepack": "npm run build",
     "build:pi": "npm run build --workspace @chrok/pi-braid",
     "test:package": "node scripts/package-smoke.mjs",
-    "verify": "npm run check && npm test && npm run check:pi && npm run test:pi && npm run examples && npm run test:package",
+    "verify": "npm run check && npm test && npm run check:pi && npm run test:pi && npm run check:dsh && npm run test:dsh && npm run examples && npm run test:package",
     "examples": "tsx examples/basic.ts && tsx examples/code-review.ts && tsx examples/failure-handling.ts && tsx examples/custom-runner.ts && tsx examples/execution-control.ts",
     "bench": "npm run build && node --expose-gc scripts/benchmark.mjs",
     "demo:panel": "tsx scripts/panel-demo.ts",
-    "test:pi:live": "npm run build:pi && node integrations/pi/test/live/run.mjs"
+    "test:pi:live": "npm run build:pi && node integrations/pi/test/live/run.mjs",
+    "check:dsh": "npm run build && npm run check --workspace @chrok/dsh-braid",
+    "test:dsh": "npm run build && npm test --workspace @chrok/dsh-braid",
+    "build:dsh": "npm run build --workspace @chrok/dsh-braid"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -78,6 +81,7 @@
     "registry": "https://registry.npmjs.org"
   },
   "workspaces": [
-    "integrations/pi"
+    "integrations/pi",
+    "integrations/dsh"
   ]
 }

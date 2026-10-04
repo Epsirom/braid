@@ -7,6 +7,8 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+const dshRoot = join(root, "integrations/dsh");
+const dshManifest = JSON.parse(readFileSync(join(dshRoot, "package.json"), "utf8"));
 const piRoot = join(root, "integrations/pi");
 const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const piManifest = JSON.parse(readFileSync(join(piRoot, "package.json"), "utf8"));
@@ -33,12 +35,26 @@ let registry;
 
 try {
   // A removed source file must never survive a rebuild into a published package.
-  for (const cwd of [root, piRoot]) {
+  for (const cwd of [root, piRoot, dshRoot]) {
     mkdirSync(join(cwd, "dist"), { recursive: true });
     writeFileSync(join(cwd, "dist/__stale_build_sentinel.js"), "throw new Error('stale build');\n");
   }
   const core = await pack(root);
   const pi = await pack(piRoot);
+  const dsh = await pack(dshRoot);
+  assert.ok(dsh.files.some(file => file.path === "cordis.patch.yml"));
+  assert.ok(dsh.files.some(file => file.path === "dist/index.d.ts"));
+  assert.ok(dsh.files.some(file => file.path === "dist/client.js"));
+  assert.ok(dsh.files.some(file => file.path === "dist/client/index.d.ts"));
+  assert.equal(dshManifest.dsh.client.platform, "web");
+  assert.equal(dshManifest.exports["./client"].default, "./dist/client.js");
+  assert.ok(!dsh.files.some(file => file.path.includes("__stale_build_sentinel")));
+  assert.equal(dshManifest.version, manifest.version);
+  assert.equal(dshManifest.dependencies[manifest.name], manifest.version);
+  assert.equal(dshManifest.dsh.bundle.patch, "./cordis.patch.yml");
+  for (const file of dsh.files.filter(file => file.path.endsWith(".js"))) {
+    assert.ok(!/earendil|integrations\/pi|\.\.\/\.\.\/src/.test(readFileSync(join(dshRoot, file.path), "utf8")), "DSH must be independent of Pi and checkout sources");
+  }
   const expectedCore = readdirSync(join(root, "src"), { recursive: true })
     .filter(path => path.endsWith(".ts"))
     .flatMap(path => ["dist/" + path.replaceAll("\\", "/").replace(/\.ts$/, ".js"), "dist/" + path.replaceAll("\\", "/").replace(/\.ts$/, ".d.ts")]);
@@ -152,7 +168,52 @@ try {
     parseFinishMergeArguments({ dispositions: [{ executionId: 'a', disposition: 'discarded', reason: 'test' }] }, ['a']);
   `);
   await run([join(root, "node_modules/typescript/bin/tsc"), "--noEmit", "--strict", "--skipLibCheck", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "check.mts"], consumer);
-  console.log(`Package smoke passed: ${core.id} (${core.entryCount} files), ${pi.id} (${pi.entryCount} files). Public imports, types, a Pi background job, and clean builds verified outside the checkout.`);
+  const dshConsumer = join(temp, "dsh-consumer");
+  mkdirSync(dshConsumer);
+  writeFileSync(join(dshConsumer, "package.json"), JSON.stringify({ private: true, type: "module" }));
+  const dshPeers = Object.fromEntries(Object.keys(dshManifest.peerDependencies).map(name => [name, dshManifest.devDependencies[name]]));
+  await run([npm, "install", "--no-audit", "--no-fund", `--@chrok:registry=${origin}`, "--cache", join(temp, "npm-cache"), join(temp, dsh.filename), ...Object.entries(dshPeers).map(([name, version]) => `${name}@${version}`)], dshConsumer);
+  writeFileSync(join(dshConsumer, "check.mjs"), `
+    import assert from 'node:assert/strict';
+    import { Context } from '@deepseek-ai/cordis';
+    import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
+    import ToolRuntime from '@deepseek-ai/dsh-tools';
+    import { apply, name, inject } from '@chrok/dsh-braid';
+    import { readFileSync } from 'node:fs';
+    import { createRequire } from 'node:module';
+    import { createBraidTools } from './node_modules/@chrok/dsh-braid/dist/tools.js';
+    import { BraidJobs } from './node_modules/@chrok/dsh-braid/dist/jobs.js';
+    assert.equal(name, 'braid'); assert.equal(typeof apply, 'function'); assert.ok(inject.includes('llm'));
+    // The browser entry is a loader factory, never a Node/ESM import or a second React runtime.
+    let factory;
+    new Function('window', readFileSync(createRequire(import.meta.url).resolve('@chrok/dsh-braid/client'), 'utf8'))({
+      __ModuleLoader__: { load(entry) { assert.equal(entry.id, '@chrok/dsh-braid'); factory = entry.factory; } },
+    });
+    assert.equal(typeof factory, 'function');
+    const browserPlugin = factory(id => {
+      assert.ok(['react', 'react/jsx-runtime'].includes(id), 'Unexpected browser dependency: ' + id);
+      return {};
+    });
+    assert.equal(typeof browserPlugin.apply, 'function');
+    const ctx = new Context();
+    await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime, { mode: 'native' });
+    const jobs = new BraidJobs({ async *stream() {
+      yield { type: 'text-delta', index: 0, text: 'packed DSH worker' };
+      yield { type: 'finish', reason: { kind: 'stop' } };
+    } });
+    try {
+      for (const tool of createBraidTools(() => jobs, () => ({}))) ctx.tools.register(tool);
+      assert.equal(ctx.tools.schemas().length, 5);
+      const job = jobs.start({ goal: 'packed', nodes: [{ type: 'execute', id: 'a', prompt: 'test' }], edges: [] }, {}, { cwd: process.cwd(), model: 'fake/model' });
+      await jobs.wait(job.handle);
+      assert.equal(jobs.getNode(job.handle, 'a').output, 'packed DSH worker');
+      assert.equal(jobs.get(job.handle).status, 'completed');
+    } finally { await jobs.dispose(); await ctx.fiber.dispose(); }
+  `);
+  await run(["check.mjs"], dshConsumer);
+  writeFileSync(join(dshConsumer, "check.mts"), `import { apply, name, inject } from '@chrok/dsh-braid'; void apply; void name; void inject;`);
+  await run([join(root, "node_modules/typescript/bin/tsc"), "--noEmit", "--strict", "--skipLibCheck", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "check.mts"], dshConsumer);
+  console.log(`Package smoke passed: ${core.id} (${core.entryCount} files), ${pi.id} (${pi.entryCount} files), ${dsh.id} (${dsh.entryCount} files). Public imports, types, Pi/DSH background jobs, and clean builds verified outside the checkout.`);
 } finally {
   if (registry) await new Promise((resolve, reject) => registry.close(error => error ? reject(error) : resolve()));
   rmSync(temp, { recursive: true, force: true });

@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "jsx": "react-jsx", "declaration": true, "rootDir": ".", "outDir": "dist", "types": ["react", "react-dom", "node"] },
+  "include": ["client/**/*.ts", "client/**/*.tsx", "panel-types.ts", "panel-contract.ts"],
+  "exclude": ["dist", "node_modules"]
+}

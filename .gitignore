@@ -6,3 +6,4 @@ coverage/
 integrations/pi/LICENSE
 .env.*
 !.env.example
+integrations/dsh/LICENSE
