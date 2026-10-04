@@ -2,19 +2,35 @@
 
 ## Unreleased
 
+## 0.3.1 — 2026-10-04
+
 ### Features
 
 - Add the `@chrok/dsh-braid` DeepSeek Harness plugin with background graphs,
   isolated workers, revision-checked updates, pause/resume, cancellation, and
-  completion reminders through DSH's native model, tool, and job services.
+  completion reminders through DSH's native model, tool, and job services
+  ([#45](https://github.com/Epsirom/braid/pull/45)) — @Epsirom.
 - Add a native DSH Web panel with live graphs, execution history, paged outputs,
   usage, and controls. Braid tool cards preserve recorded operation summaries
-  and open the corresponding job, node, or execution in the live panel.
+  and open the corresponding job, node, or execution in the live panel
+  ([#45](https://github.com/Epsirom/braid/pull/45)) — @Epsirom.
+
+DSH 0.2.0-rc.2 and Node.js 22.19+ are the tested integration baseline. DSH is
+in developer preview, so its host peer dependencies are pinned. This release
+preserves the existing core and Pi contracts; no migration from 0.3.0 is required.
+Pi 1.0.1 remains the pinned Pi validation target.
 
 ### Documentation
 
 - Introduce Braid with a parallel code-review example and clear installation
-  paths, moving release history, migration links, and source setup later in the README.
+  paths, moving release history, migration links, and source setup later in the README
+  ([#44](https://github.com/Epsirom/braid/pull/44)) — @Epsirom.
+
+### New Contributors
+
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.3.0...v0.3.1).
 
 ## 0.3.0 — 2026-10-04
 

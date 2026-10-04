@@ -1,12 +1,12 @@
 {
   "name": "@chrok/pi-braid",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "license": "MIT",
   "description": "Pi extension for Braid: background agent graphs, bounded loops, live updates, and a flow panel",
   "type": "module",
   "dependencies": {
     "grok-mermaid": "^0.2.2",
-    "@chrok/braid": "0.3.0"
+    "@chrok/braid": "0.3.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

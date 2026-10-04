@@ -1,5 +1,7 @@
 # Braid for DeepSeek Harness (`@chrok/dsh-braid`)
 
+[![npm](https://img.shields.io/npm/v/%40chrok%2Fdsh-braid?label=%40chrok%2Fdsh-braid)](https://www.npmjs.com/package/@chrok/dsh-braid)
+
 A native DeepSeek Harness plugin for background Braid graphs, bounded loops,
 isolated Git worktrees, live updates, pause/resume, and completion reminders.
 It uses DSH's provider routing and credentials through `ctx.llm`; it has no Pi
@@ -8,7 +10,13 @@ DSH is in developer preview, so host peer versions are pinned to this baseline.
 
 ## Install
 
-From this repository:
+DSH support starts with Braid 0.3.1; the npm badge shows availability.
+
+```sh
+dsh plugin --profile web add @chrok/dsh-braid
+```
+
+For development, install this repository checkout instead:
 
 ```sh
 npm ci
@@ -20,12 +28,6 @@ Restart the DSH profile after installation or rebuilding. The package includes
 `dsh.bundle` metadata and `cordis.patch.yml`, so installation activates the plugin.
 It requires the `tools`, `llm`, `commands`, `systemPrompt`, and `jobs` services,
 which the standard DSH composition provides. Custom profiles must provide them.
-
-Once published, the planned npm installation command is:
-
-```sh
-dsh plugin --profile web add @chrok/dsh-braid
-```
 
 Use your own profile name in place of `web`. Core `@chrok/braid` is installed
 automatically at the matching version. No API keys belong in plugin configuration;

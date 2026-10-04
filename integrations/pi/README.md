@@ -278,7 +278,7 @@ The extension loads its own compiled `dist/` and the Pi host dependencies.
 `npm ci` at the repository root installs the pinned workspace development
 environment, including a local link to core. Use
 `npm install --workspace @chrok/pi-braid <dependency>` when updating Pi dependencies;
-both packages share the root lockfile. The adapter uses the `grok-mermaid` terminal renderer for Mermaid flowcharts.
+all packages share the root lockfile. The adapter uses the `grok-mermaid` terminal renderer for Mermaid flowcharts.
 The local install is trusted code: Pi extensions execute with the process's full
 permissions.
 
