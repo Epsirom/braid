@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Documentation
+
+- Introduce Braid with a parallel code-review example and clear installation
+  paths, moving release history, migration links, and source setup later in the README.
+
 ## 0.3.0 — 2026-10-04
 
 ### Features and breaking changes
