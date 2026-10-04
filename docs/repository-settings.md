@@ -19,8 +19,7 @@ The repository website points to
 links all packages and displays their npm version badges. Topics are
 `llm`, `ai-agents`, `agent-runtime`, `agent-orchestration`, `multi-agent`,
 `graph-execution`, `bounded-loops`, `git-worktree`, `parallel-execution`,
-`typescript`, `nodejs`, `openai-compatible`, `pi-package`, `deepseek-harness`,
-and `dsh-plugin`.
+`typescript`, `nodejs`, `openai-compatible`, `pi-package`, and `dsh-plugin`.
 The old DAG-only and workflow-engine labels do not describe the 0.2 scope.
 
 All packages publish to `https://registry.npmjs.org`:
