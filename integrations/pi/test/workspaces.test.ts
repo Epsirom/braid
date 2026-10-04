@@ -13,6 +13,7 @@ import { createWorktreeWriteTools } from "../write-tools.js";
 import { BraidJobs } from "../jobs.js";
 import { createBraidTools } from "../index.js";
 import { createAvailableReadTools } from "../read-tools.js";
+import { createWorkspaceShellTools } from "../shell-tools.js";
 import { context, deferred, input, response } from "./helpers.js";
 
 const exec = promisify(execFile);
@@ -57,6 +58,105 @@ function toolResponse(...calls: ToolCall[]) {
   return { ...response(), stopReason: "toolUse" as const, content: calls };
 }
 
+test("writable nodes run and repair shell commands before passing non-ignored changes to successors", async t => {
+  const fixture = await repository(t);
+  const turns = new Map<string, number>();
+  const ctx = context(async () => response());
+  t.mock.method(ctx.modelRegistry, "complete", async (_model: unknown, worker: Context) => {
+    const { nodeId, workspace } = JSON.parse(worker.messages[0]!.content as string) as {
+      nodeId: string; workspace: PiNodeWorkspace;
+    };
+    const turn = turns.get(nodeId) ?? 0;
+    turns.set(nodeId, turn + 1);
+    if (nodeId === "review") {
+      assert.ok(!worker.tools!.some(tool => tool.name === "bash" || tool.name === "powershell"));
+      assert.equal(await readFile(join(workspace.worktreeRoot!, "src", "tested.txt"), "utf8"), "verified");
+      await assert.rejects(readFile(join(workspace.worktreeRoot!, "ignored.txt")), { code: "ENOENT" });
+      return response("Reviewed the tested checkpoint");
+    }
+    assert.ok(worker.tools!.some(tool => tool.name === "bash"));
+    assert.ok(!worker.tools!.some(tool => tool.name === "braid"));
+    assert.match(worker.systemPrompt!, /shell access is not sandboxed/);
+    assert.match(worker.systemPrompt!, /Git refs, configuration, hooks/);
+    assert.match(worker.systemPrompt!, /Parent extension\/MCP tools/);
+    if (turn === 0) return toolResponse({ type: "toolCall", id: "fail", name: "bash", arguments: {
+      command: "printf failing-test; exit 7",
+    } });
+    const result = worker.messages.at(-1)!;
+    assert.equal(result.role, "toolResult");
+    if (result.role === "toolResult") assert.equal(result.isError, turn === 1);
+    if (turn === 1) return toolResponse({ type: "toolCall", id: "fix", name: "bash", arguments: {
+      command: "printf verified > tested.txt; printf cache > ../ignored.txt; test -f tested.txt",
+    } });
+    return response("Implemented and tested");
+  });
+  const result = await braid({
+    goal: "Implement and verify", nodes: [
+      { type: "execute", id: "work", prompt: "Implement and test" },
+      { type: "execute", id: "review", prompt: "Review", workspace: "read-only" },
+    ], edges: [{ from: "work", to: "review" }],
+  }, {
+    cwd: join(fixture.root, "src"), defaultModel: "fake/model",
+    runner: createPiRunner(ctx.modelRegistry, { cwd: join(fixture.root, "src"), onWorkspace: fixture.onWorkspace }),
+  });
+  assert.equal(result.nodes.work!.status, "completed", JSON.stringify(result));
+  assert.equal(result.nodes.review!.status, "completed", JSON.stringify(result));
+  assert.equal(turns.get("work"), 3);
+  await assert.rejects(readFile(join(fixture.root, "src", "tested.txt")), { code: "ENOENT" });
+});
+
+test("cancelling a shell call drains it before checkpointing partial work and removing its worktree", { timeout: 15_000 }, async t => {
+  const fixture = await repository(t);
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const ready = deferred<PiNodeWorkspace>();
+  let drained = false;
+  let drainedAtFailure = false;
+  const ctx = context(async () => toolResponse({ type: "toolCall", id: "shell", name: "bash", arguments: {
+    command: "printf partial > partial.txt; printf cache > ignored.txt; sleep 30",
+  } }));
+  const piRunner = createPiRunner(ctx.modelRegistry, {
+    cwd: fixture.root, onWorkspace: workspace => {
+      fixture.onWorkspace(workspace);
+      ready.resolve(workspace);
+    },
+  });
+  const pending = braid({
+    goal: "Cancel a running command", nodes: [{ type: "execute", id: "work", prompt: "Run" }], edges: [],
+  }, {
+    cwd: fixture.root, defaultModel: "fake/model", signal: controller.signal,
+    runner: request => {
+      const write = request.withWorkspaceWrite!;
+      request.withWorkspaceWrite = operation => write(async () => {
+        try { return await operation(); }
+        finally { drained = true; }
+      });
+      return piRunner(request);
+    },
+    onEvent: event => {
+      if (event.type === "node_failed") drainedAtFailure = drained;
+    },
+  });
+  const workspace = await ready.promise;
+  const deadline = Date.now() + 5000;
+  while (true) {
+    try { await readFile(join(workspace.worktreeRoot!, "ignored.txt")); break; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || Date.now() >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
+  controller.abort();
+  const result = await pending;
+  assert.equal(drained, true);
+  assert.equal(drainedAtFailure, true);
+  assert.equal(result.nodes.work!.error?.code, "CANCELLED");
+  const saved = result.nodes.work!.workspace!;
+  assert.equal(await git(fixture.root, "show", `${saved.checkpointRef}:partial.txt`), "partial");
+  await assert.rejects(git(fixture.root, "show", `${saved.checkpointRef}:ignored.txt`));
+  await assert.rejects(readFile(join(saved.worktreeRoot!, "partial.txt")), { code: "ENOENT" });
+});
+
 test("Pi braid tool submits read-only review and decision nodes with Git inspection but no write tools", async t => {
   const fixture = await repository(t);
   await writeFile(join(fixture.root, "src/file.txt"), "parent change\n");
@@ -88,11 +188,12 @@ test("Pi braid tool submits read-only review and decision nodes with Git inspect
         { type: "toolCall", id: "write", name: "write", arguments: { path: "file.txt", content: "bad" } },
         { type: "toolCall", id: "edit", name: "edit", arguments: { path: "file.txt", edits: [{ oldText: "parent", newText: "bad" }] } },
         { type: "toolCall", id: "add", name: "git", arguments: { command: "add", args: ["."] } },
+        { type: "toolCall", id: "shell", name: "bash", arguments: { command: "echo forbidden > forbidden.txt" } },
       );
     }
     const results = worker.messages.filter(message => message.role === "toolResult");
     if (nodeId === "review") {
-      assert.deepEqual(results.map(result => result.isError), [false, false, true, true, true]);
+      assert.deepEqual(results.map(result => result.isError), [false, false, true, true, true, true]);
       assert.match(JSON.stringify(results[0]!.content), /parent change/);
       assert.doesNotMatch(JSON.stringify(results[1]!.content), /parent change/);
     } else assert.equal(results[0]!.isError, false);
@@ -166,9 +267,9 @@ test("parallel Git nodes write and edit separate worktrees from the same dirty s
     };
     const turn = turns.get(payload.nodeId) ?? 0;
     turns.set(payload.nodeId, turn + 1);
-    assert.deepEqual(worker.tools!.map(tool => tool.name), [...(await createAvailableReadTools(fixture.root)).tools.map(tool => tool.name), "write", "edit", "git"]);
+    assert.deepEqual(worker.tools!.map(tool => tool.name), [...(await createAvailableReadTools(fixture.root)).tools.map(tool => tool.name), "write", "edit", ...createWorkspaceShellTools(fixture.root).map(tool => tool.name), "git"]);
     assert.match(worker.systemPrompt!, /own isolated Git worktree/);
-    assert.match(worker.systemPrompt!, /cannot run shell commands/);
+    assert.match(worker.systemPrompt!, /run tests, and fix failures/);
     if (turn === 0) {
       assert.equal(await readFile(join(payload.workingDirectory, "file.txt"), "utf8"), "unstaged\n");
       assert.equal(await readFile(join(payload.workspace.worktreeRoot!, "new.txt"), "utf8"), "untracked\n");

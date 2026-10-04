@@ -130,8 +130,8 @@ an explicit per-turn planning policy to Pi's system prompt and tool metadata:
   changes spanning multiple files, call Braid first when two or more concerns
   can be handled independently; use `workspace: "read-only"` for analysis,
   review, routing, and synthesis, and worktrees for implementation;
-- do not use Braid for simple one-step answers, trivial direct edits, or shell
-  work; keep tests and shell commands in the parent agent;
+- do not use Braid for simple one-step answers, trivial direct edits, or a single
+  shell command; writable nodes can implement, test, and fix their own work;
 - the user does not need to say “Braid” or design the graph;
 - when Braid fits, the model should submit a graph and refine it with live updates when needed, continue independent work, and retrieve the terminal outputs after
   the completion reminder.
@@ -142,16 +142,18 @@ or strengthen the project/system prompt for that model. The adapter explicitly
 asks the model to make the delegation choice before directly inspecting the
 repository. Do not add a generic `always call braid` rule: that would waste
 model calls and bypass direct tools.
-Merge nodes combine snapshots; integrate nodes apply selected changes to the caller; the parent reviews results and runs tests.
+Merge nodes combine and validate snapshots; integrate nodes apply selected changes to the caller; the parent reviews results and performs any remaining validation.
 Each node gets a new Pi AI context containing only the Braid goal, its node prompt,
 labelled direct predecessor outputs, and workspace metadata. It receives Pi's
 `read` and `ls`, plus `grep` when local `rg` is available and `find` when
 local `fd`/`fdfind` is available. Missing search dependencies are reported in the
 node prompt, with `ls`/`read` as alternatives. Dependencies are checked before
 exposing search tools and again before executing them; missing tools are not
-installed by Braid. Git worktrees additionally receive `write` and `edit`.
-It receives no parent transcript, shell tools, test runner, skills, or arbitrary
-code execution. Decision nodes additionally receive `decide`. Git nodes receive
+installed automatically by Braid. Writable workspaces additionally receive `write`,
+`edit`, and Pi's `bash` tool (`powershell` is also exposed on Windows), so nodes
+can install local dependencies, build, and run tests. Read-only nodes have no shell.
+Nodes receive no parent transcript, skills, or inherited extension/MCP tools.
+Decision nodes additionally receive `decide`. Git nodes receive
 local Git inspection; merge/integrate nodes also receive Git integration commands and
 `finish_merge`. Merge agents receive bounded changed-file lists, diff statistics
 and previews; integrate also receives the source checkout's dirty status. The model-facing `git`
@@ -237,7 +239,8 @@ Root executions use the initial job snapshot, including tracked and non-ignored
 untracked caller edits. Later loop rounds get new worktrees; they never reuse a
 previous invocation's workspace. `workspace: "read-only"` disables write/edit
 while retaining an isolated snapshot. Outside Git, all filesystem access is
-read-only. Search tools require installed `rg`/`fd`; shell/tests are unavailable.
+read-only, including no shell tools. Search tools require installed `rg`/`fd`.
+Writable nodes can run shell commands and tests in their assigned working directory.
 
 `merge` combines predecessor results into a new isolated worktree. `integrate`
 applies selected changes to the invoking checkout and preserves user edits. Both
@@ -261,6 +264,12 @@ results, explicitly connect them to an integrate node:
 }
 ```
 
+Checkpoints save tracked changes and non-ignored new files, following normal
+`git add --all` semantics. Existing tracked files remain tracked even when they
+match ignore rules. Ignored dependencies, caches, and build outputs are discarded
+with the worktree and are not carried to successors; keep required outputs in
+non-ignored paths. Files deliberately staged with `git add --force` remain tracked.
+
 `braid_status` retains execution-keyed workspace paths, checkpoint refs, and target
 merge dispositions. Cleanup removes worktrees while keeping immutable checkpoints.
 Inspect with `git show <checkpointRef>:path`. Integration additionally saves a
@@ -268,10 +277,22 @@ pre-write backup ref. A failed integration can leave partial source changes or
 conflicts; core does not reset the caller's checkout. Integrations serialize
 within the process, without locking parent edits or other processes.
 
-Pi's guarded writes reject external paths, Git metadata, symlinks, hard links,
-and special files. This is a capability boundary, not an OS sandbox. A custom
-runner must honor the core write barrier so cancellation can drain writes before
-cleanup. Calling the Pi runner without an assigned workspace stays read-only.
+Pi's guarded `write`/`edit` reject external paths, Git metadata, symlinks, hard links,
+and special files. Shell tools run with host permissions and can bypass those
+checks. Prompts require writes to stay in the assigned workspace, reserve source
+checkout changes for integrate nodes, and protect shared Git refs/configuration,
+other nodes, ports, databases, caches, and external services. These are cooperation
+rules, not an OS sandbox. Shell tools are created for each invocation; parent
+extension/MCP tools and their hooks are not inherited.
+
+Shell calls join the core write barrier: cancellation/timeout stops the process
+group (Windows uses `taskkill /T`), and checkpointing waits for the call to settle.
+On POSIX, remaining children in the command's process group are also stopped on
+normal command exit. Windows cleanup after the parent process exits is best effort.
+Run commands in the foreground; do not daemonize or leave servers/watchers running.
+Processes that detach from the group and external services are not contained by
+this mechanism. A custom runner must honor the core write barrier as well.
+Calling the Pi runner without an assigned workspace stays read-only.
 
 Tool and time budgets are unlimited by default in Pi. To set finite hard limits,
 pass any of these fields in the `braid` tool's `options`:

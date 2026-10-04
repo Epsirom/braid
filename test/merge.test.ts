@@ -186,7 +186,7 @@ test("failed nodes without changes retain checkpoints and preserve errors for co
   await noWorktrees(cwd, result);
 });
 
-test("explicit integration receives selected sources, including ignored output from failed nodes", async t => {
+test("explicit integration preserves deliberately force-added files from failed nodes", async t => {
   const cwd = await repository(t);
   let sources: string[] = [];
   const result = await braid(graph([execute("unchanged"), execute("changed"), { type: "integrate", id: "integrate" }], [{ from: "changed", to: "integrate" }]), { cwd, runner: async request => {
@@ -197,7 +197,10 @@ test("explicit integration receives selected sources, including ignored output f
       return { output: "Recovered partial work" };
     }
     await request.withWorkspaceWrite!(async () => {
-      if (request.node.id === "changed") await writeFile(join(request.workspace!.worktreeRoot!, "ignored.txt"), "partial work");
+      if (request.node.id === "changed") {
+        await writeFile(join(request.workspace!.worktreeRoot!, "ignored.txt"), "partial work");
+        await git(request.workspace!.worktreeRoot!, "add", "--force", "ignored.txt");
+      }
       else {
         await writeFile(join(request.workspace!.worktreeRoot!, "file.txt"), "temporary edit\n");
         await writeFile(join(request.workspace!.worktreeRoot!, "file.txt"), "original\n");
@@ -376,7 +379,7 @@ for (const outcome of ["discard", "throw", "unfinished"] as const) {
     const cwd = await repository(t);
     const result = await braid(graph([execute("work"), { type: "integrate", id: "integrate", requireSuccess: true }], [{ from: "work", to: "integrate" }]), { cwd, runner: async request => {
       if (request.node.type !== "integrate") {
-        await request.withWorkspaceWrite!(() => writeFile(join(request.workspace!.worktreeRoot!, "ignored.txt"), "recover this ignored output"));
+        await request.withWorkspaceWrite!(() => writeFile(join(request.workspace!.worktreeRoot!, "recovery.txt"), "recover this output"));
         return { output: "made changes" };
       }
       if (outcome === "throw") throw new Error("merge agent failed");
@@ -386,9 +389,9 @@ for (const outcome of ["discard", "throw", "unfinished"] as const) {
     assert.equal(result.status, outcome === "discard" ? "completed" : "failed");
     const source = result.nodes.work!.workspace!;
     assert.equal(source.state, "archived");
-    assert.equal(await git(cwd, "show", `${source.checkpointRef}:ignored.txt`), "recover this ignored output");
+    assert.equal(await git(cwd, "show", `${source.checkpointRef}:recovery.txt`), "recover this output");
     assert.ok(result.nodes.integrate!.workspace!.backupRef);
-    await assert.rejects(readFile(join(cwd, "ignored.txt")), { code: "ENOENT" });
+    await assert.rejects(readFile(join(cwd, "recovery.txt")), { code: "ENOENT" });
     await noWorktrees(cwd, result);
   });
 }

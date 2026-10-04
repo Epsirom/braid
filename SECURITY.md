@@ -44,17 +44,21 @@ answer that question.
 - Braid isolates invocation context; it is not a process or filesystem sandbox.
   A custom runner is trusted code with the host process's permissions.
 - The core manages Git snapshots, worktrees, checkpoint refs, and merge tools.
-  Pi workers can write/edit their assigned Git worktree. Integrate agents can apply
+  Writable Pi workers can write/edit and run shell commands in their assigned Git
+  worktree. Shells run with host permissions; prompts constrain workspace writes,
+  shared Git state, and external side effects. Integrate agents can apply
   changes to the source checkout; merge agents use isolated worktrees; they are not restricted to read-only analysis.
   Outside Git, Pi file tools stay read-only. Read paths can expose files outside
   the checkout and disclose content to a model provider.
 - Execute/decision nodes can request `workspace: "read-only"` inside Git. Pi
-  omits write/edit tools, and core rejects write-barrier operations. Git inspection
+  omits write/edit and shell tools, and core rejects write-barrier operations. Git inspection
   remains available. These nodes read an isolated predecessor
   snapshot; custom runners must honor this capability themselves.
 - Guarded write tools reject external paths, Git metadata, symlinks, hard links,
   and special files, but are not an OS sandbox against concurrent filesystem
-  attacks. Avoid concurrent external source edits while integrate agents run. A
+  attacks. Shell commands can bypass these guards. Parent extension/MCP tools and
+  their interception policies are not inherited by nodes. Avoid concurrent external
+  source edits while integrate agents run. A
   cancellation or failed merge can leave partial integration/conflicts for review;
   checkpoint and backup refs support recovery.
 - Prompts, predecessor outputs, tool results, errors, and model answers may be
@@ -68,6 +72,11 @@ answer that question.
 - Cancellation and timeout cannot stop synchronous JavaScript or remote work
   that ignores the abort signal. Enforce provider quotas and host-side admission
   limits for untrusted callers. See [resource limits](docs/resource-limits.md).
+  Pi shell calls are drained before checkpointing and stop their process group
+  (Windows uses `taskkill /T`); daemonized processes outside that group and external
+  services can outlive a call. Windows cleanup after parent exit is best effort.
+  Ignored new files are excluded from checkpoints and discarded with the worktree;
+  explicitly staged files still follow Git tracking semantics.
 
 The OpenAI-compatible adapter sends its API key only to the configured base URL.
 Treat that URL as trusted configuration. Keep credentials out of graphs, logs,

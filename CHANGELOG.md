@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Features and behavior changes
+
+- Give writable Pi nodes built-in shell tools for dependency installation, builds,
+  tests, and repair. Shell calls participate in cancellation and the workspace
+  write barrier before checkpointing; prompts describe workspace boundaries and
+  shared resources. Read-only nodes still have no shell, and parent extension/MCP
+  tools are not inherited.
+- Checkpoint tracked changes and non-ignored new files using normal Git staging
+  semantics. Ignored dependencies, caches, and build outputs are no longer
+  automatically archived or passed to successors; already tracked and deliberately
+  force-added files remain tracked.
+
+These changes require the next minor release under the compatibility policy.
+See [migration guidance](docs/compatibility.md#upcoming-workspace-capability-changes)
+for callers relying on shell-free workers or preservation of ignored outputs.
+
 ## 0.2.1 — 2026-10-04
 
 ### Maintenance

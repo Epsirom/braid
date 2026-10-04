@@ -71,6 +71,31 @@ separate gate reminder; when both preferences are enabled it supplies the single
 completion reminder for that instance. Cancellation still sends failure reminders
 for opted-in running instances.
 
+## Upcoming workspace capability changes
+
+The Unreleased changes target the next minor release; they are not part of 0.2.1:
+
+- Writable Pi nodes now receive `bash` and, on Windows, `powershell`, allowing
+  dependency installation, builds, and tests within a node. If a graph relies on
+  workers having no shell, set execute/decision nodes to `workspace: "read-only"`
+  (which also disables file writes), or use a custom runner with the required
+  capability policy. Writable shell access uses host permissions and prompt-based
+  cooperation rules; worktrees are not a security sandbox. Parent extension/MCP
+  tools and their hooks are not inherited.
+- Core checkpoints now follow `git add --all` semantics instead of force-adding
+  every output. Move artifacts needed by successors or for recovery to non-ignored
+  paths, or deliberately track them. Already tracked files, including files
+  explicitly staged with `git add --force`, remain tracked even when they match
+  ignore rules. Untracked ignored outputs are discarded when worktrees are removed,
+  including after failed or cancelled executions. This applies to every adapter.
+- Shell commands must run in the foreground. On POSIX, Braid stops remaining
+  children in the command's process group even on normal completion; Windows uses
+  best-effort process-tree cleanup. Run a temporary server and its checks within
+  one foreground command and clean it up before returning. Detached daemons and
+  external services are not contained by this lifecycle.
+
+No graph field, result shape, or event schema changes are required.
+
 ## Versioning
 
 Core and Pi release together with matching versions. During 0.x, patch releases

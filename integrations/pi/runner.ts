@@ -25,6 +25,7 @@ import {
 } from "@chrok/braid";
 import { createWorktreeWriteTools } from "./write-tools.js";
 import { createAvailableReadTools } from "./read-tools.js";
+import { createWorkspaceShellTools } from "./shell-tools.js";
 
 export interface PiNodeProgress {
   nodeId: string;
@@ -118,7 +119,10 @@ export function createPiRunner(
     const fileTools = [
       ...readTools.tools,
       ...(writeRoot
-        ? await createWorktreeWriteTools(workingDirectory, writeRoot, request.signal, readOnlyPaths)
+        ? [
+          ...await createWorktreeWriteTools(workingDirectory, writeRoot, request.signal, readOnlyPaths),
+          ...createWorkspaceShellTools(workingDirectory),
+        ]
         : []),
     ];
     // Send only serializable definitions to the model, not execute functions.
@@ -159,12 +163,20 @@ export function createPiRunner(
           : workspace.mode === "worktree"
           ? "You may write and edit files inside your own isolated Git worktree. Use workingDirectory as your cwd; do not write to sourceRoot or any other node's worktree. " +
             "Each execution starts from its predecessor checkpoint; root executions use the initial job snapshot. Repeated loop executions get new worktrees. Inspect exact predecessor checkpoints with git show. " +
-            "Describe your changes in your final answer. Core will save your checkpoint and clean up the worktree. Only explicit integrate nodes write to the source checkout. "
+            "Describe your changes and verification in your final answer. Core will save your checkpoint and clean up the worktree. Leave source checkout changes to explicit integrate nodes. "
           : "This node has no writable workspace assigned. Its filesystem tools are read-only; you cannot write or edit files. " +
             "Read workingDirectory directly; in Git this is an isolated predecessor snapshot. Outside Git it is the source directory. " +
             (request.git ? "Use Git inspection to review changes or predecessor checkpoints; the assigned snapshot contains predecessor edits. " : "")) +
         mergeInstructions(request) +
-        "You cannot run shell commands, run tests, or call arbitrary tools. " +
+        (writeRoot
+          ? "You may use Pi's shell tools to install local dependencies, build, run tests, and fix failures in workingDirectory. " +
+            "Worktrees isolate code snapshots, not host permissions: shell access is not sandboxed. Keep file changes within your assigned workspace; integrate alone may edit sourceRoot. " +
+            "Git refs, configuration, hooks, and object storage are shared with the caller and other nodes. Do not change shared Git configuration, hooks, branches, Braid refs, or worktree registrations, and do not switch branches. Prefer the provided git tool for inspection and merge operations. " +
+            "Nodes run concurrently and loop executions start fresh: ports, databases, caches, credentials, and external services are shared. Use execution-specific temporary resources, avoid global installs and destructive or externally visible actions unless explicitly requested, and do not spawn recursive Braid/Pi agents. " +
+            "Run commands in the foreground; command completion, timeout, or cancellation stops their process group. Do not daemonize or leave servers/watchers running. " +
+            "Checkpoints include tracked changes and non-ignored new files; ignored dependencies, caches, and build products are not carried to successors and are removed during cleanup. "
+          : "You cannot run shell commands or tests in this read-only workspace. ") +
+        "Parent extension/MCP tools, skills, and session history are not inherited; use only the tools provided here. " +
         ((request.node.type === "merge" || request.node.type === "integrate") && workspace.mode === "read-only"
           ? "This merge has no Git sources; call finish_merge with an empty dispositions array before answering."
           : request.node.type === "decision"
@@ -313,7 +325,7 @@ export function createPiRunner(
           request.signal,
           undefined,
         );
-        const result = ["write", "edit"].includes(call.name) && request.withWorkspaceWrite
+        const result = ["write", "edit", "bash", "powershell"].includes(call.name) && request.withWorkspaceWrite
           ? await request.withWorkspaceWrite(execute)
           : await execute();
         request.signal.throwIfAborted();
@@ -323,7 +335,7 @@ export function createPiRunner(
           toolName: call.name,
           content: result.content,
           ...(result.details === undefined ? {} : { details: result.details }),
-          isError: false,
+          isError: result.isError ?? false,
           timestamp: Date.now(),
         };
       } catch (error) {
