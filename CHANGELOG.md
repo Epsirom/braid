@@ -18,6 +18,37 @@ These changes require the next minor release under the compatibility policy.
 See [migration guidance](docs/compatibility.md#upcoming-workspace-capability-changes)
 for callers relying on shell-free workers or preservation of ignored outputs.
 
+### Fixes
+
+- Include `changes.baseCommit` in merge-source previews and explain cumulative
+  diffs versus invocation snapshots. Read-only review checkpoints can otherwise
+  suggest an empty patch; multi-parent checkpoints also need an explicit
+  strategy instead of a bare cherry-pick.
+- Display Pi submission and status errors even when the host supplies empty
+  result details; failed graph definitions no longer appear as background jobs
+  with an undefined ID/status. Validation errors identify offending nodes/edges
+  and explain how to declare feedback cycles.
+- Clarify Pi node requirements, loop/template parameters, and revision controls
+  while retaining a flat provider-facing node schema with type-specific core
+  validation. Restrict historical execution pins to updates. Submission/update
+  replies echo accepted graph types and policies.
+- Deliver Pi completion/pause reminders at the next model step using steering,
+  after the current tool batch, instead of queuing follow-ups behind the entire
+  foreground task. Clarify that pause reminders need a current-state check.
+- Explain atomic update failures and retrying complete patches: new nodes and
+  their edges/loops must be submitted together to avoid starting disconnected
+  roots while another execution is paused. Discourage repeated replacement jobs
+  when a definition problem recurs.
+- Show the requested execution's output/error in focused Pi status reads and
+  include the current revision and paused IDs, separately from its captured
+  revision. Preserve this rendering for older saved Pi sessions.
+- Keep errors, control fields, and Pi usage ahead of large status payloads;
+  save complete running snapshots and include failed-worker provider usage as
+  `piUsage` in exported final results.
+- Update live status on graph completion/failure and clear resumable pause IDs
+  when finalizing, while retaining pause history in the event log. Loop
+  validation now names feedback targets and edges that bypass the loop entry.
+
 ## 0.2.1 — 2026-10-04
 
 ### Maintenance

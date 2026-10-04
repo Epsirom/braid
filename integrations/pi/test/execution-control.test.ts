@@ -18,6 +18,17 @@ test("Pi atomically updates a paused job, resumes, and retrieves immutable execu
   assert.equal(paused.paused, true);
   assert.ok(paused.executionId);
   assert.equal(jobs.claimUsage(paused.handle), undefined);
+  const receipt = JSON.parse((submitted.content[0] as { text: string }).text);
+  assert.deepEqual(receipt.graph.nodes, [{ type: "execute", id: "a", pauseAfter: true }]);
+  assert.deepEqual(receipt.graph.edges, []);
+  await assert.rejects(tools.updateTool.execute("invalid topology", {
+    jobId: paused.handle, expectedRevision: 0,
+    upsertNodes: [{ type: "merge", id: "check" }],
+    addEdges: [{ from: "a", to: "check", choice: "pass" }], resume: [paused.executionId],
+  }, undefined, undefined, ctx), /no changes or resumes were applied.*Choice edge.*Retry the complete corrected patch/);
+  assert.equal(jobs.get(paused.handle)!.execution!.revision, 0);
+  assert.deepEqual(jobs.get(paused.handle)!.execution!.graph.nodes.map(node => node.id), ["a"]);
+  assert.deepEqual(jobs.get(paused.handle)!.execution!.pausedExecutionIds, [paused.executionId]);
   await assert.rejects(tools.updateTool.execute("stale", { jobId: paused.handle, expectedRevision: 1, removeNodeIds: ["a"] }, undefined, undefined, ctx), /Revision conflict/);
   const updated = await tools.updateTool.execute("edit", {
     jobId: submitted.details!.handle, expectedRevision: 0,
@@ -25,6 +36,9 @@ test("Pi atomically updates a paused job, resumes, and retrieves immutable execu
     addEdges: [{ from: "a", executionId: paused.executionId, to: "b" }], resume: [paused.executionId],
   }, undefined, undefined, ctx);
   assert.equal(updated.details.execution!.revision, 1);
+  const updateReceipt = JSON.parse((updated.content[0] as { text: string }).text);
+  assert.deepEqual(updateReceipt.graph.nodes, [{ type: "execute", id: "a" }, { type: "execute", id: "b" }]);
+  assert.deepEqual(updateReceipt.graph.edges, [{ from: "a", executionId: paused.executionId, to: "b" }]);
   await jobs.wait(paused.handle);
   const exact = jobs.getNode(paused.handle, undefined, paused.executionId);
   assert.equal(exact.output, "old result");
@@ -62,6 +76,13 @@ test("Pi loop reminders and status use a distinct execution ID for each iteratio
   const first = await statusTool.execute("first", { jobId: job.details!.handle, executionId: notifications[0]!.executionId }, undefined, undefined, ctx);
   assert.match(JSON.stringify(first.content), /iteration 1/);
   assert.equal(jobs.getNode(job.details!.handle, "work").output, "iteration 2");
+  const { selectedNode: _selected, ...legacyDetails } = first.details!;
+  const theme = { fg: (_color: string, value: string) => value } as never;
+  const legacyRender = statusTool.renderResult!({ ...first, details: legacyDetails }, { expanded: true, isPartial: false }, theme, {
+    isError: false, args: { jobId: job.details!.handle, executionId: notifications[0]!.executionId },
+  } as never).render(200).join("\n");
+  assert.match(legacyRender, /iteration 1/);
+  assert.doesNotMatch(legacyRender, /iteration 2/);
   assert.equal(jobs.claimUsage(job.details!.handle)!.input, 6);
 });
 

@@ -3,10 +3,16 @@ import test from "node:test";
 import {
   renderGraphCall,
   renderGraphResult,
+  applyEvent,
+  createLiveState,
   type BraidToolDetails,
 } from "../display.js";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { validateToolArguments } from "@earendil-works/pi-ai";
+import { createBraidTools } from "../index.js";
+import { BraidJobs, type JobSnapshot } from "../jobs.js";
+import { context, input, response } from "./helpers.js";
 
 function renderResult(
   result: { content: unknown[]; details: BraidToolDetails },
@@ -309,4 +315,117 @@ test("flowchart fallback message is truncated to terminal width", () => {
       `rendered line exceeds ${width} columns: ${line}`,
     );
   }
+});
+
+test("registered submission renderer shows graph validation errors with Pi's empty details", async (t) => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const { braidTool } = createBraidTools(jobs);
+  let calls = 0;
+  const ctx = context(async () => { calls++; return response(); });
+  let failure = "";
+  await assert.rejects(braidTool.execute("invalid", {
+    ...input, nodes: [...input.nodes, ...input.nodes],
+  }, undefined, undefined, ctx), error => {
+    assert.ok(error instanceof Error);
+    failure = error.message;
+    return true;
+  });
+  const rendered = lines(braidTool.renderResult!(
+    { content: [{ type: "text", text: failure }], details: {} as JobSnapshot },
+    { expanded: false, isPartial: false }, theme, { isError: true } as never,
+  ));
+  assert.match(rendered, /<error>✗ Braid submission failed: Duplicate node id 'a'/);
+  assert.doesNotMatch(rendered, /background job|undefined|\/braid to view/);
+  assert.deepEqual(jobs.list(), []);
+  assert.equal(calls, 0);
+});
+
+test("registered renderers preserve host errors, including schema failures before execute", () => {
+  const { braidTool, statusTool } = createBraidTools(new BraidJobs());
+  let failure = "";
+  assert.throws(() => validateToolArguments(braidTool, {
+    type: "toolCall", id: "invalid", name: "braid", arguments: { ...input, nodes: [{ type: "unknown", id: "a" }] },
+  }), error => {
+    assert.ok(error instanceof Error);
+    failure = error.message;
+    return true;
+  });
+  for (const tool of [braidTool, statusTool]) {
+    for (const details of [undefined, {}, { jobId: "incomplete" }]) {
+      for (const expanded of [false, true]) {
+        const rendered = lines(tool.renderResult!(
+          { content: [{ type: "text", text: failure }], details: details as JobSnapshot | undefined },
+          { expanded, isPartial: false }, theme, { isError: true } as never,
+        ), 10_000);
+        for (const line of failure.split("\n")) assert.ok(rendered.includes(line), `Missing error line: ${line}`);
+        assert.match(rendered, /<error>✗ Validation failed for tool "braid"/);
+        assert.doesNotMatch(rendered, /background job|undefined|\/braid to view/);
+      }
+    }
+  }
+});
+
+test("registered renderers guard empty details even without the host error flag", () => {
+  const { braidTool, statusTool } = createBraidTools(new BraidJobs());
+  for (const tool of [braidTool, statusTool]) {
+    const rendered = lines(tool.renderResult!(
+      { content: [{ type: "text", text: "Unknown Braid job: job-99" }], details: {} as JobSnapshot },
+      { expanded: false, isPartial: false }, theme, { isError: false } as never,
+    ));
+    assert.match(rendered, /Unknown Braid job: job-99/);
+    assert.doesNotMatch(rendered, /background job|undefined/);
+  }
+});
+
+test("registered submission renderer distinguishes pending, started, and startup failure", async t => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const { braidTool, statusTool } = createBraidTools(jobs);
+  const pending = lines(braidTool.renderResult!(
+    { content: [], details: undefined }, { expanded: false, isPartial: true }, theme, { isError: false } as never,
+  ));
+  assert.match(pending, /Braid submission pending/);
+  assert.doesNotMatch(pending, /failed|undefined/);
+  const submitted = await braidTool.execute("ok", input, undefined, undefined, context(async () => response()));
+  const rendered = lines(braidTool.renderResult!(
+    submitted, { expanded: false, isPartial: false }, theme, { isError: false } as never,
+  ));
+  assert.match(rendered, /Braid background job job-1 · running · \/braid to view/);
+
+  for (const tool of [braidTool, statusTool]) {
+    const failed = lines(tool.renderResult!({
+      content: [], details: { ...submitted.details!, status: "failed", error: "Invalid maxConcurrency" },
+    }, { expanded: false, isPartial: false }, theme, { isError: false } as never));
+    assert.match(failed, /<error>.*failed/);
+    assert.match(failed, /Invalid maxConcurrency/);
+
+    // A host/extension error flag takes precedence over even valid job details.
+    const overridden = lines(tool.renderResult!({
+      ...submitted, content: [{ type: "text", text: "Host rejected the result" }],
+    }, { expanded: false, isPartial: false }, theme, { isError: true } as never));
+    assert.match(overridden, /<error>✗ Host rejected the result/);
+    assert.doesNotMatch(overridden, /background job|undefined/);
+  }
+  await jobs.wait(submitted.details!.jobId);
+});
+
+test("terminal graph events update live state and clear pause indicators", () => {
+  const completed = createLiveState();
+  completed.pausedExecutionIds = ["held"];
+  applyEvent(completed, { type: "graph_completed", terminalNodeIds: [], sequence: 1, timestamp: 1 });
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(completed.pausedExecutionIds, []);
+  assert.match(lines(renderGraphResult(completed, false, false, theme)), /✓ Braid completed/);
+
+  const cancelled = createLiveState();
+  cancelled.pausedExecutionIds = ["held"];
+  applyEvent(cancelled, { type: "graph_failed", terminalNodeIds: [], sequence: 1, timestamp: 1,
+    error: { code: "CANCELLED", message: "Graph cancelled by caller" } });
+  assert.equal(cancelled.status, "failed");
+  assert.deepEqual(cancelled.pausedExecutionIds, []);
+  const rendered = lines(renderGraphResult(cancelled, false, false, theme));
+  assert.match(rendered, /Braid cancelled/);
+  assert.match(rendered, /Graph cancelled by caller/);
+  assert.doesNotMatch(rendered, /Braid executing|paused executions/);
 });

@@ -503,7 +503,7 @@ export class GitWorkspaces {
         const stat = await gitPreview(source.sourceRoot!, [...diffArgs.slice(0, -1), "--stat", "--"], Math.floor(4_000 / count));
         const diff = await gitPreview(source.sourceRoot!, diffArgs, Math.min(6_000, Math.floor(24_000 / count)));
         const names = files.text.slice(0, files.text.lastIndexOf("\0") + 1).split("\0").filter(Boolean);
-        sources.push({ ...source, changes: { files: names, filesTruncated: files.truncated, stat, diff } });
+        sources.push({ ...source, changes: { baseCommit: baseline!.snapshotCommit, files: names, filesTruncated: files.truncated, stat, diff } });
       }
       const sourceStatus = integrating && target ? await gitPreview(target, ["status", "--porcelain=v1", "--untracked-files=all"], 4_000) : undefined;
       return {

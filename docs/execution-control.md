@@ -135,6 +135,17 @@ workspace; source worktrees remain available until job cleanup. Integration
 captures a `backupRef` first and serializes source-checkout access within the
 process. It must preserve unrelated staged, unstaged, and untracked caller edits.
 
+Each merge source's `changes.baseCommit` identifies the frozen job snapshot used
+for its cumulative diff preview, including the caller's initial uncommitted
+edits. Retrieve the full patch with
+`git diff --binary <changes.baseCommit> <checkpointRef> --` when choosing patch
+integration. `source.snapshotCommit` is that invocation's input: after a read-only
+review it may equal the checkpoint, yielding an empty diff despite earlier
+changes. `source.baseCommit` is the original HEAD and excludes uncommitted edits.
+Checkpoints can have multiple parents recording merged sources. A bare
+`cherry-pick` then fails; inspect the parents before choosing a mainline, or use
+the cumulative diff. The runtime does not choose or apply a merge strategy.
+
 There is no implicit final integration. Each instance is checkpointed before
 successors are released, including partial work on optional failure. Finalization
 archives/removes owned worktrees while retaining checkpoint refs. Cancelled or

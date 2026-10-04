@@ -30,7 +30,7 @@ async function applySources(request: ModelRequest, disposition: "integrated" | "
   const decisions: MergeDisposition[] = [];
   for (const source of request.merge!.sources) {
     if (disposition === "integrated") {
-      const patch = await request.git!(["diff", "--binary", source.snapshotCommit!, source.checkpointRef!]);
+      const patch = await request.git!(["diff", "--binary", source.changes!.baseCommit!, source.checkpointRef!]);
       assert.equal(patch.exitCode, 0);
       if (patch.stdout) {
         const applied = await request.git!(["apply", "--binary", "-"], patch.stdout);
@@ -346,6 +346,60 @@ test("isolated merge feeds a fresh descendant worktree before explicit integrati
   assert.equal(result.nodes.integrate!.status, "completed", JSON.stringify(result.nodes));
   assert.equal(new Set(seen.values()).size, 4);
   for (const id of ["a", "b", "c"]) assert.equal(await readFile(join(cwd, `${id}.txt`), "utf8"), id);
+  await noWorktrees(cwd, result);
+});
+
+test("integration after a read-only review exposes the cumulative diff base and preserves caller edits", async t => {
+  const cwd = await repository(t);
+  await writeFile(join(cwd, "file.txt"), "user staged\n");
+  await git(cwd, "add", "file.txt");
+  await writeFile(join(cwd, "file.txt"), "user unstaged\n");
+  await writeFile(join(cwd, "user-untracked.txt"), "user untracked\n");
+  const index = await readFile(join(cwd, ".git/index"));
+  let integrated = false;
+  const result = await braid(graph([
+    execute("left"), execute("right"), { type: "merge", id: "combined" },
+    { ...decision("review", ["pass"]), workspace: "read-only" },
+    { type: "integrate", id: "integrate" },
+  ], [
+    { from: "left", to: "combined" }, { from: "right", to: "combined" },
+    { from: "combined", to: "review" }, { from: "review", to: "integrate", choice: "pass" },
+  ]), { cwd, runner: async request => {
+    if (request.node.id === "left" || request.node.id === "right") {
+      await request.withWorkspaceWrite!(() => writeFile(join(request.workspace!.workingDirectory, `${request.node.id}.txt`), request.node.id));
+    } else if (request.node.id === "review") {
+      for (const name of ["left", "right"]) {
+        assert.equal(await readFile(join(request.workspace!.workingDirectory, `${name}.txt`), "utf8"), name);
+      }
+      request.decide!("pass");
+    } else {
+      if (request.node.type === "integrate") {
+        const source = request.merge!.sources[0]!;
+        assert.equal(source.nodeId, "review");
+        // A no-change review reuses its input checkpoint. Diffing against it
+        // would silently lose the work inherited from both parallel branches.
+        assert.equal(source.snapshotCommit, source.checkpointCommit);
+        assert.ok(source.changes!.baseCommit);
+        assert.notEqual(source.changes!.baseCommit, source.snapshotCommit);
+        assert.notEqual(source.changes!.baseCommit, source.baseCommit);
+        assert.deepEqual(source.changes!.files, ["left.txt", "right.txt"]);
+        assert.doesNotMatch(source.changes!.diff.text, /user staged|user unstaged|user untracked/);
+        const parents = await request.git!(["show", "--no-patch", "--format=%P", source.checkpointRef!]);
+        assert.equal(parents.stdout.trim().split(" ").length, 3);
+        assert.equal(request.merge!.sourceStatus!.dirty, true);
+        integrated = true;
+      }
+      await applySources(request);
+    }
+    return { output: "done" };
+  } });
+  assert.equal(result.status, "completed", JSON.stringify(result.nodes));
+  assert.equal(integrated, true);
+  assert.equal(result.nodes.integrate!.status, "completed", JSON.stringify(result.nodes.integrate));
+  for (const name of ["left", "right"]) assert.equal(await readFile(join(cwd, `${name}.txt`), "utf8"), name);
+  assert.equal(await readFile(join(cwd, "file.txt"), "utf8"), "user unstaged\n");
+  assert.equal(await readFile(join(cwd, "user-untracked.txt"), "utf8"), "user untracked\n");
+  assert.deepEqual(await readFile(join(cwd, ".git/index")), index);
   await noWorktrees(cwd, result);
 });
 

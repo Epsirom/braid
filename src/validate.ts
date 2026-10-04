@@ -129,9 +129,10 @@ export function compileGraph(input: BraidInput): Graph {
   const byId = new Map<string, BraidNode>();
   for (const node of input.nodes) {
     requireValid(isRecord(node), "Node must be an object");
+    requireValid(text(node.id), "Node id must be a non-empty string");
     requireValid(
       node.type === "execute" || node.type === "decision" || (node.type === "merge" || node.type === "integrate"),
-      "Unknown node type",
+      `Node '${node.id}': unknown node type; expected execute, decision, merge, or integrate`,
     );
     fields(
       node,
@@ -140,9 +141,8 @@ export function compileGraph(input: BraidInput): Graph {
         : node.type === "execute"
           ? ["type", "id", "prompt", "model", "workspace", "notifyOnCompletion", "requireSuccess", "pauseAfter"]
           : ["type", "id", "prompt", "model", "notifyOnCompletion", "requireSuccess", "pauseAfter"],
-      "Node",
+      `Node '${node.id}' (${node.type})`,
     );
-    requireValid(text(node.id), "Node id must be a non-empty string");
     requireValid(!byId.has(node.id), `Duplicate node id '${node.id}'`);
     const prompt = (node.type === "merge" || node.type === "integrate") && node.prompt === undefined
       ? (node.type === "merge" ? "Merge selected predecessor results into this new isolated worktree. Resolve conflicts and account for every source with finish_merge." : "Integrate selected predecessor results into the invoking checkout. Preserve user changes and account for every source with finish_merge.")
@@ -199,7 +199,7 @@ export function compileGraph(input: BraidInput): Graph {
   }
   for (const edge of input.edges) {
     requireValid(isRecord(edge), "Edge must be an object");
-    fields(edge, ["from", "to", "choice", "feedback", "executionId"], "Edge");
+    fields(edge, ["from", "to", "choice", "feedback", "executionId"], `Edge '${edge.from}' -> '${edge.to}'`);
     requireValid(edge.executionId === undefined || text(edge.executionId), "Invalid edge executionId");
     requireValid(edge.feedback === undefined || text(edge.feedback), "Invalid edge feedback");
     requireValid(!edge.feedback || !edge.executionId, "Feedback cannot pin an execution");
@@ -257,7 +257,7 @@ export function compileGraph(input: BraidInput): Graph {
   }
   requireValid(
     topologicalOrder.length === nodes.length,
-    "Graph contains a cycle without a declared feedback edge",
+    "Graph contains a cycle without a declared feedback edge. Declare a bounded loop in loops and label its decision-to-entry edge with choice and feedback=loopId",
   );
   const loops = new Map<string, CompiledLoop>();
   const membership = new Map<string, string>();
@@ -286,7 +286,7 @@ export function compileGraph(input: BraidInput): Graph {
     const back = feedback[0]!;
     const decision = byId.get(back.from)!;
     requireValid(back.to === loop.entry && decision.type === "decision" && back.choice !== undefined,
-      `Loop '${loop.id}' feedback must route a decision choice to its entry`);
+      `Loop '${loop.id}' feedback edge '${back.from}' -> '${back.to}' must route a decision choice to its entry '${loop.entry}'. Set feedback on the decision-to-entry edge and include choice`);
     requireValid(decision.choices.some(choice => choice !== back.choice), `Loop '${loop.id}' needs an exit choice`);
     const ancestors = reachable(back.from, true);
     const members = new Set([...reachable(loop.entry)].filter(id => ancestors.has(id)));
@@ -297,8 +297,10 @@ export function compileGraph(input: BraidInput): Graph {
     }
     for (const edge of edges) {
       if (edge.feedback || edge.executionId) continue;
-      requireValid(!(!members.has(edge.from) && members.has(edge.to) && edge.to !== loop.entry), `Loop '${loop.id}' has multiple entries`);
-      requireValid(!(members.has(edge.from) && !members.has(edge.to) && edge.from !== back.from), `Loop '${loop.id}' must exit through its feedback decision`);
+      requireValid(!(!members.has(edge.from) && members.has(edge.to) && edge.to !== loop.entry),
+        `Loop '${loop.id}' has multiple entries: edge '${edge.from}' -> '${edge.to}' bypasses entry '${loop.entry}'. Route external dependencies to '${loop.entry}'`);
+      requireValid(!(members.has(edge.from) && !members.has(edge.to) && edge.from !== back.from),
+        `Loop '${loop.id}' must exit through its feedback decision '${back.from}': edge '${edge.from}' -> '${edge.to}' leaves from another node`);
     }
     loops.set(loop.id, { id: loop.id, entry: loop.entry, maxIterations: loop.maxIterations, feedback: back, members });
   }

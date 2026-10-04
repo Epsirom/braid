@@ -428,7 +428,7 @@ test("Pi merge agent inspects, applies, and finishes through core tools before a
       assert.deepEqual(finishSchema.properties.dispositions.items.properties.executionId.enum, [source.executionId]);
       assert.equal(finishSchema.properties.dispositions.maxItems, 1);
       await assert.rejects(readFile(join(fixture.root, "chosen.txt")), { code: "ENOENT" });
-      return toolResponse({ type: "toolCall", id: "inspect", name: "git", arguments: { command: "diff", args: ["--binary", source.snapshotCommit!, source.checkpointRef!] } });
+      return toolResponse({ type: "toolCall", id: "inspect", name: "git", arguments: { command: "diff", args: ["--binary", source.changes!.baseCommit!, source.checkpointRef!] } });
     }
     const toolResult = worker.messages.at(-1)!;
     assert.equal(toolResult.role, "toolResult");
