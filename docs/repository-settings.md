@@ -121,3 +121,10 @@ standalone package/declaration checks; the current migration is tracked in the
 are ignored until their compatibility policy changes. Minor/patch updates,
 vulnerability alerts, and security-update configuration remain enabled. Review
 any security fix that requires crossing an ignored major version manually.
+
+Keep `react`, `react-dom`, and their `@types` packages on 18.x while the DSH
+validation target is 0.2.0-rc.2. The Web panel shares the host's React instance;
+its development runtime and declarations must match the host's React 18 baseline.
+Dependabot ignores major updates for all four packages until a coordinated host
+migration is validated. Minor/patch updates and vulnerability alerts remain enabled;
+review any security fix requiring a new React major manually.
