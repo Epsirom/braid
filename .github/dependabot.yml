@@ -14,6 +14,15 @@ updates:
       # Migrate both packages together; see ROADMAP.md.
       - dependency-name: typescript
         update-types: ['version-update:semver-major']
+      # DSH 0.2.0-rc.2 shares React 18 with plugins; migrate with the host.
+      - dependency-name: react
+        update-types: ['version-update:semver-major']
+      - dependency-name: react-dom
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@types/react'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@types/react-dom'
+        update-types: ['version-update:semver-major']
     groups:
       # Pi 0.x minor releases can break host APIs; review them separately.
       pi:
