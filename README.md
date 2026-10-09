@@ -90,6 +90,8 @@ pi install npm:@chrok/pi-braid
 
 Run `/reload` and ask Pi to analyze a task with Braid. Background progress appears
 automatically above the input editor; open `/braid` for the full live panel.
+Use `/braid:review [target or focus]` for a bounded parallel review/fix loop
+(at most three review rounds).
 npm installs the exact matching core dependency; no checkout is needed
 for published versions. To try the current source checkout, follow the
 [local Pi installation guide](integrations/pi/README.md#install-this-local-checkout-in-pi).
