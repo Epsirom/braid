@@ -25,6 +25,7 @@ It registers:
 - `braid_update` / `braid_resume` — edit live definitions or release paused executions.
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
+- `/braid:review [target or focus]` — run a bounded parallel review/fix loop.
 
 Submission and completion reminders use short session handles such as `job-1`.
 Status, cancellation and the panel accept either that exact handle or the original
@@ -49,6 +50,44 @@ Jobs live in memory for the current Pi session. Quitting, reloading extensions,
 or switching/forking sessions aborts outstanding work and suppresses its
 reminders. Job IDs cannot be retrieved after that lifecycle ends. They are not
 persistent processes outside Pi.
+
+## Review command
+
+Run `/braid:review` to review current uncommitted changes (including staged, unstaged,
+and non-ignored new files). With no uncommitted changes, it reviews the latest
+commit. Supply a file, commit range, or focus with `/braid:review src/runtime.ts` or
+`/braid:review main..HEAD, focus on cancellation`. Workers inspect the supplied target
+with local tools; they report unavailable remote targets instead of inventing
+their contents. Use `/braid:review review-only, src/runtime.ts` to request findings
+without fixes.
+
+Each round assigns three independent, read-only reviewers distinct angles based
+on the change. Findings need concrete evidence and file/line references, with
+P0/P1/P2 priority and a merge verdict. One writer synthesizes the feedback and
+fixes only evidenced, in-scope P0/P1 problems in an isolated worktree, then runs
+focused validation. Optional P2 polish is reported. A product, scope, or
+architecture decision stops the loop for user input.
+
+The graph enforces a fixed maximum of **three review rounds**, including the
+first, and **two fix passes**. The final round reports remaining issues without
+making further edits; reaching the cap does not mean the review is clean.
+Only fixes that passed re-review and validation are integrated into the invoking
+checkout, preserving existing user changes. Conflicting concurrent edits or
+failed validation leave the fix checkpoint archived for recovery. Outside Git,
+workers can only inspect files and report findings.
+
+The command returns immediately with a job handle. Use `/braid [jobId]` to see
+progress, `braid_status` for results, and `braid_cancel` to stop. The existing
+completion reminder resumes the parent to report rounds, applied fixes,
+validation, remaining findings, and the stop reason. Session shutdown cancels
+the job. Cancellation or failure during integration can leave partial checkout
+changes; Braid retains backup and checkpoint refs for recovery.
+
+The review policy is adapted from pi-subagents'
+[review-loop](https://github.com/nicobailon/pi-subagents/blob/main/prompts/review-loop.md)
+and [parallel-review](https://github.com/nicobailon/pi-subagents/blob/main/prompts/parallel-review.md)
+prompts. Invoking `/braid:review` authorizes the narrow fix passes described above;
+an explicit review-only request disables them.
 
 ## Graph definitions
 

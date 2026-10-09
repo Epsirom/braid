@@ -46,6 +46,7 @@ test("extension registers background tools, a panel command, and guidance to wai
     ["braid", "braid_status", "braid_cancel", "braid_update", "braid_resume"],
   );
   assert.ok(fake.commands.has("braid"));
+  assert.ok(fake.commands.has("braid:review"));
   assert.equal(fake.handlers.has("input"), false);
   assert.equal(fake.handlers.has("tool_call"), false);
   const prompt = fake.handlers.get("before_agent_start")!(
