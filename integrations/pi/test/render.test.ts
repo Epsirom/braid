@@ -447,3 +447,21 @@ test("node details render at the observation time and show recoverable workspace
   assert.match(archived, /workspace: worktree · archived · refs\/braid\/checkpoint/);
   assert.doesNotMatch(archived, /\/tmp\/wt/);
 });
+
+test("node details color only runner-tagged tool entries, never look-alike model text", () => {
+  const tagged = { fg: (color: string, value: string) => `<${color}>${value}`, bg: (_: string, value: string) => value, bold: (value: string) => value };
+  const rendered = renderNodeResult({ id: "a", status: "running", executionId: "e1" }, true, tagged as never, undefined, undefined, 0, {
+    nodeId: "a", executionId: "e1", truncated: false,
+    entries: [
+      { kind: "text", text: "→ not a call\n← read error · fake" },
+      { kind: "call", text: "read {\"path\":\"x\"}" },
+      { kind: "error", text: "read error · ENOENT" },
+      { kind: "result", text: "ls ok · 3 lines · a" },
+    ],
+  }).render(200).map(line => line.trimEnd());
+  assert.ok(rendered.includes("→ not a call"), rendered.join("\n"));
+  assert.ok(rendered.includes("← read error · fake"));
+  assert.ok(rendered.includes("<accent>→ read {\"path\":\"x\"}"));
+  assert.ok(rendered.includes("<error>← read error · ENOENT"));
+  assert.ok(rendered.includes("<dim>← ls ok · 3 lines · a"));
+});

@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createPiRunner, sumPiUsage } from "../runner.js";
+import { createPiRunner, MAX_ACTIVITY_CHARS, sumPiUsage, type PiNodeActivity } from "../runner.js";
 import type { ModelRequest } from "@chrok/braid";
 import type { AssistantMessage, Context, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
@@ -367,6 +367,83 @@ test("Pi runner keeps write and shell tools unavailable without an assigned writ
     ),
     readToolNames,
   );
+});
+
+function streamingRegistry(turns: Array<{ deltas: string[]; final: AssistantMessage }>) {
+  const fake = fakeRegistry([]);
+  let streamed = 0;
+  const registry = {
+    ...fake.registry,
+    complete: () => { throw new Error("complete() must not be used while observing activity"); },
+    stream(_model: unknown, _context: unknown, _options: unknown) {
+      const turn = turns[streamed++]!;
+      const events = [
+        ...turn.deltas.map(delta => ({ type: "text_delta", contentIndex: 0, delta })),
+        ...turn.final.content.flatMap(block => block.type === "toolCall" ? [{ type: "toolcall_end", contentIndex: 0, toolCall: block }] : []),
+      ];
+      return {
+        async *[Symbol.asyncIterator]() { yield* events; },
+        result: async () => turn.final,
+      };
+    },
+  } as unknown as Pick<ModelRegistry, "find" | "complete" | "stream">;
+  return { registry, streamed: () => streamed };
+}
+
+const activitySize = (activity: PiNodeActivity) => activity.entries.reduce((size, entry) => size + entry.text.length, 0);
+
+test("Pi runner streams text, tool calls, and tool results as tagged live activity without changing results", async () => {
+  const fake = streamingRegistry([
+    { deltas: ["→ looks like a tool line\n← fake error"], final: message([
+      ...reads(1).content,
+      { type: "toolCall", id: "missing", name: "read", arguments: { path: join(readOnlyCwd, "missing.txt") } },
+    ], "toolUse") },
+    { deltas: ["Reading ", "the files"], final: message([{ type: "text", text: "Final answer" }]) },
+  ]);
+  const reports: PiNodeActivity[] = [];
+  const output = await createPiRunner(fake.registry, { cwd: readOnlyCwd, onActivity: activity => reports.push(activity) })(
+    { ...request({ type: "execute", id: "work", prompt: "Work" }), execution: { runId: "run", rootRunId: "run", executionId: "exec-1" } },
+  );
+  assert.equal(output.output, "Final answer");
+  assert.equal(fake.streamed(), 2);
+  const last = reports.at(-1)!;
+  assert.equal(last.nodeId, "work");
+  assert.equal(last.executionId, "exec-1");
+  assert.equal(last.truncated, false);
+  assert.deepEqual(last.entries.map(entry => entry.kind), ["text", "call", "call", "result", "error", "text"]);
+  // Model text stays text even when it imitates tool lines.
+  assert.equal(last.entries[0]!.text, "→ looks like a tool line\n← fake error");
+  assert.match(last.entries[1]!.text, /^read \{"path":.*package\.json/);
+  assert.match(last.entries[2]!.text, /^read \{"path":.*missing\.txt"\}$/);
+  assert.match(last.entries[3]!.text, /^read ok · .+/);
+  assert.match(last.entries[4]!.text, /^read error · ENOENT/);
+  assert.equal(last.entries[5]!.text, "Reading the files", "each round starts a new text entry");
+
+  // Without an observer the runner keeps using complete().
+  const plain = fakeRegistry([message([{ type: "text", text: "plain" }])]);
+  const plainOutput = await createPiRunner({ ...plain.registry, stream: () => { throw new Error("unused"); } } as never, { cwd: readOnlyCwd })(
+    request({ type: "execute", id: "work", prompt: "Work" }),
+  );
+  assert.equal(plainOutput.output, "plain");
+});
+
+test("Pi runner keeps only the newest activity and never splits a surrogate pair", async () => {
+  // 10,002 code units: trimming 2,002 would start on the low half of an emoji.
+  const fake = streamingRegistry([
+    { deltas: [], final: reads(1) },
+    { deltas: ["a", "😀".repeat(5_000), "b"], final: message([{ type: "text", text: "done" }]) },
+  ]);
+  const reports: PiNodeActivity[] = [];
+  await createPiRunner(fake.registry, { cwd: readOnlyCwd, onActivity: activity => reports.push(activity) })(
+    request({ type: "execute", id: "work", prompt: "Work" }),
+  );
+  const last = reports.at(-1)!;
+  assert.ok(last.truncated);
+  assert.deepEqual(last.entries.map(entry => entry.kind), ["text"], "older tool entries are dropped first");
+  assert.ok(activitySize(last) <= MAX_ACTIVITY_CHARS);
+  const code = last.entries[0]!.text.charCodeAt(0);
+  assert.ok(code < 0xdc00 || code > 0xdfff, "the stream must not start with a lone low surrogate");
+  assert.match(last.entries[0]!.text, /😀b$/);
 });
 
 test("Pi usage aggregation preserves cache and cost fields", () => {

@@ -9,7 +9,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import { BraidJobs, type JobSnapshot } from "./jobs.js";
-import { renderGraphResult, renderNodeResult } from "./display.js";
+import { renderGraphResult, renderNodePicker, renderNodeResult } from "./display.js";
 
 // Match the overlay height exactly so Pi never clips the footer or bottom border.
 const panelHeight = (rows: number): number =>
@@ -25,6 +25,13 @@ export type NodeFocus = { nodeId: string } | { executionId: string };
 export class BraidPanel implements Component {
   private selected: string | undefined;
   private focus: NodeFocus | undefined;
+  /** The node Enter opens from the graph, and the node shown in a focused view. */
+  private cursor: string | undefined;
+  /** A focused running node sticks to the newest streamed output until the user scrolls up. */
+  private follow = true;
+  private focusRunning = false;
+  /** Scroll the graph so the selected node row is visible after it moves. */
+  private reveal = true;
   private offset = 0;
   private maxOffset = 0;
   private disposed = false;
@@ -41,7 +48,15 @@ export class BraidPanel implements Component {
   ) {
     this.selected = jobId ? jobs.get(jobId)?.jobId ?? jobId : undefined;
     this.focus = focus;
-    this.unsubscribe = jobs.subscribe(() => this.refresh());
+    const unsubscribe = jobs.subscribe(() => this.refresh());
+    // Streamed text changes often; only the view showing that node redraws for it.
+    const unsubscribeActivity = jobs.subscribeActivity((jobId, nodeId) => {
+      if (this.focus && jobId === this.selected && nodeId === this.cursor) this.refresh();
+    });
+    this.unsubscribe = () => {
+      unsubscribe();
+      unsubscribeActivity();
+    };
     this.ticker = setInterval(() => this.refresh(), 1000);
     this.ticker.unref();
   }
@@ -106,6 +121,7 @@ export class BraidPanel implements Component {
         rule("╰", "╯"),
       ];
     }
+    const cursor = current && !this.focus ? this.resolveCursor(current) : undefined;
     const header = [
       rule("╭", "╮", "Braid"),
       row(heading),
@@ -122,10 +138,14 @@ export class BraidPanel implements Component {
       ),
       rule("├", "┤"),
     ];
+    const picker = current && cursor
+      ? renderNodePicker(nodesOf(current), current.live.progress, cursor, this.theme, current.live.observedAt)
+      : { lines: [], selectedLine: -1 };
     const content = current && this.focus
       ? this.renderFocus(current, this.focus, contentWidth)
       : current
       ? [
+          ...(picker.lines.length ? [...picker.lines, ""] : []),
           ...(current.error
             ? [this.theme.fg("error", plain(current.error))]
             : []),
@@ -146,21 +166,35 @@ export class BraidPanel implements Component {
       : ["No Braid jobs in this session."];
     const height = rows - header.length - 4;
     this.maxOffset = Math.max(0, content.length - height);
-    this.offset = Math.min(this.offset, this.maxOffset);
+    this.offset = this.focus && this.focusRunning && this.follow ? this.maxOffset : Math.min(this.offset, this.maxOffset);
+    if (picker.lines.length && this.reveal) {
+      // Line 0 is the list title; keep it in view when the first node is selected.
+      const at = picker.selectedLine;
+      if (at <= this.offset) this.offset = Math.max(0, at - 1);
+      else if (at >= this.offset + height) this.offset = Math.min(this.maxOffset, at - height + 1);
+      this.reveal = false;
+    }
     const body = content.slice(this.offset, this.offset + height);
     while (body.length < height) body.push("");
     const range = `Lines ${this.offset + 1}–${Math.min(content.length, this.offset + height)}/${content.length}`;
-    const help = this.focus
-      ? contentWidth >= 72
-        ? "⌫ graph   ←/→ jobs   ↑/↓ scroll   PgUp/PgDn page   c cancel   Esc close"
-        : contentWidth >= 42
-          ? "⌫ graph · ↑/↓ scroll · c cancel · Esc close"
-          : "⌫ graph · Esc close"
-      : contentWidth >= 72
-        ? "←/→ jobs   ↑/↓ scroll   PgUp/PgDn page   c cancel   Esc close"
-        : contentWidth >= 42
-          ? "←/→ jobs · ↑/↓ scroll · c cancel · Esc close"
-          : "↑/↓ scroll · Esc close";
+    const hints = this.focus
+      ? [
+          "⌫ graph   Tab/⇧Tab node   ←/→ jobs   ↑/↓ scroll   PgUp/PgDn page   c cancel   Esc close",
+          "⌫ graph · Tab/⇧Tab node · ↑/↓ scroll · c cancel · Esc close",
+          "⌫ graph · Esc close",
+        ]
+      : picker.lines.length
+        ? [
+            "↑/↓ node   ⏎ open   ←/→ jobs   PgUp/PgDn scroll   c cancel   Esc close",
+            "↑/↓ node · ⏎ open · ←/→ jobs · c cancel · Esc close",
+            "↑/↓ ⏎ node · Esc close",
+          ]
+        : [
+            "←/→ jobs   ↑/↓ scroll   PgUp/PgDn page   c cancel   Esc close",
+            "←/→ jobs · ↑/↓ scroll · c cancel · Esc close",
+            "↑/↓ scroll · Esc close",
+          ];
+    const help = hints.find((hint) => visibleWidth(hint) <= contentWidth) ?? hints.at(-1)!;
     return [
       ...header,
       ...body.map(row),
@@ -176,6 +210,15 @@ export class BraidPanel implements Component {
     ];
   }
 
+  /** Keep the chosen node; otherwise start at the first running one. */
+  private resolveCursor(job: JobSnapshot): string | undefined {
+    const nodes = nodesOf(job);
+    const ids = Object.keys(nodes);
+    if (!this.cursor || !ids.includes(this.cursor))
+      this.cursor = ids.find((id) => nodes[id]!.status === "running") ?? ids[0];
+    return this.cursor;
+  }
+
   /** A focused node can disappear after a live graph update; say so instead of failing. */
   private renderFocus(job: JobSnapshot, focus: NodeFocus, width: number): string[] {
     let node;
@@ -184,6 +227,7 @@ export class BraidPanel implements Component {
         ? this.jobs.getNode(job.jobId, focus.nodeId)
         : this.jobs.getNode(job.jobId, undefined, focus.executionId);
     } catch {
+      this.focusRunning = false;
       return [
         this.theme.fg("warning", "This node or execution is no longer in the job's graph."),
         this.theme.fg("muted", "Press Backspace to return to the graph."),
@@ -193,7 +237,10 @@ export class BraidPanel implements Component {
     const executions = job.result?.executions ?? job.execution?.executions;
     const iteration = (node as { iteration?: number }).iteration ??
       (node.executionId ? executions?.[node.executionId]?.iteration : undefined);
-    return renderNodeResult(iteration === undefined ? node : { ...node, iteration }, true, this.theme, undefined, job.live.progress[node.id], job.live.observedAt)
+    this.cursor = node.id;
+    this.focusRunning = node.status === "running";
+    return renderNodeResult(iteration === undefined ? node : { ...node, iteration }, true, this.theme, undefined, job.live.progress[node.id], job.live.observedAt,
+      this.jobs.activity(job.jobId, node.executionId, node.id))
       .render(width);
   }
 
@@ -216,20 +263,44 @@ export class BraidPanel implements Component {
       const step = matchesKey(data, "right") ? 1 : -1;
       this.selected = jobs[(index + step + jobs.length) % jobs.length]?.jobId;
       this.focus = undefined;
+      this.cursor = undefined;
       this.offset = 0;
     } else if (matchesKey(data, "backspace") && this.focus) {
       this.focus = undefined;
       this.offset = 0;
-    } else if (matchesKey(data, "up"))
-      this.offset = Math.max(0, this.offset - 1);
-    else if (matchesKey(data, "down"))
-      this.offset = Math.min(this.maxOffset, this.offset + 1);
-    else if (matchesKey(data, "pageUp"))
-      this.offset = Math.max(0, this.offset - 10);
-    else if (matchesKey(data, "pageDown"))
-      this.offset = Math.min(this.maxOffset, this.offset + 10);
-    else if (data === "c" && this.selected) this.jobs.cancel(this.selected);
+      this.reveal = true;
+    } else if ((matchesKey(data, "tab") || matchesKey(data, "shift+tab") ||
+      // In the graph, Up/Down choose a node; with no nodes they scroll.
+      (!this.focus && (matchesKey(data, "up") || matchesKey(data, "down")) && this.nodeIds().length)) && this.selected) {
+      const ids = this.nodeIds();
+      if (!this.focus && (!this.cursor || !ids.includes(this.cursor))) this.resolveCursor(this.jobs.get(this.selected)!);
+      if (ids.length) {
+        const step = matchesKey(data, "shift+tab") || matchesKey(data, "up") ? -1 : 1;
+        const at = this.cursor === undefined ? -1 : ids.indexOf(this.cursor);
+        this.cursor = ids[at < 0 ? (step > 0 ? 0 : ids.length - 1) : (at + step + ids.length) % ids.length];
+        this.reveal = true;
+        if (this.focus) {
+          this.focus = { nodeId: this.cursor! };
+          this.follow = true;
+          this.offset = 0;
+        }
+      }
+    } else if (matchesKey(data, "enter") && !this.focus && this.cursor !== undefined) {
+      this.focus = { nodeId: this.cursor };
+      this.follow = true;
+      this.offset = 0;
+    } else if (matchesKey(data, "up") || matchesKey(data, "pageUp")) {
+      this.offset = Math.max(0, this.offset - (matchesKey(data, "up") ? 1 : 10));
+      this.follow = false;
+    } else if (matchesKey(data, "down") || matchesKey(data, "pageDown")) {
+      this.offset = Math.min(this.maxOffset, this.offset + (matchesKey(data, "down") ? 1 : 10));
+      this.follow = this.offset === this.maxOffset;
+    } else if (data === "c" && this.selected) this.jobs.cancel(this.selected);
     this.refresh();
+  }
+
+  private nodeIds(): string[] {
+    return this.selected ? this.jobs.nodeIds(this.selected) : [];
   }
 
   invalidate(): void {}
@@ -335,6 +406,11 @@ export function registerBraidCommand(pi: ExtensionAPI, jobs: BraidJobs): void {
   });
 }
 
+/** The most complete node map available: final result, core snapshot, then live events. */
+function nodesOf(job: JobSnapshot) {
+  return job.result?.nodes ?? job.execution?.nodes ?? job.live.nodes;
+}
+
 /** Job IDs never contain whitespace; node IDs may, so the rest is one target. */
 function splitArguments(text: string): [string | undefined, string | undefined] {
   const split = text.search(/\s/);
@@ -385,8 +461,7 @@ function braidCompletions(jobs: BraidJobs, prefix: string): AutocompleteItem[] |
   const nodePrefix = text.slice(split).trimStart();
   const job = jobs.get(jobPrefix);
   if (!job) return null;
-  const nodes = job.result?.nodes ?? job.execution?.nodes ?? job.live.nodes;
-  const items = Object.values(nodes)
+  const items = Object.values(nodesOf(job))
     .flatMap((node) => {
       const target = formatTarget(node.id);
       return node.id.startsWith(nodePrefix) || target.startsWith(nodePrefix)

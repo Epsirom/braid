@@ -14,7 +14,7 @@ import type {
   NodeResult,
   NodeWorkspace as PiNodeWorkspace,
 } from "@chrok/braid";
-import type { PiNodeProgress } from "./runner.js";
+import type { PiNodeActivity, PiNodeProgress } from "./runner.js";
 
 export const MAX_VISIBLE_EVENTS = 80;
 export const MAX_VISIBLE_NODES = 80;
@@ -527,6 +527,50 @@ export function applyProgress(
   });
 }
 
+/** One row per node for choosing which node to open; the selected row is highlighted. */
+export function renderNodePicker(
+  nodes: Record<string, NodeResult>,
+  progress: Record<string, PiNodeProgress> | undefined,
+  selected: string | undefined,
+  theme: Palette,
+  now = Date.now(),
+): { lines: string[]; selectedLine: number } {
+  const ids = Object.keys(nodes);
+  if (!ids.length) return { lines: [], selectedLine: -1 };
+  // Show a window of rows around the selection so huge graphs stay navigable.
+  const at = Math.max(0, ids.indexOf(selected ?? ""));
+  const start = Math.max(0, Math.min(at - Math.floor(MAX_VISIBLE_NODES / 2), ids.length - MAX_VISIBLE_NODES));
+  const visible = ids.slice(start, start + MAX_VISIBLE_NODES);
+  const width = Math.min(40, Math.max(...visible.map(id => compact(id, 40).length)));
+  const rows = visible.map((id) => {
+    const node = nodes[id]!;
+    const live = node.status === "running" ? progress?.[id] : undefined;
+    const icon = { running: "▶", completed: "✓", failed: "✗", skipped: "·", runnable: "◇", pending: "○" }[node.status];
+    const color = node.status === "completed" ? "success" : node.status === "failed" ? "error"
+      : node.status === "running" ? "warning" : "muted";
+    const details = [
+      node.status,
+      ...(node.startedAt !== undefined || node.latencyMs !== undefined ? [nodeElapsed(node, now)] : []),
+      ...(live ? [`${live.toolCalls} tool calls · ${live.phase}`] : []),
+    ].join(" · ");
+    const text = `${id === selected ? "▸" : " "} ${icon} ${compact(id, 40).padEnd(width)}  ${details}`;
+    return id === selected
+      ? theme.bg("selectedBg", theme.bold(theme.fg("accent", text)))
+      : `${text.slice(0, 2)}${theme.fg(color, icon)}${theme.fg("text", text.slice(3, 4 + width))}${theme.fg("muted", text.slice(4 + width))}`;
+  });
+  const above = start ? [theme.fg("dim", `  … ${start} more above`)] : [];
+  const below = ids.length - start - visible.length;
+  return {
+    lines: [
+      theme.fg("dim", `nodes (${ids.length}) · ↑/↓ choose · Enter for live details`),
+      ...above,
+      ...rows,
+      ...(below ? [theme.fg("dim", `  … ${below} more below`)] : []),
+    ],
+    selectedLine: 1 + above.length + visible.indexOf(ids[at]!),
+  };
+}
+
 /** Focused status reads must show the requested execution, including historical ones. */
 export function renderNodeResult(
   node: NodeResult & { iteration?: number },
@@ -535,6 +579,7 @@ export function renderNodeResult(
   fullOutputPath?: string,
   progress?: PiNodeProgress,
   now = Date.now(),
+  activity?: PiNodeActivity,
 ): Component {
   const failed = node.status === "failed";
   const clean = (value: string) => stripTerminalSequences(value).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, "");
@@ -546,6 +591,9 @@ export function renderNodeResult(
   ];
   // Progress is tracked per node ID; only show it for the execution it describes.
   const live = progress && (!progress.executionId || progress.executionId === node.executionId) ? progress : undefined;
+  // The stream belongs to one execution and is replaced by the final output.
+  const stream = activity?.entries.some(entry => entry.text.trim()) && !node.output && (!activity.executionId || activity.executionId === node.executionId)
+    ? activity : undefined;
   const workspace = node.workspace;
   // Cleaned-up worktrees are gone; their checkpoint ref is what can be recovered.
   const workspaceActive = workspace && ["preparing", "ready", "failed"].includes(workspace.state);
@@ -559,6 +607,16 @@ export function renderNodeResult(
     ...(node.decision ? [theme.fg("accent", `decision: ${compact(node.decision, 80)}`)] : []),
     ...(node.error ? [theme.fg("error", `${node.error.code}: ${clean(node.error.message)}`)] : []),
     ...(node.skipReason ? [theme.fg("muted", `skipped: ${node.skipReason}`)] : []),
+    ...(stream ? [
+      theme.fg("dim", node.status === "running" ? "live output (streaming):" : "streamed output before the node stopped:"),
+      ...(stream.truncated ? [theme.fg("dim", "…")] : []),
+      ...(expanded
+        ? stream.entries.flatMap(entry =>
+          entry.kind === "text" ? (entry.text.trim() ? clean(entry.text.trim()).split("\n") : [])
+          : entry.kind === "call" ? [theme.fg("accent", `→ ${compact(entry.text, 300)}`)]
+          : [theme.fg(entry.kind === "error" ? "error" : "dim", `← ${compact(entry.text, 300)}`)])
+        : [compact(stream.entries.map(entry => entry.text).join(" ").slice(-400), 400)]),
+    ] : []),
     ...(node.output ? [expanded ? clean(node.output) : compact(node.output, 400)] : []),
     ...(!expanded && node.output && (node.output.length > 400 || node.output.includes("\n")) ? [theme.fg("dim", "Expand for full node output")] : []),
     ...(fullOutputPath ? [theme.fg("dim", `full node result: ${compact(fullOutputPath, 240)}`)] : []),

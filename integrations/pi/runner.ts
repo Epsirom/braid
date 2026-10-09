@@ -39,9 +39,45 @@ export interface PiNodeProgress {
   phase: "model" | "tool";
 }
 
+/**
+ * One streamed piece of an invocation. Tool entries are tagged by the runner, so
+ * model text that merely looks like a tool line is never displayed as one.
+ */
+export interface PiActivityEntry {
+  kind: "text" | "call" | "result" | "error";
+  text: string;
+}
+
+/** Streamed text and tool calls of one running invocation, for live display only. */
+export interface PiNodeActivity {
+  nodeId: string;
+  executionId?: string;
+  /** The most recent MAX_ACTIVITY_CHARS characters; earlier entries are dropped. */
+  entries: PiActivityEntry[];
+  truncated: boolean;
+}
+
+export const MAX_ACTIVITY_CHARS = 8_000;
+const ACTIVITY_INTERVAL_MS = 200;
+
+/** Never split a surrogate pair, which would render as a broken glyph. */
+const isLowSurrogate = (text: string, index: number): boolean => {
+  const code = text.charCodeAt(index);
+  return code >= 0xdc00 && code <= 0xdfff;
+};
+const head = (text: string, max: number): string => {
+  if (text.length <= max) return text;
+  const end = isLowSurrogate(text, max - 1) ? max - 1 : max;
+  return `${text.slice(0, end - 1)}…`;
+};
+const tail = (text: string, drop: number): string =>
+  text.slice(isLowSurrogate(text, drop) ? drop + 1 : drop);
+
 export interface PiRunnerOptions {
   onUsage?: (usage: Usage) => void;
   onProgress?: (progress: PiNodeProgress) => void;
+  /** Stream responses and report their text as it arrives. Never part of results. */
+  onActivity?: (activity: PiNodeActivity) => void;
   /** Observe the workspace assigned to this invocation; core events report its full lifecycle. */
   onWorkspace?: (workspace: PiNodeWorkspace) => void;
   cwd?: string;
@@ -53,7 +89,7 @@ export interface PiRunnerOptions {
 
 /** Keep Pi's provider/auth plumbing and filesystem capabilities out of Braid's core. */
 export function createPiRunner(
-  registry: Pick<ModelRegistry, "find" | "complete">,
+  registry: Pick<ModelRegistry, "find" | "complete"> & Partial<Pick<ModelRegistry, "stream">>,
   onUsageOrOptions?: ((usage: Usage) => void) | PiRunnerOptions,
   cwd = process.cwd(),
 ): ModelRunner {
@@ -78,6 +114,7 @@ export function createPiRunner(
       // Display progress must never affect node execution.
     }
   };
+  const onActivity = options.onActivity;
   const estimateContextTokens = (context: Context): number =>
     Math.ceil(
       JSON.stringify({
@@ -211,6 +248,76 @@ export function createPiRunner(
     let decided = false;
     let actualModel = name;
     let reportedContextTokens: number | undefined;
+    const activity: PiActivityEntry[] = [];
+    let activitySize = 0;
+    let activityTruncated = false;
+    // Each model round starts its text in a new entry.
+    let newRound = true;
+    let activityReportedAt = 0;
+    const reportActivity = (force = false): void => {
+      const now = Date.now();
+      if (!force && now - activityReportedAt < ACTIVITY_INTERVAL_MS) return;
+      activityReportedAt = now;
+      try {
+        onActivity?.({
+          nodeId: request.node.id,
+          ...(request.execution.executionId ? { executionId: request.execution.executionId } : {}),
+          entries: activity.map(entry => ({ ...entry })),
+          truncated: activityTruncated,
+        });
+      } catch {
+        // Display activity must never affect node execution.
+      }
+    };
+    const appendActivity = (kind: PiActivityEntry["kind"], text: string): void => {
+      const last = activity.at(-1);
+      if (kind === "text" && last?.kind === "text" && !newRound) last.text += text;
+      else activity.push({ kind, text });
+      newRound = false;
+      activitySize += text.length;
+      while (activitySize > MAX_ACTIVITY_CHARS) {
+        activityTruncated = true;
+        const first = activity[0]!;
+        const excess = activitySize - MAX_ACTIVITY_CHARS;
+        if (first.text.length <= excess || activity.length > 1 && first.kind !== "text") {
+          activity.shift();
+          activitySize -= first.text.length;
+        } else {
+          const trimmed = tail(first.text, excess);
+          activitySize -= first.text.length - trimmed.length;
+          first.text = trimmed;
+        }
+      }
+    };
+    const callSummary = (call: ToolCall): string =>
+      `${call.name} ${head(JSON.stringify(call.arguments ?? {}), 160)}`;
+    const resultSummary = (result: ToolResultMessage): string => {
+      const text = result.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n");
+      const images = result.content.length - result.content.filter(block => block.type === "text").length;
+      const lines = text ? text.split("\n").length : 0;
+      const first = text.split("\n").find(line => line.trim())?.trim() ?? "";
+      const parts = [
+        `${result.toolName} ${result.isError ? "error" : "ok"}`,
+        ...(lines > 1 ? [`${lines} lines`] : []),
+        ...(images ? [`${images} image${images === 1 ? "" : "s"}`] : []),
+        ...(first ? [head(first, 120)] : []),
+      ];
+      return parts.join(" · ");
+    };
+    // Pi's complete() is stream().result(); streaming only adds observation.
+    const requestModel = async (requestOptions: Parameters<typeof registry.complete>[2]): Promise<AssistantMessage> => {
+      if (!onActivity || !registry.stream) return registry.complete(model, context, requestOptions);
+      const events = registry.stream(model, context, requestOptions);
+      newRound = true;
+      for await (const event of events) {
+        if (event.type === "text_delta") appendActivity("text", event.delta);
+        else if (event.type === "toolcall_end") appendActivity("call", callSummary(event.toolCall));
+        else continue;
+        reportActivity();
+      }
+      reportActivity(true);
+      return events.result();
+    };
 
     const complete = async (): Promise<AssistantMessage> => {
       request.signal.throwIfAborted();
@@ -242,7 +349,7 @@ export function createPiRunner(
         phase: "model",
       });
       // Registry.complete resolves stored API keys, OAuth, custom headers and endpoints.
-      const response = await registry.complete(model, context, {
+      const response = await requestModel({
         signal: request.signal,
         sessionId,
         cacheRetention: "none",
@@ -388,11 +495,16 @@ export function createPiRunner(
 
       context.messages.push(response);
       const results: ToolResultMessage[] = [];
+      const pushResult = (result: ToolResultMessage): void => {
+        results.push(result);
+        appendActivity(result.isError ? "error" : "result", resultSummary(result));
+        reportActivity(true);
+      };
       for (const call of calls) {
         request.signal.throwIfAborted();
         if (call.name === "decide") {
           if (request.node.type !== "decision") {
-            results.push(
+            pushResult(
               toolResult(
                 call,
                 "decide is available only on decision nodes",
@@ -415,11 +527,11 @@ export function createPiRunner(
           // No coercion or prose parsing: the core enforces the enum and exactly one call.
           request.decide!(args.choice);
           decided = true;
-          results.push(
+          pushResult(
             toolResult(call, JSON.stringify({ choice: args.choice }), false),
           );
         } else {
-          results.push(await executeFileTool(call));
+          pushResult(await executeFileTool(call));
         }
       }
       context.messages.push(...results);

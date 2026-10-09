@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SelectList, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { BraidPanel, registerBraidCommand } from "../command.js";
+import { renderNodePicker } from "../display.js";
 import { BraidJobs } from "../jobs.js";
 import { context, deferred, input, response } from "./helpers.js";
 
@@ -174,8 +175,9 @@ test("panel scrolls long execution logs within the terminal viewport", async (t)
   const scrolled = panel.render(100);
   assert.match(scrolled.at(-3)!, /Lines 11–/);
   assert.ok(scrolled.length <= 16);
-  panel.handleInput("\x1b[A");
-  assert.match(panel.render(100).at(-3)!, /Lines 10–/);
+  panel.handleInput("\x1b[B");
+  assert.match(panel.render(100).at(-3)!, /Lines 2–/, "choosing a node scrolls its list row into view");
+  assert.match(panel.render(100).join("\n"), /▸ · node1|▸ ✓ node1/);
   panel.handleInput("\x1b[5~");
   assert.match(panel.render(100).at(-3)!, /Lines 1–/);
 });
@@ -246,6 +248,133 @@ test("panel shows a running node's elapsed time and tool progress", { timeout: 2
   assert.match(rendered, /Braid node a · running/);
   assert.match(rendered, /elapsed \d/);
   assert.match(rendered, /context ~?\d+\S*\/100K · 0 tool calls in 0 rounds · model phase/);
+  jobs.cancel(job.jobId);
+  await jobs.wait(job.jobId);
+});
+
+test("panel opens finished nodes at the top and fits each help line to the panel width", async (t) => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const long = Array.from({ length: 80 }, (_, i) => `output line ${i + 1}`).join("\n");
+  const job = jobs.start(chain, {}, context(async () => response(long)));
+  await jobs.wait(job.jobId);
+  const panel = new BraidPanel(jobs, focusTui, theme, () => {}, job.handle);
+  t.after(() => panel.dispose());
+  // The full graph hint is 70 columns and must appear as soon as it fits.
+  assert.match(panel.render(74).join("\n"), /↑\/↓ node {3}⏎ open {3}←\/→ jobs {3}PgUp\/PgDn scroll {3}c cancel {3}Esc close/);
+  assert.match(panel.render(73).join("\n"), /↑\/↓ node · ⏎ open · ←\/→ jobs · c cancel · Esc close/);
+  panel.handleInput("\r");
+  const opened = panel.render(100);
+  assert.match(opened.join("\n"), /Braid node a · completed/, "a finished node shows its details first");
+  assert.match(opened.at(-3)!, /Lines 1–/);
+  panel.handleInput("\t");
+  assert.match(panel.render(100).at(-3)!, /Lines 1–/, "Tab to another finished node also starts at the top");
+});
+
+test("panel windows very large node lists around the selection", async (t) => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const nodes = Array.from({ length: 200 }, (_, i) => ({ type: "execute" as const, id: `n${i}`, prompt: "work" }));
+  const job = jobs.start({ ...input, nodes }, { maxConcurrency: 50 }, context(async () => response()));
+  await jobs.wait(job.jobId);
+  const panel = new BraidPanel(jobs, focusTui, theme, () => {}, job.handle);
+  t.after(() => panel.dispose());
+  for (let i = 0; i < 150; i++) panel.handleInput("\x1b[B");
+  const rendered = panel.render(100).join("\n");
+  assert.match(rendered, /▸ ✓ n150 /, "the selected row is scrolled into view");
+  const picker = renderNodePicker(jobs.get(job.handle)!.result!.nodes, undefined, "n150", theme);
+  assert.match(picker.lines.join("\n"), /… 110 more above[\s\S]*… 10 more below/);
+  assert.equal(picker.lines.length, 1 + 1 + 80 + 1);
+  assert.match(picker.lines[picker.selectedLine]!, /▸ ✓ n150/);
+  assert.ok(panel.render(100).every((line) => visibleWidth(line) === 100));
+  let total = 0;
+  const lines = /Lines \d+–\d+\/(\d+)/.exec(rendered);
+  if (lines) total = Number(lines[1]);
+  assert.ok(total < 200, `the list is windowed, not 200+ rows (got ${total} lines)`);
+});
+
+/** A provider that streams `text` and then waits until the job is cancelled. */
+function streaming(text: string, started: () => void) {
+  const ctx = context(async () => response());
+  (ctx.modelRegistry as unknown as { stream: unknown }).stream = (_model: unknown, _context: unknown, options: { signal: AbortSignal }) => {
+    const aborted = new Promise<never>((_, reject) => options.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+    aborted.catch(() => {});
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "text_delta", contentIndex: 0, delta: text };
+        started();
+        await aborted;
+      },
+      result: () => aborted,
+    };
+  };
+  return ctx;
+}
+
+test("panel selects a node from the graph with arrow keys or Tab and opens it with Enter", async (t) => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const job = jobs.start(chain, {}, context(async () => response("node output")));
+  await jobs.wait(job.jobId);
+  const panel = new BraidPanel(jobs, focusTui, theme, () => {}, job.handle);
+  t.after(() => panel.dispose());
+  assert.match(panel.render(100).join("\n"), /nodes \(2\) · ↑\/↓ choose · Enter for live details/);
+  assert.match(panel.render(100).join("\n"), /│ ▸ ✓ a +completed · [\d.]+s +│\n│   ✓ b +completed/);
+  assert.match(panel.render(100).join("\n"), /↑\/↓ node {3}⏎ open/);
+  panel.handleInput("\x1b[B");
+  assert.match(panel.render(100).join("\n"), /▸ ✓ b +completed/, "Down selects the next node");
+  panel.handleInput("\x1b[A");
+  assert.match(panel.render(100).join("\n"), /▸ ✓ a +completed/, "Up selects the previous node");
+  panel.handleInput("\t");
+  assert.match(panel.render(100).join("\n"), /▸ ✓ b/);
+  panel.handleInput("\t");
+  assert.match(panel.render(100).join("\n"), /▸ ✓ a/, "Tab wraps around");
+  panel.handleInput("\x1b[Z");
+  assert.match(panel.render(100).join("\n"), /▸ ✓ b/, "Shift+Tab moves back");
+  panel.handleInput("\r");
+  const focused = panel.render(100).join("\n");
+  assert.match(focused, /Braid node b · completed/);
+  assert.doesNotMatch(focused, /nodes \(2\)/);
+  assert.match(focused, /⌫ graph {3}Tab\/⇧Tab node {3}←\/→ jobs/);
+  assert.match(panel.render(64).join("\n"), /⌫ graph · Tab\/⇧Tab node · ↑\/↓ scroll · c cancel · Esc close/);
+  assert.match(panel.render(40).join("\n"), /⌫ graph · Esc close/);
+  panel.handleInput("\t");
+  assert.match(panel.render(100).join("\n"), /Braid node a · completed/, "Tab switches the focused node");
+  panel.handleInput("\x1b[Z");
+  assert.match(panel.render(100).join("\n"), /Braid node b · completed/, "Shift+Tab returns to the previous node");
+  panel.handleInput("\t");
+  panel.handleInput("\x7f");
+  const graph = panel.render(100).join("\n");
+  assert.match(graph, /Braid completed/);
+  assert.match(graph, /▸ ✓ a/, "returning keeps the last focused node selected");
+  assert.ok(panel.render(100).every((line) => visibleWidth(line) === 100));
+});
+
+test("panel streams a running node's output live and follows the newest text", { timeout: 2_000 }, async (t) => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const started = deferred<void>();
+  const lines = Array.from({ length: 60 }, (_, i) => `streamed line ${i + 1}`).join("\n");
+  const job = jobs.start(input, {}, streaming(lines, () => started.resolve()));
+  await started.promise;
+  const panel = new BraidPanel(jobs, focusTui, theme, () => {}, job.handle);
+  t.after(() => panel.dispose());
+  assert.match(panel.render(100).join("\n"), /▸ ▶ a +running · \d/, "the first running node is preselected");
+  panel.handleInput("\r");
+  const live = panel.render(100).join("\n");
+  assert.match(live, /streamed line 60/, "the view follows the newest output");
+  assert.doesNotMatch(live, /streamed line 1\n/);
+  panel.handleInput("\x1b[5~");
+  panel.handleInput("\x1b[5~");
+  panel.handleInput("\x1b[5~");
+  panel.handleInput("\x1b[5~");
+  panel.handleInput("\x1b[5~");
+  panel.handleInput("\x1b[5~");
+  const scrolled = panel.render(100).join("\n");
+  assert.match(scrolled, /Braid node a · running/);
+  assert.match(scrolled, /live output \(streaming\)/);
+  assert.doesNotMatch(scrolled, /streamed line 60/, "scrolling up stops following");
+  assert.equal(JSON.stringify(jobs.get(job.handle)).includes("streamed line"), false, "status snapshots exclude the stream");
   jobs.cancel(job.jobId);
   await jobs.wait(job.jobId);
 });

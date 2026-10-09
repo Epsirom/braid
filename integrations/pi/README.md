@@ -221,16 +221,31 @@ Run `/braid` to open the newest job, or `/braid <jobId>` to open a specific job.
 The bordered panel keeps the job header and keyboard controls visible while
 you scroll the flow and event log. It refreshes as nodes start, finish, fail,
 and pass outputs downstream.
-Use Left/Right to select jobs, Up/Down or Page Up/Page Down to scroll, `c` to
-cancel the selected job, and Escape or `q` to close the panel. Closing the panel
-leaves jobs running. In RPC or noninteractive modes, use `braid_status`.
+Use Left/Right to select jobs, Up/Down to choose a node, Enter to open it, Page
+Up/Page Down to scroll, `c` to cancel the selected job, and Escape or `q` to
+close the panel. Closing the panel leaves jobs running. In RPC or noninteractive
+modes, use `braid_status`.
 
-Run `/braid <jobId> <nodeId>` to open the panel on one node's latest invocation,
-or `/braid <jobId> <executionId>` for an exact invocation such as an earlier loop
-iteration. The node view refreshes live with its status, model, elapsed time,
-token usage, context size, tool-call count, workspace, and full output or error.
-Press Backspace to return to the whole graph; switching jobs also returns to it.
-Tab completes job handles and then that job's node IDs.
+The graph view starts with a list of the job's nodes, each showing its status,
+elapsed time and, while it runs, its tool calls and phase. Large graphs show 80
+rows around the selection. The selected row is highlighted, starting with the
+first running node. Press Up/Down (or Tab/Shift+Tab) to choose another node and
+Enter to open it. You can also run `/braid <jobId> <nodeId>` to open the panel
+on one node's latest invocation, or `/braid <jobId> <executionId>` for an exact
+invocation such as an earlier loop iteration.
+
+The node view refreshes live with its status, model, elapsed time, token usage,
+context size, tool-call count, workspace, and full output or error. While the
+node runs, it streams the model's text, each tool call, and a one-line summary
+of each tool result (ok or error, size, and first line) as they happen, keeping
+the latest 8,000 characters. A running node stays scrolled to the newest output
+until you scroll up; a finished node opens at the top. Thinking text is not
+shown, and the stream is display-only: `braid_status` and results never include
+it. Output streamed before a failure stays visible for the 20 most recent
+failed invocations of each job. In the node view, Up/Down scroll the output;
+press Tab or Shift+Tab to move to the next or previous node, or Backspace to
+return to the whole graph; switching jobs also returns to it.
+In the command, Tab completes job handles and then that job's node IDs.
 IDs with leading/trailing whitespace, terminal controls, or a leading double
 quote use JSON string syntax, such as `/braid job-1 " review "` or
 `/braid job-1 "review\nstep"`. Tab inserts this form automatically and displays

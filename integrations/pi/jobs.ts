@@ -25,7 +25,7 @@ import {
   createLiveState,
   type BraidLiveState,
 } from "./display.js";
-import { createPiRunner, sumPiUsage } from "./runner.js";
+import { createPiRunner, sumPiUsage, type PiNodeActivity } from "./runner.js";
 
 export interface JobOptions {
   maxConcurrency?: number;
@@ -60,6 +60,10 @@ interface Job extends JobSnapshot {
   usageClaimed: boolean;
   nodeResults: Map<string, NodeResult>;
   runningExecutions: Map<string, string>;
+  /** Streamed text by execution (or node) ID; kept out of snapshots and status results. */
+  activity: Map<string, PiNodeActivity>;
+  /** Keys of failed streams kept for diagnosis, oldest first. */
+  failedActivity: string[];
 }
 
 export interface NodeCompletion {
@@ -75,12 +79,15 @@ export interface NodeCompletion {
   errorCode?: ExecutionError["code"];
 }
 
+const MAX_FAILED_STREAMS = 20;
+
 /** Jobs belong to one extension/session lifetime, independently of foreground turns. */
 export class BraidJobs {
   private jobs = new Map<string, Job>();
   private handles = new Map<string, string>();
   private nextHandle = 1;
   private listeners = new Set<() => void>();
+  private activityListeners = new Set<(jobId: string, nodeId: string) => void>();
   private disposed = false;
 
   constructor(
@@ -92,6 +99,14 @@ export class BraidJobs {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
+    };
+  }
+
+  /** Streamed-text updates, separate from job changes because they arrive several times a second. */
+  subscribeActivity(listener: (jobId: string, nodeId: string) => void): () => void {
+    this.activityListeners.add(listener);
+    return () => {
+      this.activityListeners.delete(listener);
     };
   }
 
@@ -130,6 +145,8 @@ export class BraidJobs {
       done: Promise.resolve(),
       usageClaimed: false,
       runningExecutions: new Map(),
+      activity: new Map(),
+      failedActivity: [],
       nodeResults: new Map(snapshot.nodes.map((node) => [node.id, { id: node.id, status: "pending" }])),
     };
     this.jobs.set(job.jobId, job);
@@ -172,6 +189,18 @@ export class BraidJobs {
               applyProgress(job.live, progress);
               this.changed();
             },
+            onActivity: (activity) => {
+              if (job.status !== "running" || job.controller.signal.aborted)
+                return;
+              job.activity.set(activity.executionId ?? activity.nodeId, activity);
+              for (const listener of this.activityListeners) {
+                try {
+                  listener(job.jobId, activity.nodeId);
+                } catch {
+                  /* UI observers cannot fail a job. */
+                }
+              }
+            },
           });
           return async request => { await nextTurn(); return invoke(request); };
         })(),
@@ -183,6 +212,15 @@ export class BraidJobs {
             });
           }
           // Definition edits can remove nodes whose executions are still running.
+          const activityKey = "nodeId" in event ? event.executionId ?? event.nodeId : undefined;
+          // A new invocation starts a fresh stream; completed output supersedes it.
+          if (activityKey && (event.type === "node_started" || event.type === "node_completed"))
+            job.activity.delete(activityKey);
+          if (activityKey && event.type === "node_failed" && job.activity.has(activityKey)) {
+            // Keep a bounded number of failed streams for diagnosis.
+            job.failedActivity.push(activityKey);
+            while (job.failedActivity.length > MAX_FAILED_STREAMS) job.activity.delete(job.failedActivity.shift()!);
+          }
           if (event.type === "node_started" && event.executionId) {
             job.runningExecutions.set(event.executionId, event.nodeId);
           } else if ((event.type === "node_completed" || event.type === "node_failed") && event.executionId) {
@@ -286,6 +324,8 @@ export class BraidJobs {
       usageClaimed: _claimed,
       nodeResults: _nodeResults,
       runningExecutions: _runningExecutions,
+      activity: _activity,
+      failedActivity: _failedActivity,
       ...snapshot
     } = job;
     const copy = structuredClone(snapshot);
@@ -306,6 +346,19 @@ export class BraidJobs {
       : nodeId ? (state && Object.hasOwn(state.nodes, nodeId) ? state.nodes[nodeId] : undefined) ?? job.nodeResults.get(nodeId) : undefined;
     if (!node || (nodeId && node.id !== nodeId)) throw new Error(`Unknown Braid node or execution in ${job.handle}. Use braid_status with only jobId to list executions.`);
     return structuredClone(node);
+  }
+
+  /** Node IDs in display order, without copying the job (panel key handling). */
+  nodeIds(jobId: string): string[] {
+    const job = this.lookup(jobId);
+    if (!job) return [];
+    return Object.keys(job.result?.nodes ?? job.run?.snapshot().nodes ?? job.live.nodes);
+  }
+
+  /** Live streamed text for one execution, for interactive display only. */
+  activity(jobId: string, executionId: string | undefined, nodeId: string): PiNodeActivity | undefined {
+    const activity = this.lookup(jobId)?.activity.get(executionId ?? nodeId);
+    return activity && activity.nodeId === nodeId ? { ...activity } : undefined;
   }
 
   update(jobId: string, patch: GraphUpdate): JobSnapshot {
@@ -387,5 +440,6 @@ export class BraidJobs {
     this.disposed = true;
     for (const job of this.jobs.values()) job.controller.abort();
     this.listeners.clear();
+    this.activityListeners.clear();
   }
 }

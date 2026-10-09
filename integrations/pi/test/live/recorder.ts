@@ -11,10 +11,12 @@ export default function recorder(pi: any) {
     if (wrapped || !ctx.modelRegistry?.complete) return;
     wrapped = true;
     const actual = ctx.modelRegistry.complete.bind(ctx.modelRegistry);
-    ctx.modelRegistry.complete = async (model: any, context: any, options: any) => {
+    const actualStream = ctx.modelRegistry.stream?.bind(ctx.modelRegistry);
+    /** Logs a Braid node request and applies injected failures; returns its node ID. */
+    const before = async (model: any, context: any, options: any): Promise<string | undefined> => {
       let payload: any;
       try { payload = JSON.parse(context.messages[0]?.content); } catch {}
-      if (!payload?.nodeId) return actual(model, context, options);
+      if (!payload?.nodeId) return undefined;
       const nodeId = payload.nodeId;
       log({ kind: 'node_request', nodeId, model: `${model.provider}/${model.id}`, systemPrompt: context.systemPrompt,
         payload, tools: context.tools, messages: context.messages });
@@ -46,10 +48,25 @@ export default function recorder(pi: any) {
           else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
         });
       }
-      const response = await actual(model, context, options);
-      log({ kind: 'node_response', nodeId, stopReason: response.stopReason, content: response.content, usage: response.usage,
+      return nodeId;
+    };
+    const after = (nodeId: string | undefined, response: any) => {
+      if (nodeId) log({ kind: 'node_response', nodeId, stopReason: response.stopReason, content: response.content, usage: response.usage,
         model: `${response.provider}/${response.responseModel ?? response.model}`, errorMessage: response.errorMessage });
       return response;
+    };
+    ctx.modelRegistry.complete = async (model: any, context: any, options: any) => {
+      const nodeId = await before(model, context, options);
+      return after(nodeId, await actual(model, context, options));
+    };
+    // Braid workers stream for live display; keep that production path under test.
+    if (actualStream) ctx.modelRegistry.stream = (model: any, context: any, options: any) => {
+      const ready = before(model, context, options).then(nodeId => ({ nodeId, events: actualStream(model, context, options) }));
+      ready.catch(() => {});
+      return {
+        async *[Symbol.asyncIterator]() { yield* (await ready).events; },
+        async result() { const { nodeId, events } = await ready; return after(nodeId, await events.result()); },
+      };
     };
   });
 }
