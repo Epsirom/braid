@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   renderGraphCall,
   renderGraphResult,
+  renderNodeResult,
   applyEvent,
   createLiveState,
   type BraidToolDetails,
@@ -428,4 +429,21 @@ test("terminal graph events update live state and clear pause indicators", () =>
   assert.match(rendered, /Braid cancelled/);
   assert.match(rendered, /Graph cancelled by caller/);
   assert.doesNotMatch(rendered, /Braid executing|paused executions/);
+});
+
+test("node details render at the observation time and show recoverable workspace refs", () => {
+  const plainTheme = { fg: (_c: string, v: string) => v, bg: (_c: string, v: string) => v, bold: (v: string) => v };
+  const render = (node: Parameters<typeof renderNodeResult>[0], now: number) =>
+    renderNodeResult(node, true, plainTheme, undefined, undefined, now).render(200).join("\n");
+  const running = { id: "a", status: "running" as const, startedAt: 1_000, iteration: 2 };
+  assert.match(render(running, 3_500), /iteration #2 · elapsed 2s/);
+  assert.match(render(running, 3_500), /elapsed 2s/, "the same observation renders the same elapsed time");
+  const workspace = {
+    nodeId: "a", mode: "worktree" as const, workingDirectory: "/tmp/wt", worktreeRoot: "/tmp/wt",
+    checkpointRef: "refs/braid/checkpoint", state: "ready" as const,
+  };
+  assert.match(render({ id: "a", status: "running", workspace }, 0), /workspace: worktree · ready · \/tmp\/wt/);
+  const archived = render({ id: "a", status: "completed", workspace: { ...workspace, state: "archived" } }, 0);
+  assert.match(archived, /workspace: worktree · archived · refs\/braid\/checkpoint/);
+  assert.doesNotMatch(archived, /\/tmp\/wt/);
 });

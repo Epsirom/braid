@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Features
+
+- Add `/braid <jobId> <nodeId|executionId>` to open the Pi panel on one node's
+  latest or exact invocation, with live status, elapsed time, token and context
+  usage, tool calls, workspace, and full output or error. Backspace returns to
+  the graph; Tab completes job handles and node IDs. Focused `braid_status`
+  results show the same details at the time of the read.
+
 ## 0.3.1 — 2026-10-04
 
 ### Features
