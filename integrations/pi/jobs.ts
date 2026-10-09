@@ -59,6 +59,7 @@ interface Job extends JobSnapshot {
   done: Promise<void>;
   usageClaimed: boolean;
   nodeResults: Map<string, NodeResult>;
+  runningExecutions: Map<string, string>;
 }
 
 export interface NodeCompletion {
@@ -128,6 +129,7 @@ export class BraidJobs {
       controller: new AbortController(),
       done: Promise.resolve(),
       usageClaimed: false,
+      runningExecutions: new Map(),
       nodeResults: new Map(snapshot.nodes.map((node) => [node.id, { id: node.id, status: "pending" }])),
     };
     this.jobs.set(job.jobId, job);
@@ -179,6 +181,14 @@ export class BraidJobs {
             Object.defineProperty(job.workspaces, event.workspace.executionId ?? event.workspace.nodeId, {
               value: { ...event.workspace }, enumerable: true, configurable: true, writable: true,
             });
+          }
+          // Definition edits can remove nodes whose executions are still running.
+          if (event.type === "node_started" && event.executionId) {
+            job.runningExecutions.set(event.executionId, event.nodeId);
+          } else if ((event.type === "node_completed" || event.type === "node_failed") && event.executionId) {
+            job.runningExecutions.delete(event.executionId);
+          } else if (event.type === "graph_completed" || event.type === "graph_failed") {
+            job.runningExecutions.clear();
           }
           applyEvent(job.live, event);
           if ("nodeId" in event && Object.hasOwn(job.live.nodes, event.nodeId)) {
@@ -243,6 +253,7 @@ export class BraidJobs {
       job.status = "failed";
       job.live.status = "failed";
       job.live.pausedExecutionIds = [];
+      job.runningExecutions.clear();
       job.error = error instanceof Error ? error.message : String(error);
       if (reports.length) job.usage = sumPiUsage(reports);
     }
@@ -274,6 +285,7 @@ export class BraidJobs {
       done: _done,
       usageClaimed: _claimed,
       nodeResults: _nodeResults,
+      runningExecutions: _runningExecutions,
       ...snapshot
     } = job;
     const copy = structuredClone(snapshot);
@@ -324,6 +336,28 @@ export class BraidJobs {
         createdAt,
       }))
       .reverse();
+  }
+
+  /** Editor progress without copying outputs, transcripts, or execution snapshots. */
+  progress(jobId: string): {
+    total: number;
+    done: number;
+    failed: number;
+    running: string[];
+    paused: number;
+  } | undefined {
+    const job = this.lookup(jobId);
+    if (!job) return undefined;
+    const nodes = Object.values(job.live.nodes);
+    return {
+      total: nodes.length,
+      done: nodes.filter(node =>
+        node.status === "completed" || node.status === "failed" || node.status === "skipped",
+      ).length,
+      failed: nodes.filter(node => node.status === "failed").length,
+      running: [...new Set(job.runningExecutions.values())],
+      paused: job.live.pausedExecutionIds?.length ?? 0,
+    };
   }
 
   cancel(jobId: string): boolean {

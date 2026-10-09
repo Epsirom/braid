@@ -200,6 +200,62 @@ export class BraidPanel implements Component {
   }
 }
 
+export function registerBraidWidget(pi: ExtensionAPI, jobs: BraidJobs): () => void {
+  let dispose = () => {};
+  const clear = () => {
+    dispose();
+    dispose = () => {};
+  };
+  pi.on("session_start", (_event, ctx) => {
+    clear();
+    if (ctx.mode !== "tui") return;
+    const refresh = () => {
+      if (!jobs.list().length) {
+        ctx.ui.setWidget("braid-status", undefined);
+        return;
+      }
+      ctx.ui.setWidget("braid-status", (_tui, theme) => ({
+        render(width) {
+          const all = jobs.list();
+          const active = all.filter(job => job.status === "running");
+          const selected = active.length ? active.slice(0, 3) : all.slice(0, 1);
+          const lines = selected.map(job => {
+            const progress = jobs.progress(job.jobId)!;
+            const status = job.status === "running" && progress.paused && !progress.running.length
+              ? "paused" : job.status;
+            const color = status === "completed" ? "success"
+              : status === "failed" ? "error"
+              : status === "cancelled" ? "muted" : "warning";
+            const parts = [
+              theme.fg("accent", `Braid ${job.handle}`),
+              theme.fg(color, status),
+              `${progress.done}/${progress.total} done`,
+            ];
+            if (progress.failed) parts.push(theme.fg("error", `${progress.failed} failed`));
+            if (progress.paused && status !== "paused")
+              parts.push(theme.fg("warning", `${progress.paused} paused`));
+            parts.push(plain(progress.running.length ? progress.running.join(", ") : job.goal));
+            return truncateToWidth(parts.join(" · "), width, "…");
+          });
+          if (active.length > selected.length) lines.push(truncateToWidth(
+            theme.fg("muted", `Braid · +${active.length - selected.length} active jobs · /braid details`),
+            width, "…",
+          ));
+          return lines;
+        },
+        invalidate() {},
+      }), { placement: "aboveEditor" });
+    };
+    const unsubscribe = jobs.subscribe(refresh);
+    dispose = () => {
+      unsubscribe();
+      ctx.ui.setWidget("braid-status", undefined);
+    };
+    refresh();
+  });
+  return clear;
+}
+
 export function registerBraidCommand(pi: ExtensionAPI, jobs: BraidJobs): void {
   pi.registerCommand("braid", {
     description: "Open the live background-job flow panel: /braid [jobId]",
