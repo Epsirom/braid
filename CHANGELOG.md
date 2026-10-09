@@ -4,6 +4,10 @@
 
 ### Features
 
+- Show Pi background-job progress automatically above the input editor, including
+  active nodes, paused gates, failures, and retained final status. Keep running
+  executions visible after live edits remove their node definitions; use `/braid`
+  for the full flow panel.
 - Add `/braid <jobId> <nodeId|executionId>` to open the Pi panel on one node's
   latest or exact invocation, with live status, elapsed time, token and context
   usage, tool calls, workspace, and full output or error. Backspace returns to

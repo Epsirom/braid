@@ -88,8 +88,9 @@ With Pi 1.0.1 and Node.js 22.19+:
 pi install npm:@chrok/pi-braid
 ```
 
-Run `/reload`, ask Pi to analyze a task with Braid, and open `/braid` to inspect
-the job. npm installs the exact matching core dependency; no checkout is needed
+Run `/reload` and ask Pi to analyze a task with Braid. Background progress appears
+automatically above the input editor; open `/braid` for the full live panel.
+npm installs the exact matching core dependency; no checkout is needed
 for published versions. To try the current source checkout, follow the
 [local Pi installation guide](integrations/pi/README.md#install-this-local-checkout-in-pi).
 

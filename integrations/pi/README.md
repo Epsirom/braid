@@ -163,6 +163,21 @@ scheduler persistence across Pi reloads. Reminders alone do not pause execution.
 
 ## Live flow panel
 
+In interactive Pi, background progress appears automatically **above the input
+editor** as soon as a job is submitted; no command or polling is needed:
+
+```text
+Braid job-1 · running · 2/5 done · review
+```
+
+The widget shows node progress, active node IDs, paused gates, and failures.
+It shows up to three active jobs, with an overflow count for the rest. When no
+jobs are active, the newest job's final completed/failed/cancelled status stays
+visible until another job is submitted or the session ends. Counts use the
+latest state of each current node definition; failed and skipped nodes count as
+done, and reruns or live edits can change progress and totals. RPC, JSON, and
+print modes do not create a terminal widget.
+
 Run `/braid` to open the newest job, or `/braid <jobId>` to open a specific job.
 The bordered panel keeps the job header and keyboard controls visible while
 you scroll the flow and event log. It refreshes as nodes start, finish, fail,
