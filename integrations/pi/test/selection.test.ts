@@ -46,6 +46,7 @@ test("extension registers background tools, a panel command, and guidance to wai
     ["braid", "braid_status", "braid_cancel", "braid_update", "braid_resume"],
   );
   assert.ok(fake.commands.has("braid"));
+  assert.ok(fake.handlers.has("session_start"));
   assert.equal(fake.handlers.has("input"), false);
   assert.equal(fake.handlers.has("tool_call"), false);
   const prompt = fake.handlers.get("before_agent_start")!(
@@ -261,3 +262,28 @@ test(
     assert.equal(fake.reminders(), 0);
   },
 );
+
+test("extension automatically shows editor job status and clears it on shutdown", { timeout: 3_000 }, async (t) => {
+  const fake = extension();
+  const started = deferred<void>();
+  const completion = deferred<ReturnType<typeof response>>();
+  const ctx = context(async () => { started.resolve(); return completion.promise; });
+  let widget: { render(width: number): string[] } | undefined;
+  ctx.ui = {
+    setWidget: (_key: string, factory: ((...args: unknown[]) => typeof widget) | undefined) => {
+      widget = factory?.({}, { fg: (_color: string, value: string) => value });
+    },
+  } as never;
+  t.after(() => fake.handlers.get("session_shutdown")!({} as never, ctx));
+  fake.handlers.get("session_start")!({} as never, ctx);
+  assert.equal(widget, undefined);
+  const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
+  await tool.execute("call", input, undefined, undefined, ctx);
+  await started.promise;
+  assert.match(widget!.render(120).join("\n"), /Braid job-1 · running · 0\/1 done · a/);
+  completion.resolve(response());
+  await fake.reminder.promise;
+  assert.match(widget!.render(120).join("\n"), /completed · 1\/1 done/);
+  fake.handlers.get("session_shutdown")!({} as never, ctx);
+  assert.equal(widget, undefined);
+});
