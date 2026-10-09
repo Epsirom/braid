@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.3 — 2026-10-09
+
 ### Features
 
 - Show live per-execution activity so long-running nodes can be diagnosed while
@@ -30,6 +32,23 @@
   running node instead of hiding them; selection also scrolls tall charts to the
   selected node. Flowchart renderer failures no longer break the panel
   ([#60](https://github.com/Epsirom/braid/pull/60)) — @Epsirom.
+
+### Changes
+
+- In the Pi `/braid` panel, Escape and Backspace now step back one level instead
+  of jumping from a node straight to the graph, and Left/Right in a node view
+  switch invocations of that node instead of jobs. Narrow terminals show a
+  cropped flowchart instead of a "Flowchart needs N columns" message
+  ([#60](https://github.com/Epsirom/braid/pull/60)) — @Epsirom.
+
+No API changes or migration from 0.3.2 are required. Pi 1.0.1 and DSH 0.2.0-rc.2
+remain the tested host versions; integrations require Node.js 22.19+.
+
+### New Contributors
+
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.3.2...v0.3.3).
 
 ## 0.3.2 — 2026-10-09
 
