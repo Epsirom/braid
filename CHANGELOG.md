@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Features
+
+- Show live per-execution activity so long-running nodes can be diagnosed while
+  they run: current phase and time in it, time since the last observed signal,
+  total time, the in-flight model request and its stream state, running tools
+  with arguments and latest output, and a bounded chronological history of model
+  requests/responses, assistant text, tool calls/results, workspace changes, and
+  completion. Histories are keyed by execution ID, so repeated loop visits do not
+  mix. Pi shows it in `/braid <jobId> <nodeId|executionId>` and focused
+  `braid_status` reads; DSH shows it in the Braid Web panel, `/braid`, the Jobs
+  progress line, and focused `braid_status` reads. Both status tools accept
+  `activityBefore` to page earlier history. Hosts list signals they cannot
+  observe, and quiet periods are never reported as stalls. The core exports the
+  host-neutral `ExecutionActivityTracker` and `formatActivityStatus` helpers.
+  Pi worker model calls now stream through the registry when available (the same
+  request as `complete()`); execution semantics are unchanged
+  ([#60](https://github.com/Epsirom/braid/pull/60)) — @Epsirom.
+- Press `v` in the Pi `/braid` panel to select a node with the arrow keys, and
+  Enter to open its live session, drawn with Pi's own chat components: prompt,
+  streamed text and thinking, and tool cards with live output, below a pinned
+  node summary. Left/Right switch
+  invocations of the node, ctrl+o expands tool output, and Escape steps back one
+  level. `/braid <jobId> <node|execution>` opens the session directly. Sessions
+  are read-only ([#60](https://github.com/Epsirom/braid/pull/60)) — @Epsirom.
+- Crop Pi flowcharts wider than the terminal to a window around the selected or
+  running node instead of hiding them; selection also scrolls tall charts to the
+  selected node. Flowchart renderer failures no longer break the panel
+  ([#60](https://github.com/Epsirom/braid/pull/60)) — @Epsirom.
+
 ## 0.3.2 — 2026-10-09
 
 ### Features

@@ -44,6 +44,7 @@ agent's model captured at submission.
 | Read a job | `braid_status({ jobId })` |
 | Read a specific invocation | `braid_status({ jobId, executionId })` |
 | Read a node's latest invocation | `braid_status({ jobId, nodeId })` |
+| Page earlier activity of an invocation | `braid_status({ jobId, executionId, activityBefore })` |
 | Atomically edit/resume | `braid_update({ jobId, expectedRevision, ...patch })` |
 | Resume without edits | `braid_resume({ jobId, expectedRevision, executionIds })` |
 | Cancel | `braid_cancel({ jobId })` or `/braid cancel <jobId>` |
@@ -87,6 +88,14 @@ floating and fullscreen. It follows the session that owns the tab.
 - Click a node to select an exact execution, including earlier loop iterations.
   Inspect output, decisions, errors, context usage, tool counts, latency, workspace
   details and recovery refs. Output is paged in 32,768-character chunks.
+- Watch a running execution's live activity: phase and time in phase, time since
+  the last observed signal, total time, the in-flight model request (awaiting its
+  first stream event or streaming text/reasoning/tool-call arguments), and running
+  tools with arguments and latest shell output. The chronological history shows
+  model requests/responses, assistant text, tool calls/results, workspace changes,
+  and completion; expand an entry for its bounded detail preview, or load earlier
+  entries 50 at a time. Missing host signals are listed as unavailable; quiet
+  periods are shown as elapsed time, not as a stall.
 - View the latest 80 lifecycle events and input/output/cache token totals.
 - Cancel the job, resume one paused execution, or resume all paused executions.
   Resume submits the revision currently displayed; stale revisions are rejected
@@ -94,8 +103,9 @@ floating and fullscreen. It follows the session that owns the tab.
 
 The Host sends structured snapshots through DSH's authenticated Remote transport,
 coalesced to at most one update per 150 ms per observer. Prompts, provider messages
-and node outputs are excluded from that stream; selected outputs are read
-separately. Switching sessions or closing the tab stops observation, while jobs
+and node outputs are excluded from that stream; selected outputs and activity
+history are read separately. Running executions carry a compact activity summary;
+stream and tool-output activity refreshes it at most once per second. Switching sessions or closing the tab stops observation, while jobs
 continue. Disconnected controls are disabled; the panel retries the stream, then
 offers manual reconnect if retries fail.
 
@@ -107,7 +117,9 @@ Unloading the plugin removes its tab type, slots, styles and Remote methods.
 
 The generic Jobs panel also streams a text flow diagram, node states, elapsed times, context
 token estimates/provider reports, context capacity when available, tool counts,
-and recent events. Its own stop action cancels the Braid run. Closing the panel
+and recent events; its progress line names the first running node's activity
+phase, and `/braid` adds an activity line for each running node. Its own stop
+action cancels the Braid run. Closing the panel
 leaves it running. `/braid` returns a snapshot in the command UI; it does not open
 Pi's terminal overlay or bind Pi's keyboard shortcuts. Headless profiles can use
 the tools and commands without a Web UI.

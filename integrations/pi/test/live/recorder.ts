@@ -7,15 +7,45 @@ export default function recorder(pi: any) {
   let wrapped = false;
   const seenMerge = new Set<string>();
   pi.on('session_start', (_event: any, ctx: any) => {
-    log({ kind: 'environment', cwd: ctx.cwd, model: ctx.model && `${ctx.model.provider}/${ctx.model.id}`, registryComplete: typeof ctx.modelRegistry?.complete });
+    log({ kind: 'environment', cwd: ctx.cwd, model: ctx.model && `${ctx.model.provider}/${ctx.model.id}`,
+      registryComplete: typeof ctx.modelRegistry?.complete, registryStream: typeof ctx.modelRegistry?.stream });
     if (wrapped || !ctx.modelRegistry?.complete) return;
     wrapped = true;
     const actual = ctx.modelRegistry.complete.bind(ctx.modelRegistry);
+    const actualStream = ctx.modelRegistry.stream?.bind(ctx.modelRegistry);
+    const logResponse = (nodeId: string, response: any) => log({ kind: 'node_response', nodeId, stopReason: response.stopReason, content: response.content, usage: response.usage,
+      model: `${response.provider}/${response.responseModel ?? response.model}`, errorMessage: response.errorMessage });
+    // Workers stream when the registry supports it; both paths share logging and injected failures.
+    if (actualStream) ctx.modelRegistry.stream = (model: any, context: any, options: any) => {
+      // Other requests keep Pi's own stream object.
+      if (!workerNodeId(context)) return actualStream(model, context, options);
+      let inner: any;
+      const ready = before(model, context, options).then(nodeId => { inner = actualStream(model, context, options); return nodeId; });
+      ready.catch(() => {});
+      return {
+        async *[Symbol.asyncIterator]() { await ready; yield* inner; },
+        async result() {
+          const nodeId = await ready;
+          const response = await inner.result();
+          if (nodeId) logResponse(nodeId, response);
+          return response;
+        },
+      };
+    };
     ctx.modelRegistry.complete = async (model: any, context: any, options: any) => {
-      let payload: any;
-      try { payload = JSON.parse(context.messages[0]?.content); } catch {}
-      if (!payload?.nodeId) return actual(model, context, options);
-      const nodeId = payload.nodeId;
+      const nodeId = await before(model, context, options);
+      const response = await actual(model, context, options);
+      if (nodeId) logResponse(nodeId, response);
+      return response;
+    };
+    /** Logs a worker request and applies this case's injections; undefined for non-worker requests. */
+    function workerNodeId(context: any): string | undefined {
+      try { return JSON.parse(context.messages[0]?.content)?.nodeId; } catch { return undefined; }
+    }
+    async function before(model: any, context: any, options: any): Promise<string | undefined> {
+      const nodeId = workerNodeId(context);
+      if (!nodeId) return undefined;
+      const payload = JSON.parse(context.messages[0].content);
       log({ kind: 'node_request', nodeId, model: `${model.provider}/${model.id}`, systemPrompt: context.systemPrompt,
         payload, tools: context.tools, messages: context.messages });
       if (payload.mergeSources && !seenMerge.has(nodeId)) {
@@ -46,10 +76,7 @@ export default function recorder(pi: any) {
           else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
         });
       }
-      const response = await actual(model, context, options);
-      log({ kind: 'node_response', nodeId, stopReason: response.stopReason, content: response.content, usage: response.usage,
-        model: `${response.provider}/${response.responseModel ?? response.model}`, errorMessage: response.errorMessage });
-      return response;
-    };
+      return nodeId;
+    }
   });
 }

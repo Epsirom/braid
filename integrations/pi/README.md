@@ -225,11 +225,39 @@ Use Left/Right to select jobs, Up/Down or Page Up/Page Down to scroll, `c` to
 cancel the selected job, and Escape or `q` to close the panel. Closing the panel
 leaves jobs running. In RPC or noninteractive modes, use `braid_status`.
 
-Run `/braid <jobId> <nodeId>` to open the panel on one node's latest invocation,
-or `/braid <jobId> <executionId>` for an exact invocation such as an earlier loop
-iteration. The node view refreshes live with its status, model, elapsed time,
-token usage, context size, tool-call count, workspace, and full output or error.
-Press Backspace to return to the whole graph; switching jobs also returns to it.
+A flowchart wider than the terminal is cropped to the terminal width around the
+first running node, or from its left edge; a `[chart 1–76 of 245 cols]` line
+shows the visible columns.
+
+Press `v` to select a node: the arrow keys move a `◆` marker through the
+flowchart (starting at a running node), and the view pans horizontally and
+scrolls vertically to keep the selected node in sight. If the flowchart cannot be
+drawn, a node list replaces it while selecting. Enter opens that node's latest
+invocation as a live session. The session is drawn with Pi's own chat
+components, as in the main conversation: the worker's prompt, streamed
+assistant text and thinking, and tool cards whose arguments and output update
+while they run. The node summary—status, elapsed time, usage, context, and live
+activity (see below)—stays pinned at the top while the session scrolls. The
+session follows the newest lines; scroll up to pause, and press End to follow again. Left/Right switch between
+invocations of the same node (for example loop iterations), and ctrl+o expands
+tool output. Escape steps back one level—session, then node selection, then the
+graph—and closes the panel from the graph; `q` closes it from anywhere. Sessions
+are read-only. Running invocations and the 20 most recently finished ones per
+job keep their session; older ones show the summary and activity history.
+
+Run `/braid <jobId> <nodeId>` to open that node's latest invocation directly in
+the session view, or `/braid <jobId> <executionId>` for an exact invocation such
+as an earlier loop iteration. The header shows live activity for that exact invocation: the current phase
+(workspace preparation, worker, model request, tool, or checkpoint/cleanup) and
+how long it has been in it, time since the last observed signal, total time, the
+in-flight model request (sent, awaiting the first stream event, or streaming
+text/reasoning/tool-call arguments with a character count and latest tail), and
+running tools with their arguments, elapsed time, and latest output. Focused
+`braid_status` reads, and invocations whose session is no longer retained, add a
+chronological history of model requests and responses, assistant text, tool calls
+and results, workspace changes, and completion, with bounded detail previews.
+A quiet period is shown as elapsed time, not declared a stall. If the host cannot
+report a signal—for example a model registry without streaming—the view says so.
 Tab completes job handles and then that job's node IDs.
 IDs with leading/trailing whitespace, terminal controls, or a leading double
 quote use JSON string syntax, such as `/braid job-1 " review "` or
@@ -241,7 +269,10 @@ estimates or provider-reported usage, context-window sizes, filesystem tool-call
 counts, and the execution log. Active nodes are marked `▶ ACTIVE`. The status
 tool also renders a flowchart; expand its result to see more log events.
 When selecting `nodeId` or `executionId`, it instead shows that invocation's
-output/error, with the full text available on expansion.
+output/error and activity, with the full text and history available on expansion.
+The JSON includes `activity` with the latest 40 history entries; pass
+`activityBefore` with an entry sequence to page earlier ones. While the invocation
+runs, `activity` comes before `node` so it survives preview truncation.
 
 `/braid` now opens this panel; it no longer arms the next prompt. To request
 Braid explicitly, ask the agent to analyze the task using Braid.

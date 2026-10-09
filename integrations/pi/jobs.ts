@@ -8,8 +8,11 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
+  ExecutionActivityTracker,
   startBraid,
   type BraidRun,
+  type ExecutionActivity,
+  type ExecutionActivityPage,
   type BraidSnapshot,
   type GraphUpdate,
   validateGraph,
@@ -26,6 +29,7 @@ import {
   type BraidLiveState,
 } from "./display.js";
 import { createPiRunner, sumPiUsage } from "./runner.js";
+import { PiTranscripts, type PiTranscript } from "./transcript.js";
 
 export interface JobOptions {
   maxConcurrency?: number;
@@ -60,6 +64,9 @@ interface Job extends JobSnapshot {
   usageClaimed: boolean;
   nodeResults: Map<string, NodeResult>;
   runningExecutions: Map<string, string>;
+  /** Kept outside snapshots: histories are read one execution at a time. */
+  activity: ExecutionActivityTracker;
+  transcripts: PiTranscripts;
 }
 
 export interface NodeCompletion {
@@ -130,6 +137,8 @@ export class BraidJobs {
       done: Promise.resolve(),
       usageClaimed: false,
       runningExecutions: new Map(),
+      activity: new ExecutionActivityTracker({ onChange: () => this.changed() }),
+      transcripts: new PiTranscripts(() => this.changed()),
       nodeResults: new Map(snapshot.nodes.map((node) => [node.id, { id: node.id, status: "pending" }])),
     };
     this.jobs.set(job.jobId, job);
@@ -160,6 +169,8 @@ export class BraidJobs {
         runner: (() => {
           const invoke = createPiRunner(registry, {
             cwd,
+            activity: job.activity,
+            transcripts: job.transcripts,
             maxToolRounds: options.maxToolRounds ?? Infinity,
             maxToolCalls: options.maxToolCalls ?? Infinity,
             onUsage: (usage) => {
@@ -173,9 +184,19 @@ export class BraidJobs {
               this.changed();
             },
           });
-          return async request => { await nextTurn(); return invoke(request); };
+          return async request => {
+            try {
+              await nextTurn();
+              return await invoke(request);
+            } finally {
+              job.activity.workerFinished(request.execution.executionId);
+              job.transcripts.finish(request.execution.executionId,
+                request.signal.aborted ? "Execution was stopped before this step finished" : undefined);
+            }
+          };
         })(),
         onEvent: (event) => {
+          job.activity.observe(event);
           if (event.type === "workspace_updated") {
             job.workspaces ??= {};
             Object.defineProperty(job.workspaces, event.workspace.executionId ?? event.workspace.nodeId, {
@@ -286,6 +307,8 @@ export class BraidJobs {
       usageClaimed: _claimed,
       nodeResults: _nodeResults,
       runningExecutions: _runningExecutions,
+      activity: _activity,
+      transcripts: _transcripts,
       ...snapshot
     } = job;
     const copy = structuredClone(snapshot);
@@ -306,6 +329,20 @@ export class BraidJobs {
       : nodeId ? (state && Object.hasOwn(state.nodes, nodeId) ? state.nodes[nodeId] : undefined) ?? job.nodeResults.get(nodeId) : undefined;
     if (!node || (nodeId && node.id !== nodeId)) throw new Error(`Unknown Braid node or execution in ${job.handle}. Use braid_status with only jobId to list executions.`);
     return structuredClone(node);
+  }
+
+  /** Live activity for one exact execution; undefined until it is first observed. */
+  getActivity(jobId: string, executionId: string, page?: ExecutionActivityPage): ExecutionActivity | undefined {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    return job.activity.get(executionId, page);
+  }
+
+  /** The live conversation for one execution; read-only, and absent once evicted. */
+  getTranscript(jobId: string, executionId: string): PiTranscript | undefined {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    return job.transcripts.get(executionId);
   }
 
   update(jobId: string, patch: GraphUpdate): JobSnapshot {

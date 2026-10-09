@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   type ModelRegistry,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
   formatBudgetReminder,
@@ -20,12 +21,14 @@ import {
   mergeInstructions,
   parseGitToolArguments,
   parseFinishMergeArguments,
+  type ExecutionActivityTracker,
   type ModelRunner,
   type NodeWorkspace as PiNodeWorkspace,
 } from "@chrok/braid";
 import { createWorktreeWriteTools } from "./write-tools.js";
 import { createAvailableReadTools } from "./read-tools.js";
 import { createWorkspaceShellTools } from "./shell-tools.js";
+import type { PiTranscripts } from "./transcript.js";
 
 export interface PiNodeProgress {
   nodeId: string;
@@ -44,6 +47,10 @@ export interface PiRunnerOptions {
   onProgress?: (progress: PiNodeProgress) => void;
   /** Observe the workspace assigned to this invocation; core events report its full lifecycle. */
   onWorkspace?: (workspace: PiNodeWorkspace) => void;
+  /** Record model requests, stream events, and tool calls for live diagnostics. */
+  activity?: ExecutionActivityTracker;
+  /** Keep each execution's conversation for the live session view. */
+  transcripts?: PiTranscripts;
   cwd?: string;
   /** Per node, including decide and rejected requests. Omit or use Infinity for no limit. */
   maxToolRounds?: number;
@@ -53,7 +60,7 @@ export interface PiRunnerOptions {
 
 /** Keep Pi's provider/auth plumbing and filesystem capabilities out of Braid's core. */
 export function createPiRunner(
-  registry: Pick<ModelRegistry, "find" | "complete">,
+  registry: Pick<ModelRegistry, "find" | "complete"> & Partial<Pick<ModelRegistry, "stream">>,
   onUsageOrOptions?: ((usage: Usage) => void) | PiRunnerOptions,
   cwd = process.cwd(),
 ): ModelRunner {
@@ -100,6 +107,8 @@ export function createPiRunner(
         `Pi model '${name}' is not registered; use an exact provider/modelId from /model`,
       );
 
+    const activity = options.activity?.recorder(request);
+    if (!registry.stream) activity?.limitation("This Pi model registry does not stream; model activity is observed only when a request starts and finishes.");
     const workspace = request.workspace ?? {
       nodeId: request.node.id, mode: "read-only" as const, workingDirectory: sourceDirectory, state: "ready" as const,
     };
@@ -202,6 +211,14 @@ export function createPiRunner(
       tools: allToolDefinitions,
     };
     const toolByName = new Map(fileTools.map((tool) => [tool.name, tool]));
+    const executionId = request.execution.executionId;
+    const transcripts = executionId === undefined ? undefined : options.transcripts;
+    transcripts?.start(executionId!, request.node.id, workingDirectory, {
+      prompt: request.node.prompt ?? `Default ${request.node.type} instructions`,
+      goal: request.goal,
+      predecessors: request.predecessors.length,
+      workspace: `${workspace.mode} · ${workingDirectory}`,
+    }, toolByName as unknown as ReadonlyMap<string, ToolDefinition>);
     const systemPrompt = context.systemPrompt!;
     const sessionId = crypto.randomUUID();
     const usage = { inputTokens: 0, outputTokens: 0 };
@@ -241,14 +258,50 @@ export function createPiRunner(
         toolRounds,
         phase: "model",
       });
-      // Registry.complete resolves stored API keys, OAuth, custom headers and endpoints.
-      const response = await registry.complete(model, context, {
+      // The registry resolves stored API keys, OAuth, custom headers and endpoints.
+      // complete() is stream().result(); streaming only adds observation.
+      const requestOptions = {
         signal: request.signal,
         sessionId,
-        cacheRetention: "none",
-        transport: "sse",
+        cacheRetention: "none" as const,
+        transport: "sse" as const,
         maxRetries: 0,
+      };
+      activity?.modelRequest();
+      let response: AssistantMessage;
+      try {
+        if (registry.stream) {
+          const stream = registry.stream(model, context, requestOptions);
+          for await (const event of stream) {
+            if (event.type !== "done" && event.type !== "error") transcripts?.streaming(executionId!, event.partial);
+            if (event.type === "text_delta") activity?.modelStream("text", event.delta);
+            else if (event.type === "thinking_delta") activity?.modelStream("reasoning", event.delta);
+            else if (event.type === "toolcall_start" || event.type === "toolcall_delta") {
+              const block = event.partial.content[event.contentIndex];
+              activity?.modelStream("tool_call", event.type === "toolcall_delta" ? event.delta : "",
+                block?.type === "toolCall" ? block.name : undefined);
+            }
+          }
+          response = await stream.result();
+        } else {
+          response = await registry.complete(model, context, requestOptions);
+        }
+      } catch (error) {
+        activity?.modelError(error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+      transcripts?.assistant(executionId!, response);
+      activity?.modelResponse({
+        text: response.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n\n"),
+        reasoning: response.content.flatMap(block => block.type === "thinking" ? [block.thinking] : []).join("\n\n"),
+        toolCalls: response.content.flatMap(block => block.type === "toolCall" ? [{ id: block.id, name: block.name }] : []),
+        stopReason: response.stopReason,
+        inputTokens: response.usage.input + response.usage.cacheRead + response.usage.cacheWrite,
+        outputTokens: response.usage.output,
       });
+      if (response.stopReason !== "stop" && response.stopReason !== "toolUse") {
+        activity?.modelError(response.errorMessage || `Pi model ended with '${response.stopReason}'`);
+      }
       actualModel = `${response.provider}/${response.responseModel ?? response.model}`;
       const providerContextTokens =
         response.usage.input +
@@ -323,7 +376,12 @@ export function createPiRunner(
           call.id,
           args,
           request.signal,
-          undefined,
+          // Bash sends cumulative, throttled output snapshots.
+          (partial) => {
+            activity?.toolOutput(call.id, partial.content
+              .flatMap(block => block.type === "text" ? [block.text] : []).join(""), "replace");
+            transcripts?.toolUpdate(executionId!, call.id, { content: partial.content, details: partial.details });
+          },
         );
         const result = ["write", "edit", "bash", "powershell"].includes(call.name) && request.withWorkspaceWrite
           ? await request.withWorkspaceWrite(execute)
@@ -346,6 +404,28 @@ export function createPiRunner(
           true,
         );
       }
+    };
+
+    const executeCall = async (call: ToolCall): Promise<ToolResultMessage> => {
+      if (call.name !== "decide") return executeFileTool(call);
+      if (request.node.type !== "decision") {
+        return toolResult(call, "decide is available only on decision nodes", true);
+      }
+      const args = call.arguments;
+      if (
+        !args ||
+        Array.isArray(args) ||
+        Object.keys(args).length !== 1 ||
+        typeof args.choice !== "string"
+      ) {
+        throw new Error(
+          "decide requires exactly one string argument: choice",
+        );
+      }
+      // No coercion or prose parsing: the core enforces the enum and exactly one call.
+      request.decide!(args.choice);
+      decided = true;
+      return toolResult(call, JSON.stringify({ choice: args.choice }), false);
     };
 
     while (true) {
@@ -390,37 +470,19 @@ export function createPiRunner(
       const results: ToolResultMessage[] = [];
       for (const call of calls) {
         request.signal.throwIfAborted();
-        if (call.name === "decide") {
-          if (request.node.type !== "decision") {
-            results.push(
-              toolResult(
-                call,
-                "decide is available only on decision nodes",
-                true,
-              ),
-            );
-            continue;
-          }
-          const args = call.arguments;
-          if (
-            !args ||
-            Array.isArray(args) ||
-            Object.keys(args).length !== 1 ||
-            typeof args.choice !== "string"
-          ) {
-            throw new Error(
-              "decide requires exactly one string argument: choice",
-            );
-          }
-          // No coercion or prose parsing: the core enforces the enum and exactly one call.
-          request.decide!(args.choice);
-          decided = true;
-          results.push(
-            toolResult(call, JSON.stringify({ choice: args.choice }), false),
-          );
-        } else {
-          results.push(await executeFileTool(call));
+        activity?.toolStart(call.id, call.name, call.arguments);
+        transcripts?.toolStart(executionId!, call.id);
+        let result: ToolResultMessage;
+        try {
+          result = await executeCall(call);
+        } catch (error) {
+          activity?.toolEnd(call.id, error instanceof Error ? error.message : String(error), true);
+          throw error;
         }
+        activity?.toolEnd(call.id, result.content
+          .flatMap(block => block.type === "text" ? [block.text] : []).join("\n"), result.isError);
+        transcripts?.toolResult(executionId!, result);
+        results.push(result);
       }
       context.messages.push(...results);
       if (decided) {

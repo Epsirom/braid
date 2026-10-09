@@ -14,7 +14,8 @@ function parseRequest(value: unknown, method: string): unknown {
     !["cancel", "resume"].includes(String(r.action)) || !Number.isSafeInteger(r.revision) || Number(r.revision) < 0 ||
     !Array.isArray(r.executionIds) || r.executionIds.length > 10000 || r.executionIds.some(v => typeof v !== "string" || !v || v.length > 1024)
   )) throw new Error("Invalid Braid control request");
-  if (method === "detail" && (!id("executionId") || !Number.isSafeInteger(r.offset) || Number(r.offset) < 0)) throw new Error("Invalid execution or offset");
+  if (method === "detail" && (!id("executionId") || !Number.isSafeInteger(r.offset) || Number(r.offset) < 0 ||
+    (r.activityBefore !== undefined && (!Number.isSafeInteger(r.activityBefore) || Number(r.activityBefore) < 1)))) throw new Error("Invalid execution, offset, or activity page");
   return value;
 }
 export const panelDescriptors: InvocationDescriptor[] = ["watch", "control", "detail"].map(method => ({

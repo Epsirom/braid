@@ -6,12 +6,12 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { BraidPanelView } from "../../client/Panel.js";
 import { layoutGraph } from "../../client/layout.js";
-import type { ControlRequest, PanelApi, PanelFrame } from "../../panel-types.js";
+import type { ControlRequest, DetailRequest, PanelApi, PanelFrame } from "../../panel-types.js";
 
 const fixture: PanelFrame = {
   rows: [{ jobId: "uuid-a", handle: "job-1", goal: "Review and implement", status: "running", createdAt: 0 }],
   job: { jobId: "uuid-a", handle: "job-1", goal: "Review and implement", status: "running", createdAt: 0,
-    revision: 4, phase: "waiting", nodes: [{ id: "review", type: "execute", status: "completed" }, { id: "apply", type: "integrate", status: "pending" }],
+    revision: 4, phase: "waiting", observedAt: 0, nodes: [{ id: "review", type: "execute", status: "completed" }, { id: "apply", type: "integrate", status: "pending" }],
     edges: [{ from: "review", to: "apply" }], loops: [], pausedExecutionIds: ["review@1"],
     usage: { inputTokens: 100, outputTokens: 25, cacheReadTokens: 10, cacheWriteTokens: 0 },
     executions: [{ id: "review", executionId: "review@1", revision: 3, status: "completed", type: "execute", iteration: 1, latencyMs: 1800 }],
@@ -107,5 +107,58 @@ test("tool navigation selects an older loop execution and reopening the tab rese
     await act(async () => h.root.render(<BraidPanelView key={3} sessionId="owner" api={api} target={{ jobId: "uuid-a", executionId: "missing" }}/>));
     assert.match(document.body.textContent!, /requested execution \(missing\) is no longer available/);
     assert.equal(document.querySelector('[aria-label="Execution output"]'), null);
+  } finally { await h.close(); }
+});
+
+test("running executions show live phase, waits, limitations and pageable activity history", async () => {
+  const h = await setup();
+  const details: DetailRequest[] = [];
+  const data = structuredClone(fixture);
+  const activity = { phase: "model", phaseStartedAt: 10_000, startedAt: 1_000, lastActivityAt: 10_000, lastActivity: "Model request #2 sent",
+    modelRequests: 2, toolCalls: 1, model: { round: 2, startedAt: 10_000, streamEvents: 0, receivedChars: 0 }, tools: [],
+    limitations: ["Provider stream events are unavailable"], sequence: 60, droppedEntries: 0 };
+  data.job!.observedAt = 130_000;
+  data.job!.nodes[0]!.status = "running";
+  data.job!.pausedExecutionIds = [];
+  data.job!.executions[0] = { ...data.job!.executions[0]!, status: "running", activity };
+  const entry = (sequence: number) => ({ sequence, timestamp: 1_000 + sequence * 100, kind: sequence === 59 ? "tool_call" : "lifecycle",
+    summary: sequence === 59 ? "bash npm test" : `entry ${sequence}`, ...(sequence === 59 ? { detail: '{"command":"npm test"}' } : {}) });
+  let latest = 60, push!: () => void;
+  const api: PanelApi = { ...h.api,
+    async *watch(_request, signal) {
+      yield data;
+      await new Promise<void>(resolve => { push = resolve; });
+      yield { ...data, job: { ...data.job!, executions: [{ ...data.job!.executions[0]!, activity: { ...activity, sequence: latest } }] } };
+      await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+    },
+    detail: async request => {
+      details.push(request);
+      const before = request.activityBefore ?? latest + 1;
+      const entries = Array.from({ length: Math.min(50, before - 1) }, (_, index) => entry(before - Math.min(50, before - 1) + index));
+      return { executionId: request.executionId, status: "running", output: "", offset: 0, next: 0, total: 0, activity: { ...activity, entries } };
+    },
+  };
+  try {
+    await act(async () => h.root.render(<BraidPanelView sessionId="owner" api={api}/>));
+    const text = document.body.textContent!;
+    assert.match(text, /Phasemodel · 2m 0s/);
+    assert.match(text, /Last activity2m 0s ago · Model request #2 sent/);
+    assert.match(text, /Model request #2sent 2m 0s ago · no stream events yet/);
+    assert.match(text, /Unavailable: Provider stream events are unavailable/);
+    assert.match(text, /a quiet worker is not necessarily stalled/);
+    assert.match(text, /Activity history \(60\)/);
+    assert.equal(document.querySelectorAll(".br-activity-log > li").length, 50);
+    assert.match(document.querySelector(".br-activity-log")!.textContent!, /bash npm test/);
+    await h.click("Load earlier activity");
+    assert.equal(details.at(-1)!.activityBefore, 11);
+    assert.equal(document.querySelectorAll(".br-activity-log > li").length, 60);
+    assert.match(document.querySelector(".br-activity-log > li")!.textContent!, /entry 1/);
+    assert.ok(!document.body.textContent!.includes("Load earlier activity"));
+    // New entries slide the latest window past entries 11-12; the view stays contiguous.
+    latest = 62;
+    await act(async () => { push(); await new Promise(resolve => setTimeout(resolve, 0)); });
+    const sequences = [...document.querySelectorAll(".br-activity-log time")].length;
+    assert.equal(sequences, 62);
+    assert.match(document.querySelector(".br-activity-log")!.textContent!, /entry 11.*entry 12.*entry 62/s);
   } finally { await h.close(); }
 });

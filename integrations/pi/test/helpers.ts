@@ -1,9 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import { initTheme, type ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after } from "node:test";
+
+// Pi initializes its global theme at startup; chat components in the session view need it.
+initTheme("dark");
 
 // General provider/job tests use a real non-Git directory. Git worktree behavior
 // has separate integration fixtures, so tests never register worktrees in this repo.

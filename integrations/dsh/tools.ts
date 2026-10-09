@@ -10,6 +10,8 @@ import type { BraidJobs, JobSnapshot } from "./jobs.js";
 
 const id = Type.String({ minLength: 1, pattern: "\\S" });
 const revision = Type.Integer({ minimum: 0 });
+/** Focused reads return the latest activity entries; activityBefore pages earlier ones. */
+export const STATUS_ACTIVITY_ENTRIES = 40;
 
 export function graphReceipt(job: JobSnapshot) {
   return {
@@ -49,8 +51,9 @@ export function createBraidTools(
   }
   return [
     tool("braid", "Start a background Braid graph before nontrivial engineering work with independent concerns. Returns jobId immediately. Supports execute/decision/merge/integrate, promptTemplates, bounded loops, worktree isolation, pauseAfter and notifyOnCompletion. Omit workspace on merge/integrate. No automatic integration. Continue independent work; retrieve results after the completion reminder instead of polling.", braidParameters, submit),
-    tool("braid_status", "Retrieve progress and results by exact jobId handle or UUID. Omit all IDs to list this agent's jobs. executionId selects an exact invocation; nodeId selects its latest invocation. Control fields contain the CURRENT revision and paused IDs. Large results provide a fullOutputPath. usage includes completed provider rounds from failed workers and cache tokens; reads do not add charges.", Type.Object({
+    tool("braid_status", "Retrieve progress and results by exact jobId handle or UUID. Omit all IDs to list this agent's jobs. executionId selects an exact invocation; nodeId selects its latest invocation. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and the latest " + STATUS_ACTIVITY_ENTRIES + " history entries; activityBefore pages earlier entries. Lack of observed activity is a diagnostic signal, not proof of a stall. Control fields contain the CURRENT revision and paused IDs. Large results provide a fullOutputPath. usage includes completed provider rounds from failed workers and cache tokens; reads do not add charges.", Type.Object({
       jobId: Type.Optional(id), nodeId: Type.Optional(id), executionId: Type.Optional(id),
+      activityBefore: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
     }, { additionalProperties: false }), (args, context) => {
       const jobs = getJobs(context);
       if (!args.jobId) {
@@ -58,11 +61,20 @@ export function createBraidTools(
         return { jobs: jobs.list() };
       }
       const job = jobs.get(args.jobId);
-      return args.nodeId || args.executionId ? {
+      if (args.activityBefore !== undefined && !args.nodeId && !args.executionId) throw new Error("activityBefore requires nodeId or executionId");
+      if (!args.nodeId && !args.executionId) return job;
+      const node = jobs.getNode(args.jobId, args.nodeId, args.executionId);
+      const activity = node.executionId ? jobs.getActivity(args.jobId, node.executionId, {
+        limit: STATUS_ACTIVITY_ENTRIES, ...(args.activityBefore === undefined ? {} : { before: args.activityBefore }),
+      }) : undefined;
+      // While running, activity is the useful part; afterwards the output is.
+      const running = activity && activity.finishedAt === undefined;
+      const live = activity ? { observedAt: Date.now(), activity } : {};
+      return {
         jobId: job.jobId, handle: job.handle, status: job.status,
         execution: { status: job.execution.status, revision: job.execution.revision, pausedExecutionIds: job.execution.pausedExecutionIds },
-        node: jobs.getNode(args.jobId, args.nodeId, args.executionId),
-      } : job;
+        ...(running ? live : {}), node, ...(running ? {} : live),
+      };
     }),
     tool("braid_cancel", "Cancel a background job. Foreground cancellation does not stop Braid jobs.", Type.Object({ jobId: id }, { additionalProperties: false }), (args, context) => {
       const jobs = getJobs(context), job = jobs.get(args.jobId);

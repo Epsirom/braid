@@ -366,6 +366,25 @@ or rejecting does not change scheduler behavior. The Pi panel displays current
 topology, iterations, pause gates, and a bounded event preview; complete history
 remains available in the result.
 
+### Live execution activity
+
+Lifecycle events say when an invocation starts and ends, not what it is doing in
+between. `ExecutionActivityTracker` is an optional, host-neutral helper for
+adapters that want to show that. Feed it core events with `observe(event)`, give
+each runner invocation `tracker.recorder(request)`, and call
+`workerFinished(executionId)` after the runner returns. The recorder accepts model
+requests, stream deltas, responses, errors, and tool start/output/end calls.
+`get(executionId, { before, limit })` returns one invocation's current phase
+(`workspace`, `worker`, `model`, `tool`, `finalizing`, `completed`, or `failed`),
+when that phase began, the last observed signal, the in-flight model request and
+running tools, declared host `limitations`, and a page of chronological entries.
+Histories are keyed by execution ID, so repeated loop visits stay separate.
+Entries and details are bounded (200 entries and 2,000 characters per detail by
+default); finished invocations beyond the newest 50 keep only their summary.
+`formatActivityStatus(activity, now)` renders a one-line summary. Recorder calls
+never throw and do not change scheduling or results. Time without new activity is
+a diagnostic signal, not a stall verdict.
+
 ## Context isolation and model runners
 
 The core accepts a `ModelRunner` function with this contract:

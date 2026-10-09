@@ -2,17 +2,20 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { render as renderMermaid } from "grok-mermaid";
 import {
   Text,
+  sliceByColumn,
   stripTerminalSequences,
   truncateToWidth,
   visibleWidth,
   type Component,
 } from "@earendil-works/pi-tui";
-import type {
-  BraidResult,
-  ExecutionError,
-  ExecutionEvent,
-  NodeResult,
-  NodeWorkspace as PiNodeWorkspace,
+import {
+  formatActivityStatus,
+  type BraidResult,
+  type ExecutionActivity,
+  type ExecutionError,
+  type ExecutionEvent,
+  type NodeResult,
+  type NodeWorkspace as PiNodeWorkspace,
 } from "@chrok/braid";
 import type { PiNodeProgress } from "./runner.js";
 
@@ -44,10 +47,18 @@ export type BraidToolDetails =
 type Palette = Pick<Theme, "fg" | "bg" | "bold">;
 
 class FixedLines implements Component {
+  /**
+   * A too-wide chart is cropped to the terminal width around the first
+   * `focusMarks` entry drawn in it (the selected node, then a running node),
+   * or from its left edge. `fallback` (a node list while selecting) appears when
+   * there is no chart, or when the selected node cannot be found in it.
+   */
   constructor(
     private readonly lines: string[],
     private readonly chartStart = lines.length,
     private readonly chartLength = 0,
+    private readonly fallback: readonly string[] = [],
+    private readonly focusMarks: readonly { mark: string; label: string }[] = [],
   ) {}
 
   render(width: number): string[] {
@@ -55,19 +66,22 @@ class FixedLines implements Component {
       this.chartStart,
       this.chartStart + this.chartLength,
     );
-    if (chart.length === 0)
+    const fallback = this.fallback.map((line) => truncateToWidth(line, width, ""));
+    if (chart.length === 0 && fallback.length === 0)
       return this.lines.map((line) => truncateToWidth(line, width, ""));
-    const chartWidth = Math.max(...chart.map((line) => visibleWidth(line)));
-    const chartOutput =
-      chartWidth <= width
-        ? chart
-        : [
-            truncateToWidth(
-              `[Flowchart needs ${chartWidth} columns; terminal width is ${width}. Expand your terminal to see it.]`,
-              width,
-              "",
-            ),
-          ];
+    const chartWidth = chart.length ? Math.max(...chart.map((line) => visibleWidth(line))) : 0;
+    let chartOutput = chart;
+    if (!chart.length) chartOutput = fallback;
+    else if (chartWidth > width) {
+      const focus = this.focus(chart);
+      const start = focus === undefined ? 0 : Math.max(0, Math.min(chartWidth - width, focus.column - Math.floor(width / 2)));
+      chartOutput = [
+        truncateToWidth(`[chart ${start + 1}–${start + width} of ${chartWidth} cols${focus ? ` · ${focus.label}` : ""}]`, width, ""),
+        ...chart.map((line) => sliceByColumn(line, start, width, true)),
+        // The first mark is the selection; list nodes if it is not drawn.
+        ...(this.focusMarks.length && focus?.mark !== this.focusMarks[0]!.mark ? fallback : []),
+      ];
+    }
     const output: string[] = [];
     let chartInserted = false;
     for (let index = 0; index < this.lines.length; index++) {
@@ -84,6 +98,22 @@ class FixedLines implements Component {
     }
     if (!chartInserted) output.push(...chartOutput);
     return output;
+  }
+
+  /** The first focus mark drawn in the chart and its centre column. */
+  private focus(chart: readonly string[]): { mark: string; label: string; column: number } | undefined {
+    for (const { mark, label } of this.focusMarks) {
+      for (const line of chart) {
+        const plain = stripTerminalSequences(line);
+        const index = plain.indexOf(mark);
+        if (index < 0) continue;
+        // Centre on the label: from the mark to the node's right border, when drawn.
+        const border = plain.indexOf("│", index);
+        const end = border < 0 ? index : border;
+        return { mark, label, column: Math.floor((visibleWidth(plain.slice(0, index)) + visibleWidth(plain.slice(0, end))) / 2) };
+      }
+    }
+    return undefined;
   }
 
   invalidate(): void {}
@@ -175,9 +205,13 @@ function nodeElapsed(node: NodeResult, now: number): string {
   return "—";
 }
 
+/** Replaces the selected node's one-column status icon, so selection never moves the layout. */
+export const SELECTED_NODE_MARK = "◆";
+
 function mermaidLabelLines(
   id: string,
   result: BraidResult | BraidLiveState,
+  selected = false,
 ): string[] {
   const progress = "progress" in result ? result.progress?.[id] : undefined;
   const node = result.nodes[id];
@@ -198,7 +232,7 @@ function mermaidLabelLines(
   const now = "observedAt" in result ? result.observedAt : Date.now();
   const iteration = "executions" in result ? result.executions[node.executionId ?? ""]?.iteration : result.iterations?.[id];
   const lines = [
-    `${icon} ${compact(id, 24)}${iteration ? ` #${iteration}` : ""}`,
+    `${selected ? SELECTED_NODE_MARK + icon.slice(1) : icon} ${compact(id, 24)}${iteration ? ` #${iteration}` : ""}`,
     `${status}${decision} · ${nodeElapsed(node, now)}`,
   ];
   if (progress) {
@@ -214,7 +248,7 @@ function mermaidLabelLines(
   return lines;
 }
 
-function mermaidSource(result: BraidResult | BraidLiveState): string {
+function mermaidSource(result: BraidResult | BraidLiveState, selected?: string): string {
   const parts = graphParts(result);
   const ids = Object.keys(parts.nodes);
   const names = new Map(ids.map((id, index) => [id, `n${index}`]));
@@ -241,7 +275,7 @@ function mermaidSource(result: BraidResult | BraidLiveState): string {
     const shape = parts.nodeTypes[id] === "decision" ? "{" : "[";
     const close = parts.nodeTypes[id] === "decision" ? "}" : "]";
     lines.push(
-      `  ${names.get(id)}${shape}"${mermaidLabelLines(id, result).map(escapeMermaidText).join("<br/>")}"${close}`,
+      `  ${names.get(id)}${shape}"${mermaidLabelLines(id, result, id === selected).map(escapeMermaidText).join("<br/>")}"${close}`,
     );
   }
   for (const edge of parts.edges) {
@@ -255,8 +289,15 @@ function mermaidSource(result: BraidResult | BraidLiveState): string {
 function mermaidLines(
   result: BraidResult | BraidLiveState,
   theme: Palette,
+  selected?: string,
 ): string[] {
-  const art = renderMermaid(mermaidSource(result));
+  let art: ReturnType<typeof renderMermaid>;
+  try {
+    art = renderMermaid(mermaidSource(result, selected));
+  } catch {
+    // The chart is a view of state already listed elsewhere; never fail the panel for it.
+    return [];
+  }
   if (!art) return [];
   return art.styled.map((row) =>
     row
@@ -265,6 +306,8 @@ function mermaidLines(
           case "border":
             return theme.fg("borderMuted", span.text);
           case "text":
+            if (selected !== undefined && span.text.includes(SELECTED_NODE_MARK))
+              return theme.bg("selectedBg", theme.bold(theme.fg("warning", span.text)));
             return span.text.includes("▶ ACTIVE")
               ? theme.bg(
                   "selectedBg",
@@ -527,6 +570,47 @@ export function applyProgress(
   });
 }
 
+export const COLLAPSED_ACTIVITY_ENTRIES = 6;
+
+/** Live phase, waits, and chronological history; absence of activity is shown, not judged. */
+export function renderActivity(
+  activity: ExecutionActivity,
+  expanded: boolean,
+  theme: Palette,
+  now: number,
+  part: "all" | "summary" | "history" = "all",
+): string[] {
+  const ago = (at: number) => elapsed(Math.max(0, now - at));
+  if (part === "history") return renderActivity(activity, expanded, theme, now).slice(renderActivity(activity, expanded, theme, now, "summary").length);
+  const lines = [theme.fg(activity.finishedAt === undefined ? "accent" : "muted", `activity: ${compact(formatActivityStatus(activity, now), 200)}`)];
+  const model = activity.model;
+  if (model && model.completedAt === undefined) {
+    lines.push(theme.fg("muted", model.firstStreamAt === undefined
+      ? `  model request #${model.round} sent ${ago(model.startedAt)} ago · no stream events received yet`
+      : `  model request #${model.round} sent ${ago(model.startedAt)} ago · ${model.streamEvents} stream events, ${compactCount(model.receivedChars)} chars · last ${ago(model.lastStreamAt!)} ago`));
+    if (model.tail) lines.push(theme.fg("dim", `  receiving ${model.receiving === "tool_call" ? `${compact(model.toolName ?? "tool call", 40)} arguments` : model.receiving ?? "output"}: …${compact(model.tail, 160)}`));
+  }
+  for (const tool of activity.tools) {
+    lines.push(theme.fg("warning", `  tool ${compact(tool.name, 40)} running ${ago(tool.startedAt)} · ${tool.lastOutputAt === undefined ? "no output yet" : `last output ${ago(tool.lastOutputAt)} ago`}`));
+    lines.push(theme.fg("dim", `    args: ${compact(tool.arguments, 200)}`));
+    if (tool.outputTail) lines.push(theme.fg("dim", `    output: …${compact(tool.outputTail, 200)}`));
+  }
+  for (const limitation of activity.limitations) lines.push(theme.fg("muted", `  unavailable: ${compact(limitation, 200)}`));
+  if (part === "summary") return lines;
+  const visible = expanded ? activity.entries : activity.entries.slice(-COLLAPSED_ACTIVITY_ENTRIES);
+  const hidden = activity.droppedEntries + activity.entries.length - visible.length;
+  lines.push(theme.fg("dim", `history · ${activity.sequence} events${hidden ? ` · ${hidden} earlier ${expanded ? "trimmed" : "hidden (expand for more)"}` : ""}:`));
+  for (const entry of visible) {
+    const color = entry.isError ? "error" : entry.kind === "tool_call" ? "accent" : entry.kind === "assistant" ? "text" : "muted";
+    lines.push(theme.fg(color, `  ${`+${elapsed(Math.max(0, entry.timestamp - activity.startedAt))}`.padStart(7)} ${compact(entry.summary, 200)}`));
+    // Show a detail preview only when the summary line does not already contain it.
+    if (expanded && entry.detail && entry.kind !== "workspace" && !compact(entry.summary, 400).includes(compact(entry.detail, 400))) {
+      lines.push(theme.fg("dim", `          ${compact(entry.detail, 300)}${entry.detailLength ? ` (${compactCount(entry.detailLength)} chars)` : ""}`));
+    }
+  }
+  return lines;
+}
+
 /** Focused status reads must show the requested execution, including historical ones. */
 export function renderNodeResult(
   node: NodeResult & { iteration?: number },
@@ -535,6 +619,7 @@ export function renderNodeResult(
   fullOutputPath?: string,
   progress?: PiNodeProgress,
   now = Date.now(),
+  activity?: ExecutionActivity,
 ): Component {
   const failed = node.status === "failed";
   const clean = (value: string) => stripTerminalSequences(value).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, "");
@@ -559,11 +644,59 @@ export function renderNodeResult(
     ...(node.decision ? [theme.fg("accent", `decision: ${compact(node.decision, 80)}`)] : []),
     ...(node.error ? [theme.fg("error", `${node.error.code}: ${clean(node.error.message)}`)] : []),
     ...(node.skipReason ? [theme.fg("muted", `skipped: ${node.skipReason}`)] : []),
+    // Activity describes one execution; never mix histories from repeated visits.
+    ...(activity && activity.executionId === node.executionId ? renderActivity(activity, expanded, theme, now) : []),
     ...(node.output ? [expanded ? clean(node.output) : compact(node.output, 400)] : []),
     ...(!expanded && node.output && (node.output.length > 400 || node.output.includes("\n")) ? [theme.fg("dim", "Expand for full node output")] : []),
     ...(fullOutputPath ? [theme.fg("dim", `full node result: ${compact(fullOutputPath, 240)}`)] : []),
   ];
   return new Text(lines.join("\n"), 0, 0);
+}
+
+/** Status, timing, and live waits above a node's session transcript. */
+export function renderSessionHeader(
+  node: NodeResult & { iteration?: number },
+  theme: Palette,
+  now: number,
+  progress?: PiNodeProgress,
+  activity?: ExecutionActivity,
+): string[] {
+  const failed = node.status === "failed";
+  const live = progress && (!progress.executionId || progress.executionId === node.executionId) ? progress : undefined;
+  const facts = [
+    ...(node.executionId ? [compact(node.executionId, 80)] : []),
+    ...(node.iteration ? [`iteration #${node.iteration}`] : []),
+    ...(node.model ? [compact(node.model, 60)] : []),
+    ...(node.startedAt !== undefined || node.latencyMs !== undefined ? [`elapsed ${nodeElapsed(node, now)}`] : []),
+    ...(node.usage ? [`${compactCount(node.usage.inputTokens)} in / ${compactCount(node.usage.outputTokens)} out tokens`] : []),
+  ];
+  return [
+    theme.fg(failed ? "error" : "accent", `${failed ? "✗" : node.status === "completed" ? "✓" : node.status === "running" ? "▶" : "○"} Braid node ${compact(node.id, 80)} · ${node.status}`),
+    ...(facts.length ? [theme.fg("muted", facts.join(" · "))] : []),
+    ...(live ? [theme.fg("muted", `context ${live.contextSource === "estimate" ? "~" : ""}${compactCount(live.contextTokens)}/${live.contextWindow === undefined ? "—" : compactCount(live.contextWindow)} · ${live.toolCalls} tool calls in ${live.toolRounds} rounds · ${live.phase} phase`)] : []),
+    ...(activity && activity.executionId === node.executionId ? renderActivity(activity, false, theme, now, "summary") : []),
+    ...(node.error ? [theme.fg("error", `${node.error.code}: ${compact(node.error.message, 300)}`)] : []),
+  ];
+}
+
+/** What a node view shows below its pinned header when no live session is retained. */
+export function renderNodeDetails(
+  node: NodeResult,
+  theme: Palette,
+  now: number,
+  activity?: ExecutionActivity,
+): string[] {
+  const clean = (value: string) => stripTerminalSequences(value).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, "");
+  const workspace = node.workspace;
+  const workspaceActive = workspace && ["preparing", "ready", "failed"].includes(workspace.state);
+  const workspaceRef = workspaceActive ? workspace.worktreeRoot : workspace?.checkpointRef ?? workspace?.reason;
+  return [
+    ...(workspace ? [theme.fg("dim", `workspace: ${workspace.mode} · ${workspace.state}${workspaceRef ? ` · ${compact(workspaceRef, 160)}` : ""}`)] : []),
+    ...(node.decision ? [theme.fg("accent", `decision: ${compact(node.decision, 80)}`)] : []),
+    ...(node.skipReason ? [theme.fg("muted", `skipped: ${node.skipReason}`)] : []),
+    ...(activity && activity.executionId === node.executionId ? renderActivity(activity, true, theme, now, "history") : []),
+    ...(node.output ? ["", ...clean(node.output).split("\n")] : []),
+  ];
 }
 
 export function renderGraphResult(
@@ -573,6 +706,7 @@ export function renderGraphResult(
   theme: Palette,
   fallback = "",
   isError = false,
+  selectedNodeId?: string,
 ): Component {
   if (isError || !result?.nodes) {
     const message =
@@ -620,8 +754,17 @@ export function renderGraphResult(
   if ("pausedExecutionIds" in result && result.pausedExecutionIds?.length) lines.push(theme.fg("warning", `${result.pausedExecutionIds.length} paused executions · revision ${result.revision ?? 0}`));
   if ("executions" in result) lines.push(theme.fg("dim", `${Object.keys(result.executions).length} executions · revision ${result.revision}`));
   const chartStart = lines.length;
-  const chart = mermaidLines(result, theme);
+  const chart = mermaidLines(result, theme, selectedNodeId);
   lines.push(...chart);
+  // Selection must stay usable when the chart cannot be drawn or does not fit.
+  const nodeList = selectedNodeId === undefined ? [] : [
+    theme.fg("dim", chart.length ? "nodes (selected node not found in the flowchart):" : "nodes (flowchart unavailable):"),
+    ...Object.keys(graphParts(result).nodes).map(id => {
+      const node = result.nodes[id];
+      const text = `${id === selectedNodeId ? `${SELECTED_NODE_MARK} ` : "  "}${compact(id, 60)} · ${node?.status ?? "pending"}`;
+      return id === selectedNodeId ? theme.bg("selectedBg", theme.bold(theme.fg("warning", text))) : theme.fg("muted", text);
+    }),
+  ];
   const workspaces = Object.values(result.workspaces ?? {}).filter(workspace => workspace.worktreeRoot);
   if (workspaces.length) {
     const active = workspaces.filter(workspace => ["preparing", "ready", "failed"].includes(workspace.state)).length;
@@ -641,5 +784,8 @@ export function renderGraphResult(
         `full result/log: ${compact(result.fullOutputPath, 240)}`,
       ),
     );
-  return new FixedLines(lines, chartStart, chart.length);
+  return new FixedLines(lines, chartStart, chart.length, nodeList, [
+    ...(selectedNodeId === undefined ? [] : [{ mark: SELECTED_NODE_MARK, label: "selected node" }]),
+    { mark: "▶ ACTIVE", label: "running node" },
+  ]);
 }

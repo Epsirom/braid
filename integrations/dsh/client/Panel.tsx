@@ -1,11 +1,59 @@
 import * as React from "react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { PanelApi, PanelDetail, PanelExecution, PanelFrame, PanelJob } from "../panel-types.js";
+import type { PanelActivity, PanelActivityEntry, PanelApi, PanelDetail, PanelExecution, PanelFrame, PanelJob } from "../panel-types.js";
 import { layoutGraph } from "./layout.js";
 import type { BraidNavigation } from "./navigation.js";
 
 const number = (n: number) => n.toLocaleString();
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+const duration = (ms: number) => {
+  const value = Math.max(0, ms);
+  return value < 60_000 ? `${(value / 1000).toFixed(1)}s` : `${Math.floor(value / 60_000)}m ${Math.floor((value % 60_000) / 1000)}s`;
+};
+
+/** Host time for this frame, advanced locally so idle times keep counting between frames. */
+function useHostClock(job: PanelJob, live: boolean): number {
+  const receivedAt = useMemo(() => Date.now(), [job]);
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    setClock(Date.now());
+    if (!live) return;
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [job, live]);
+  return job.observedAt + Math.max(0, clock - receivedAt);
+}
+
+function ActivityView({ activity, entries, now, loadEarlier }: { activity: PanelActivity; entries?: PanelActivityEntry[]; now: number; loadEarlier?: () => void }) {
+  const end = activity.finishedAt ?? now;
+  const model = activity.model;
+  const running = activity.finishedAt === undefined;
+  return <div className="br-activity" aria-label="Live activity">
+    <div className="br-detail-grid">
+      <div><span>Phase</span>{activity.phase} · {duration(end - activity.phaseStartedAt)}</div>
+      <div><span>Last activity</span>{running ? `${duration(now - activity.lastActivityAt)} ago` : "—"} · {activity.lastActivity}</div>
+      <div><span>Total</span>{duration(end - activity.startedAt)}</div>
+      {model && <div><span>Model request #{model.round}</span>{model.completedAt !== undefined
+        ? `returned after ${duration(model.completedAt - model.startedAt)}`
+        : model.firstStreamAt === undefined
+          ? `sent ${duration(now - model.startedAt)} ago · no stream events yet`
+          : `streaming ${model.receiving ?? "output"}${model.toolName ? ` (${model.toolName})` : ""} · ${number(model.receivedChars)} chars · last ${duration(now - (model.lastStreamAt ?? model.firstStreamAt))} ago`}</div>}
+      {activity.tools.map(tool => <div key={tool.callId}><span>Running tool</span>{tool.name} · {duration(now - tool.startedAt)} · {tool.lastOutputAt === undefined ? "no output yet" : `last output ${duration(now - tool.lastOutputAt)} ago`}</div>)}
+    </div>
+    {model?.completedAt === undefined && model?.tail && <pre className="br-output br-tail" aria-label="Latest streamed output">…{model.tail}</pre>}
+    {activity.tools.map(tool => <details key={tool.callId}><summary>{tool.name} arguments{tool.outputTail ? " and latest output" : ""}</summary><pre className="br-output">{tool.arguments}{tool.outputTail ? `\n\n…${tool.outputTail}` : ""}</pre></details>)}
+    {activity.limitations.map(text => <p className="br-note" key={text}>Unavailable: {text}</p>)}
+    {running && <p className="br-note">Times since the last observed signal are diagnostic; a quiet worker is not necessarily stalled.</p>}
+    {entries && <details open={running}><summary>Activity history ({activity.sequence})</summary>
+      {(entries[0]?.sequence ?? activity.sequence + 1) > activity.droppedEntries + 1 && loadEarlier && <button onClick={loadEarlier}>Load earlier activity</button>}
+      {activity.droppedEntries > 0 && (entries[0]?.sequence ?? 0) <= activity.droppedEntries + 1 && <p className="br-note">{activity.droppedEntries} earlier entries were trimmed to bound memory.</p>}
+      <ol className="br-events br-activity-log">{entries.map(entry => <li key={entry.sequence} data-error={entry.isError ? "" : undefined}>
+        <time>+{duration(entry.timestamp - activity.startedAt)}</time>
+        <div><p>{entry.summary}</p>{entry.detail && entry.detail !== entry.summary && <details><summary>Details{entry.detailLength ? ` (${number(entry.detailLength)} characters, preview)` : ""}</summary><pre className="br-output">{entry.detail}</pre></details>}</div>
+      </li>)}</ol>
+    </details>}
+  </div>;
+}
 export function Status({ status }: { status: string }) {
   return <span className="br-status" data-status={status}>{status}</span>;
 }
@@ -49,15 +97,37 @@ function ExecutionDetail({ api, sessionId, job, execution }: { api: PanelApi; se
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(0);
   const [retry, setRetry] = useState(0);
+  const [activityBefore, setActivityBefore] = useState<number>();
+  const [earlier, setEarlier] = useState<PanelActivityEntry[]>([]);
+  // New activity refreshes the detail in place; the view is keyed by execution.
+  const sequence = execution.activity?.sequence;
   useEffect(() => {
     let active = true;
-    setDetail(undefined); setError("");
+    setError("");
     void api.detail({ sessionId, jobId: job.jobId, executionId: execution.executionId, offset }).then(value => {
       if (active) setDetail(value);
     }, e => { if (active) setError(message(e)); });
     return () => { active = false; };
-  }, [api, sessionId, job.jobId, job.status, execution.executionId, execution.status, offset, retry]);
+  }, [api, sessionId, job.jobId, job.status, execution.executionId, execution.status, offset, retry, sequence]);
+  useEffect(() => {
+    if (activityBefore === undefined) return;
+    let active = true;
+    void api.detail({ sessionId, jobId: job.jobId, executionId: execution.executionId, offset: 0, activityBefore }).then(value => {
+      if (active) setEarlier(previous => [...(value.activity?.entries ?? []), ...previous]);
+    }, e => { if (active) setError(message(e)); });
+    return () => { active = false; };
+  }, [api, sessionId, job.jobId, execution.executionId, activityBefore]);
   const p = execution.progress;
+  const activity = execution.activity ?? detail?.activity;
+  const now = useHostClock(job, execution.status === "running");
+  // Keep the view contiguous: once earlier pages load, live refreshes extend the
+  // range instead of sliding the latest-entries window away from them.
+  const seen = useRef(new Map<number, PanelActivityEntry>());
+  const latest = detail?.activity?.entries ?? [];
+  const from = earlier[0]?.sequence ?? latest[0]?.sequence ?? Infinity;
+  for (const entry of [...earlier, ...latest]) seen.current.set(entry.sequence, entry);
+  for (const sequence of seen.current.keys()) if (sequence < from) seen.current.delete(sequence);
+  const entries = [...seen.current.values()].sort((a, b) => a.sequence - b.sequence);
   return <>
     <div className="br-detail-grid">
       <div><span>Execution</span>{execution.executionId}</div><div><span>Revision / iteration</span>r{execution.revision} / {execution.iteration ?? "—"}</div>
@@ -66,6 +136,9 @@ function ExecutionDetail({ api, sessionId, job, execution }: { api: PanelApi; se
       <div><span>Context ({p?.contextSource ?? "unreported"})</span>{p ? `${number(p.contextTokens)}${p.contextWindow ? ` / ${number(p.contextWindow)}` : ""}` : "—"}</div>
       <div><span>Tool calls / rounds</span>{p ? `${p.toolCalls} / ${p.toolRounds}` : "—"}</div>
     </div>
+    {activity ? <ActivityView activity={activity} now={now} {...(detail?.activity ? { entries } : {})}
+      loadEarlier={() => { if (entries[0]) setActivityBefore(entries[0].sequence); }}/>
+      : execution.status === "running" && <p className="br-muted" role="status">No worker activity observed yet.</p>}
     {error && <div role="alert">{error} <button onClick={() => setRetry(v => v + 1)}>Retry output</button></div>}
     {!detail && !error && <p className="br-muted" role="status">Loading output…</p>}
     {detail && <>

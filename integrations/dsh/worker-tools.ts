@@ -13,17 +13,18 @@ export interface WorkerTool {
   description: string;
   parameters: Record<string, unknown>;
   writes: boolean;
-  execute(args: unknown): Promise<string>;
+  /** onOutput receives incremental command output where a tool produces it. */
+  execute(args: unknown, onOutput?: (output: string) => void): Promise<string>;
 }
 
 export async function createWorkerTools(request: ModelRequest, workspace: NodeWorkspace): Promise<WorkerTool[]> {
   const cwd = workspace.workingDirectory, signal = request.signal;
   const tools: WorkerTool[] = [];
-  function add<S extends TSchema>(name: string, description: string, parameters: S, writes: boolean, execute: (args: import("@sinclair/typebox").Static<S>) => Promise<string>) {
-    tools.push({ name, description, parameters, writes, async execute(args) {
+  function add<S extends TSchema>(name: string, description: string, parameters: S, writes: boolean, execute: (args: import("@sinclair/typebox").Static<S>, onOutput?: (output: string) => void) => Promise<string>) {
+    tools.push({ name, description, parameters, writes, async execute(args, onOutput) {
       signal.throwIfAborted();
       if (!Value.Check(parameters, args)) throw new Error(`Invalid ${name} arguments: ${[...Value.Errors(parameters, args)].map(error => `${error.path} ${error.message}`).join("; ")}`);
-      const result = await execute(args);
+      const result = await execute(args, onOutput);
       signal.throwIfAborted();
       return result;
     } });
@@ -76,9 +77,9 @@ export async function createWorkerTools(request: ModelRequest, workspace: NodeWo
     });
     const shellParameters = Type.Object({ command: path, timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 2_147_483.647 })) }, { additionalProperties: false });
     add("bash", "Run a foreground shell command in the assigned workspace. timeout is seconds. Output retains the last 50 KB. Host permissions apply; do not daemonize.", shellParameters, true,
-      args => runCommand("bash", ["-c", args.command], cwd, signal, args.timeout));
+      (args, onOutput) => runCommand("bash", ["-c", args.command], cwd, signal, args.timeout, onOutput));
     if (process.platform === "win32") add("powershell", "Run a foreground PowerShell command in the assigned workspace. timeout is seconds.", shellParameters, true,
-      args => runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", args.command], cwd, signal, args.timeout));
+      (args, onOutput) => runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", args.command], cwd, signal, args.timeout, onOutput));
   }
   return tools;
 }
