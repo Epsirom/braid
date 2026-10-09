@@ -8,6 +8,9 @@
   active nodes, paused gates, failures, and retained final status. Keep running
   executions visible after live edits remove their node definitions; use `/braid`
   for the full flow panel.
+- Add Pi `/braid:review [target or focus]`: three parallel reviewers, narrow fixes in
+  isolated worktrees, and at most three review rounds before summarizing and
+  integrating reviewed fixes.
 
 ## 0.3.1 — 2026-10-04
 
