@@ -2,25 +2,45 @@
 
 ## Unreleased
 
+## 0.3.2 — 2026-10-09
+
 ### Features
 
 - Show Pi background-job progress automatically above the input editor, including
   active nodes, paused gates, failures, and retained final status. Keep running
   executions visible after live edits remove their node definitions; use `/braid`
-  for the full flow panel.
+  for the full flow panel
+  ([#52](https://github.com/Epsirom/braid/pull/52)) — @powerfooI.
 - Add Pi `/braid:review [target or focus]`: three parallel reviewers, narrow fixes in
   isolated worktrees, and at most three review rounds before summarizing and
-  integrating reviewed fixes.
+  integrating reviewed fixes
+  ([#53](https://github.com/Epsirom/braid/pull/53)) — @powerfooI.
 - Add `/braid <jobId> <nodeId|executionId>` to open the Pi panel on one node's
   latest or exact invocation, with live status, elapsed time, token and context
   usage, tool calls, workspace, and full output or error. Backspace returns to
   the graph; Tab completes job handles and node IDs. Focused `braid_status`
-  results show the same details at the time of the read.
+  results show the same details at the time of the read
+  ([#54](https://github.com/Epsirom/braid/pull/54)) — @powerfooI.
 
 ### Fixes
 
 - Escape terminal controls in Pi node completions and preserve exact node IDs
-  containing leading/trailing whitespace or quotes with JSON string syntax.
+  containing leading/trailing whitespace or quotes with JSON string syntax
+  ([#54](https://github.com/Epsirom/braid/pull/54)) — @powerfooI.
+
+### Maintenance
+
+- Update esbuild and keep the DSH integration on its React 18 baseline
+  ([#47](https://github.com/Epsirom/braid/pull/47)) — @dependabot[bot].
+
+No migration from 0.3.1 is required. Pi 1.0.1 and DSH 0.2.0-rc.2 remain the
+tested host versions; integrations require Node.js 22.19+.
+
+### New Contributors
+
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.3.1...v0.3.2).
 
 ## 0.3.1 — 2026-10-04
 
