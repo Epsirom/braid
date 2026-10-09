@@ -225,6 +225,17 @@ Use Left/Right to select jobs, Up/Down or Page Up/Page Down to scroll, `c` to
 cancel the selected job, and Escape or `q` to close the panel. Closing the panel
 leaves jobs running. In RPC or noninteractive modes, use `braid_status`.
 
+Run `/braid <jobId> <nodeId>` to open the panel on one node's latest invocation,
+or `/braid <jobId> <executionId>` for an exact invocation such as an earlier loop
+iteration. The node view refreshes live with its status, model, elapsed time,
+token usage, context size, tool-call count, workspace, and full output or error.
+Press Backspace to return to the whole graph; switching jobs also returns to it.
+Tab completes job handles and then that job's node IDs.
+IDs with leading/trailing whitespace, terminal controls, or a leading double
+quote use JSON string syntax, such as `/braid job-1 " review "` or
+`/braid job-1 "review\nstep"`. Tab inserts this form automatically and displays
+control characters as escapes.
+
 The panel renders a Mermaid flowchart, node states, elapsed times, context-token
 estimates or provider-reported usage, context-window sizes, filesystem tool-call
 counts, and the execution log. Active nodes are marked `▶ ACTIVE`. The status

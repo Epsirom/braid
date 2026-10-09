@@ -11,6 +11,16 @@
 - Add Pi `/braid:review [target or focus]`: three parallel reviewers, narrow fixes in
   isolated worktrees, and at most three review rounds before summarizing and
   integrating reviewed fixes.
+- Add `/braid <jobId> <nodeId|executionId>` to open the Pi panel on one node's
+  latest or exact invocation, with live status, elapsed time, token and context
+  usage, tool calls, workspace, and full output or error. Backspace returns to
+  the graph; Tab completes job handles and node IDs. Focused `braid_status`
+  results show the same details at the time of the read.
+
+### Fixes
+
+- Escape terminal controls in Pi node completions and preserve exact node IDs
+  containing leading/trailing whitespace or quotes with JSON string syntax.
 
 ## 0.3.1 — 2026-10-04
 

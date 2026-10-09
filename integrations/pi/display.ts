@@ -528,12 +528,34 @@ export function applyProgress(
 }
 
 /** Focused status reads must show the requested execution, including historical ones. */
-export function renderNodeResult(node: NodeResult, expanded: boolean, theme: Palette, fullOutputPath?: string): Component {
+export function renderNodeResult(
+  node: NodeResult & { iteration?: number },
+  expanded: boolean,
+  theme: Palette,
+  fullOutputPath?: string,
+  progress?: PiNodeProgress,
+  now = Date.now(),
+): Component {
   const failed = node.status === "failed";
   const clean = (value: string) => stripTerminalSequences(value).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, "");
+  const timing = [
+    ...(node.model ? [`model ${compact(node.model, 60)}`] : []),
+    ...(node.iteration ? [`iteration #${node.iteration}`] : []),
+    ...(node.startedAt !== undefined || node.latencyMs !== undefined ? [`elapsed ${nodeElapsed(node, now)}`] : []),
+    ...(node.usage ? [`${compactCount(node.usage.inputTokens)} in / ${compactCount(node.usage.outputTokens)} out tokens`] : []),
+  ];
+  // Progress is tracked per node ID; only show it for the execution it describes.
+  const live = progress && (!progress.executionId || progress.executionId === node.executionId) ? progress : undefined;
+  const workspace = node.workspace;
+  // Cleaned-up worktrees are gone; their checkpoint ref is what can be recovered.
+  const workspaceActive = workspace && ["preparing", "ready", "failed"].includes(workspace.state);
+  const workspaceRef = workspaceActive ? workspace.worktreeRoot : workspace?.checkpointRef ?? workspace?.reason;
   const lines = [
     theme.fg(failed ? "error" : "accent", `${failed ? "✗" : node.status === "completed" ? "✓" : "○"} Braid node ${compact(node.id, 80)} · ${node.status}`),
     ...(node.executionId ? [theme.fg("dim", `execution: ${compact(node.executionId, 80)}`)] : []),
+    ...(timing.length ? [theme.fg("muted", timing.join(" · "))] : []),
+    ...(live ? [theme.fg("muted", `context ${live.contextSource === "estimate" ? "~" : ""}${compactCount(live.contextTokens)}/${live.contextWindow === undefined ? "—" : compactCount(live.contextWindow)} · ${live.toolCalls} tool calls in ${live.toolRounds} rounds · ${live.phase} phase`)] : []),
+    ...(workspace ? [theme.fg("dim", `workspace: ${workspace.mode} · ${workspace.state}${workspaceRef ? ` · ${compact(workspaceRef, 160)}` : ""}`)] : []),
     ...(node.decision ? [theme.fg("accent", `decision: ${compact(node.decision, 80)}`)] : []),
     ...(node.error ? [theme.fg("error", `${node.error.code}: ${clean(node.error.message)}`)] : []),
     ...(node.skipReason ? [theme.fg("muted", `skipped: ${node.skipReason}`)] : []),

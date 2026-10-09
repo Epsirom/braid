@@ -271,7 +271,9 @@ export function createBraidTools(jobs: BraidJobs) {
       const selectedNode = job.selectedNode ?? (executionId
         ? state && Object.hasOwn(state.executions, executionId) ? state.executions[executionId] : undefined
         : nodeId && state && Object.hasOwn(state.nodes, nodeId) ? state.nodes[nodeId] : undefined);
-      if (selectedNode) return renderNodeResult(selectedNode, options.expanded, theme, job.nodeOutputPath);
+      // Render at the read's observation time so a saved result never keeps counting.
+      if (selectedNode) return renderNodeResult(selectedNode, options.expanded, theme, job.nodeOutputPath,
+        job.live.progress?.[selectedNode.id], job.live.observedAt);
       if (executionId || nodeId) return new Text(fallback || "Braid returned no node details", 0, 0);
       if (job.error)
         return new Text(
