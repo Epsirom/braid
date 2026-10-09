@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { SelectList, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { BraidPanel, registerBraidCommand } from "../command.js";
 import { BraidJobs } from "../jobs.js";
 import { context, deferred, input, response } from "./helpers.js";
@@ -326,4 +326,47 @@ test("/braid opens and completes node IDs that contain spaces", async () => {
   assert.match(rendered, /Braid node code review · completed/);
   assert.match(rendered, /spaced output/);
   jobs.dispose();
+});
+
+test("/braid safely completes and opens exact node IDs with whitespace, quotes, and terminal controls", async (t) => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const command = captureCommand(jobs);
+  const ids = [" review ", '"quoted"', "review\x1b[2J\nsecond line", "review\tstep", "review\u2028step\u2029end"];
+  const identity = (value: string) => value;
+  for (const [index, id] of ids.entries()) {
+    const job = jobs.start({ ...input, nodes: [{ type: "execute", id, prompt: "work" }] }, {},
+      context(async () => response(`exact output ${index}`)));
+    await jobs.wait(job.handle);
+    const [item] = command.getArgumentCompletions(`${job.handle} `) as Array<{ value: string; label: string; description: string }>;
+    assert.ok(item);
+    assert.equal(JSON.parse(item.value.slice(job.handle.length + 1)), id);
+    assert.equal(item.label, item.value.slice(job.handle.length + 1));
+    const menu = new SelectList([item], 5, { selectedPrefix: identity, selectedText: identity, description: identity, scrollInfo: identity, noMatch: identity });
+    assert.ok(menu.render(100).every(line => stripTerminalSequences(line) === line && !/[\p{Cc}\u2028\u2029]/u.test(line)));
+    assert.ok(!/[\p{Cc}\u2028\u2029]/u.test(item.value));
+    const prefix = item.value.slice(0, job.handle.length + 4);
+    assert.deepEqual(command.getArgumentCompletions(prefix), [item]);
+    let rendered = "";
+    await command.handler(item.value, {
+      mode: "tui",
+      ui: {
+        custom: async (factory: (...args: unknown[]) => BraidPanel) => {
+          const panel = factory({ requestRender: () => {}, terminal: { rows: 30 } }, theme, {}, () => {});
+          rendered = panel.render(100).join("\n");
+          panel.handleInput("q");
+        },
+      },
+    });
+    assert.ok(rendered.includes(`exact output ${index}`), rendered);
+  }
+});
+
+test("/braid reports malformed quoted node targets before opening a panel", async (t) => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const job = jobs.start(input, {}, context(async () => response()));
+  await jobs.wait(job.handle);
+  const command = captureCommand(jobs);
+  await assert.rejects(command.handler(`${job.handle} "unterminated`, { mode: "tui" }), /quoted.*JSON string/i);
 });

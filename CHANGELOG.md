@@ -10,6 +10,11 @@
   the graph; Tab completes job handles and node IDs. Focused `braid_status`
   results show the same details at the time of the read.
 
+### Fixes
+
+- Escape terminal controls in Pi node completions and preserve exact node IDs
+  containing leading/trailing whitespace or quotes with JSON string syntax.
+
 ## 0.3.1 — 2026-10-04
 
 ### Features

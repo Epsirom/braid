@@ -283,7 +283,20 @@ export function registerBraidCommand(pi: ExtensionAPI, jobs: BraidJobs): void {
 function splitArguments(text: string): [string | undefined, string | undefined] {
   const split = text.search(/\s/);
   if (split < 0) return [text || undefined, undefined];
-  return [text.slice(0, split), text.slice(split).trim() || undefined];
+  const jobId = text.slice(0, split);
+  const target = text.slice(split).trim();
+  if (!target.startsWith('"')) return [jobId, target || undefined];
+  try {
+    return [jobId, JSON.parse(target) as string];
+  } catch {
+    throw new Error('A quoted Braid target must be a valid JSON string, for example " review ".');
+  }
+}
+
+/** Quote IDs that would otherwise be trimmed, parsed as quotes, or rendered as controls. */
+function formatTarget(id: string): string {
+  if (id === id.trim() && !id.startsWith('"') && !/[\p{Cc}\u2028\u2029]/u.test(id)) return id;
+  return JSON.stringify(id).replace(/\u2028/gu, "\\u2028").replace(/\u2029/gu, "\\u2029");
 }
 
 /** Node IDs take precedence; anything else must be an exact execution ID. */
@@ -318,7 +331,11 @@ function braidCompletions(jobs: BraidJobs, prefix: string): AutocompleteItem[] |
   if (!job) return null;
   const nodes = job.result?.nodes ?? job.execution?.nodes ?? job.live.nodes;
   const items = Object.values(nodes)
-    .filter((node) => node.id.startsWith(nodePrefix))
-    .map((node) => ({ value: `${job.handle} ${node.id}`, label: node.id, description: node.status }));
+    .flatMap((node) => {
+      const target = formatTarget(node.id);
+      return node.id.startsWith(nodePrefix) || target.startsWith(nodePrefix)
+        ? [{ value: `${job.handle} ${target}`, label: target, description: node.status }]
+        : [];
+    });
   return items.length ? items : null;
 }
