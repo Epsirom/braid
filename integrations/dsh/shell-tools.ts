@@ -2,9 +2,14 @@ import { execFile, spawn } from "node:child_process";
 import { constants } from "node:os";
 import { join } from "node:path";
 /** Own the entire process group through completion, cancellation, and timeout. */
-export async function runCommand(shell: string, args: string[], cwd: string, signal: AbortSignal, timeout?: number): Promise<string> {
+export async function runCommand(shell: string, args: string[], cwd: string, signal: AbortSignal, timeout?: number,
+  onOutput?: (output: string) => void): Promise<string> {
   let output = "";
-  const onData = (data: Buffer) => { output = (output + data.toString()).slice(-50_000); };
+  const onData = (data: Buffer) => {
+    const text = data.toString();
+    output = (output + text).slice(-50_000);
+    try { onOutput?.(text); } catch { /* Observers cannot affect the command. */ }
+  };
   signal?.throwIfAborted();
   if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0 || timeout * 1000 > 2_147_483_647))
     throw new Error("Invalid timeout: expected positive seconds within the timer limit");

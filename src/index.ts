@@ -39,6 +39,17 @@ export type {
 
 // Shared helpers for model adapters, including the Pi integration.
 export { formatBudgetReminder } from "./budgets.js";
+export { ExecutionActivityTracker, formatActivityStatus } from "./activity.js";
+export type {
+  ExecutionActivity,
+  ExecutionActivityEntry,
+  ExecutionActivityOptions,
+  ExecutionActivityPage,
+  ExecutionActivityPhase,
+  ExecutionActivityRecorder,
+  ExecutionModelActivity,
+  ExecutionToolActivity,
+} from "./activity.js";
 export {
   gitToolDefinition,
   finishMergeToolDefinition,

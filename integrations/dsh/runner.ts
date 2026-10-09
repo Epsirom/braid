@@ -6,7 +6,7 @@ import {
 import {
   formatBudgetReminder, gitToolDefinition, finishMergeToolDefinition,
   mergeInstructions, parseGitToolArguments, parseFinishMergeArguments,
-  type ModelRunner,
+  type ExecutionActivityTracker, type ModelRunner,
 } from "@chrok/braid";
 import { createWorkerTools } from "./worker-tools.js";
 
@@ -27,6 +27,8 @@ export interface RunnerOptions {
   maxToolCalls?: number;
   onUsage?: (usage: TokenUsage) => void;
   onProgress?: (progress: NodeProgress) => void;
+  /** Record model requests, stream chunks, and tool calls for live diagnostics. */
+  activity?: ExecutionActivityTracker;
 }
 
 export function validateBudgets(options: { maxToolRounds?: number | undefined; maxToolCalls?: number | undefined }): void {
@@ -47,6 +49,7 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
     if (!route || slash < 1 || slash === route.length - 1)
       throw new Error("Choose a DSH provider/model, or set node.model to an exact provider/model-id");
     const provider = route.slice(0, slash), model = route.slice(slash + 1);
+    const activity = options.activity?.recorder(request);
     const modelInfo = await llm.resolveModelInfo?.(provider, model, request.signal);
     const contextWindow = modelInfo?.context?.contextWindow;
     request.signal.throwIfAborted();
@@ -101,12 +104,19 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
       progress("model");
       const assembler = new BlockAssembler();
       let finished = false;
+      activity?.modelRequest();
       try {
         for await (const chunk of llm.stream({ provider, model, messages, system: prompt, tools: activeTools, signal: request.signal })) {
           request.signal.throwIfAborted();
           assembler.push(chunk);
           if (chunk.type === "finish") finished = true;
+          else if (chunk.type === "text-delta") activity?.modelStream("text", chunk.text);
+          else if (chunk.type === "reasoning-delta") activity?.modelStream("reasoning", chunk.text);
+          else if (chunk.type === "tool-call-delta") activity?.modelStream("tool_call", chunk.argumentsDelta, chunk.name);
         }
+      } catch (error) {
+        activity?.modelError(error instanceof Error ? error.message : String(error));
+        throw error;
       } finally {
         if (assembler.usage) {
           const usage = structuredClone(assembler.usage);
@@ -119,10 +129,19 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
       }
       request.signal.throwIfAborted();
       const finish = assembler.finish;
-      if (!finished) throw new Error("DSH model stream ended without a finish event");
-      if (finish.kind !== "stop" && finish.kind !== "tool-calls")
-        throw new Error("failure" in finish ? finish.failure.message : `DSH model ended with ${finish.kind}`);
+      const failure = !finished ? "DSH model stream ended without a finish event"
+        : finish.kind !== "stop" && finish.kind !== "tool-calls"
+          ? "failure" in finish ? finish.failure.message : `DSH model ended with ${finish.kind}` : undefined;
+      if (failure) { activity?.modelError(failure); throw new Error(failure); }
       const response = assembler.message({ provider, model, ...(assembler.replayState ? { replayState: assembler.replayState } : {}) });
+      activity?.modelResponse({
+        text: response.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n\n"),
+        reasoning: response.content.flatMap(block => block.type === "reasoning" ? [block.text] : []).join("\n\n"),
+        toolCalls: response.content.flatMap(block => block.type === "tool-call" ? [{ id: block.id, name: block.name }] : []),
+        stopReason: finish.kind,
+        ...(assembler.usage ? { inputTokens: assembler.usage.inputTokens + (assembler.usage.cacheReadTokens ?? 0) + (assembler.usage.cacheWriteTokens ?? 0),
+          outputTokens: assembler.usage.outputTokens } : {}),
+      });
       output.push(...response.content.flatMap(block => block.type === "text" ? [block.text] : []));
       const calls = response.content.filter(block => block.type === "tool-call");
       if (!calls.length) {
@@ -139,6 +158,7 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
       for (const call of calls) {
         request.signal.throwIfAborted();
         let text: string, isError = false;
+        activity?.toolStart(call.id, call.name, call.arguments);
         try {
           const args: unknown = JSON.parse(call.arguments);
           if (call.name === "decide" && request.decide) {
@@ -157,16 +177,17 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
           } else {
             const tool = files.find(tool => tool.name === call.name);
             if (!tool) throw new Error(`Unavailable tool '${call.name}'. Available: ${activeTools.map(tool => tool.name).join(", ")}`);
-            const invoke = () => tool.execute(args);
+            const invoke = () => tool.execute(args, output => activity?.toolOutput(call.id, output));
             text = tool.writes && request.withWorkspaceWrite ? await request.withWorkspaceWrite(invoke) : await invoke();
           }
         } catch (error) {
           request.signal.throwIfAborted();
-          // Invalid or duplicate decisions are terminal, matching core's exactly-once contract.
-          if (call.name === "decide" && request.decide) throw error;
           isError = true;
           text = error instanceof Error ? error.message : String(error);
+          // Invalid or duplicate decisions are terminal, matching core's exactly-once contract.
+          if (call.name === "decide" && request.decide) { activity?.toolEnd(call.id, text, true); throw error; }
         }
+        activity?.toolEnd(call.id, text, isError);
         messages.push(createToolResultMessage({ callId: call.id, content: [{ type: "text", text }], isError }));
       }
     }

@@ -76,3 +76,21 @@ test("legacy tool-card handles resolve in the owning session and reject handles 
     await assert.rejects(h.invoke("detail", { ...request, sessionId: "other" }), /no longer available/);
   } finally { await h.cleanup(); }
 });
+
+test("native detail pages execution activity and validates activity cursors", async () => {
+  const h = await setup();
+  try {
+    const receipt = h.jobs.start(input, {}, context());
+    await h.jobs.wait(receipt.jobId);
+    const executionId = Object.keys(h.jobs.get(receipt.jobId).execution.executions)[0]!;
+    const detail = await h.invoke("detail", { sessionId: "owner", jobId: receipt.jobId, executionId, offset: 0 }) as PanelDetail;
+    const activity = detail.activity!;
+    assert.equal(activity.phase, "completed");
+    assert.equal(activity.entries.at(-1)!.sequence, activity.sequence);
+    assert.ok(activity.entries.some(entry => entry.kind === "model_request"));
+    assert.ok(JSON.stringify(activity).length < 10_000, "assistant previews are bounded");
+    const page = await h.invoke("detail", { sessionId: "owner", jobId: receipt.jobId, executionId, offset: 0, activityBefore: 3 }) as PanelDetail;
+    assert.deepEqual(page.activity!.entries.map(entry => entry.sequence), [1, 2]);
+    await assert.rejects(h.invoke("detail", { sessionId: "owner", jobId: receipt.jobId, executionId, offset: 0, activityBefore: 0 }), /boundary validation/);
+  } finally { await h.cleanup(); }
+});

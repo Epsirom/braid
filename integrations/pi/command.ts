@@ -9,7 +9,8 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import { BraidJobs, type JobSnapshot } from "./jobs.js";
-import { renderGraphResult, renderNodeResult } from "./display.js";
+import { renderGraphResult, renderNodeDetails, renderSessionHeader, SELECTED_NODE_MARK } from "./display.js";
+import { NodeSessionView } from "./session-view.js";
 
 // Match the overlay height exactly so Pi never clips the footer or bottom border.
 const panelHeight = (rows: number): number =>
@@ -21,13 +22,23 @@ const plain = (value: string): string =>
 /** A node definition (latest invocation) or one exact execution. */
 export type NodeFocus = { nodeId: string } | { executionId: string };
 
-/** A live, scrollable panel. Closing the panel leaves jobs running. */
+/**
+ * A live, scrollable panel. Esc steps back one level: session → node selection →
+ * graph → close. Closing the panel leaves jobs running.
+ */
 export class BraidPanel implements Component {
   private selected: string | undefined;
   private focus: NodeFocus | undefined;
+  /** Node highlighted in selection mode (`v`); undefined in the plain graph view. */
+  private choosing: string | undefined;
+  /** Keep the newest transcript lines in view until the user scrolls up. */
+  private follow = true;
+  /** The selection last scrolled into view, so manual scrolling is not overridden. */
+  private revealed: string | undefined;
   private offset = 0;
   private maxOffset = 0;
   private disposed = false;
+  private readonly session: NodeSessionView;
   private readonly unsubscribe: () => void;
   private readonly ticker: ReturnType<typeof setInterval>;
 
@@ -41,6 +52,8 @@ export class BraidPanel implements Component {
   ) {
     this.selected = jobId ? jobs.get(jobId)?.jobId ?? jobId : undefined;
     this.focus = focus;
+    // Pi's tool components only request renders through the TUI.
+    this.session = new NodeSessionView(tui as TUI, theme);
     this.unsubscribe = jobs.subscribe(() => this.refresh());
     this.ticker = setInterval(() => this.refresh(), 1000);
     this.ticker.unref();
@@ -87,7 +100,7 @@ export class BraidPanel implements Component {
             : "muted";
     const focusLabel = this.focus
       ? "nodeId" in this.focus ? `node ${plain(this.focus.nodeId)}` : `execution ${plain(this.focus.executionId)}`
-      : "";
+      : this.choosing !== undefined ? "select a node" : "";
     const heading = current
       ? `Job ${index + 1} of ${jobs.length}  ·  ${this.theme.fg(statusColor, current.status)}${focusLabel ? `  ·  ${focusLabel}` : ""}`
       : this.theme.fg("muted", "No background jobs");
@@ -122,8 +135,19 @@ export class BraidPanel implements Component {
       ),
       rule("├", "┤"),
     ];
-    const content = current && this.focus
-      ? this.renderFocus(current, this.focus, contentWidth)
+    if (current && this.choosing !== undefined && !this.nodeIds(current).includes(this.choosing)) {
+      this.choosing = this.nodeIds(current)[0];
+    }
+    // The node summary (or the selected node) stays pinned while the body scrolls.
+    const focused = current && this.focus ? this.renderFocus(current, this.focus, contentWidth) : undefined;
+    let pinned = focused?.pinned ?? (current && this.choosing !== undefined ? [this.choosingLine(current)] : []);
+    const available = rows - header.length - 4;
+    const maxPinned = Math.max(2, Math.floor(available / 2));
+    if (pinned.length > maxPinned) {
+      pinned = [...pinned.slice(0, maxPinned - 1), this.theme.fg("dim", `… ${pinned.length - maxPinned + 1} more summary lines`)];
+    }
+    const content = focused
+      ? focused.body
       : current
       ? [
           ...(current.error
@@ -141,28 +165,39 @@ export class BraidPanel implements Component {
             true,
             false,
             this.theme,
+            "",
+            false,
+            this.choosing,
           ).render(contentWidth),
         ]
       : ["No Braid jobs in this session."];
-    const height = rows - header.length - 4;
+    const height = available - (pinned.length ? pinned.length + 1 : 0);
     this.maxOffset = Math.max(0, content.length - height);
-    this.offset = Math.min(this.offset, this.maxOffset);
+    this.offset = this.focus && this.follow ? this.maxOffset : Math.min(this.offset, this.maxOffset);
+    if (!this.focus && this.choosing !== undefined && this.choosing !== this.revealed) {
+      // Bring a newly selected node's box into view in a tall flowchart.
+      this.revealed = this.choosing;
+      const line = content.findIndex(text => stripTerminalSequences(text).includes(SELECTED_NODE_MARK));
+      if (line >= 0 && (line < this.offset || line > this.offset + height - 3)) {
+        this.offset = Math.max(0, Math.min(this.maxOffset, line - Math.floor(height / 3)));
+      }
+    }
+    if (this.choosing === undefined) this.revealed = undefined;
     const body = content.slice(this.offset, this.offset + height);
     while (body.length < height) body.push("");
     const range = `Lines ${this.offset + 1}–${Math.min(content.length, this.offset + height)}/${content.length}`;
-    const help = this.focus
-      ? contentWidth >= 72
-        ? "⌫ graph   ←/→ jobs   ↑/↓ scroll   PgUp/PgDn page   c cancel   Esc close"
-        : contentWidth >= 42
-          ? "⌫ graph · ↑/↓ scroll · c cancel · Esc close"
-          : "⌫ graph · Esc close"
-      : contentWidth >= 72
-        ? "←/→ jobs   ↑/↓ scroll   PgUp/PgDn page   c cancel   Esc close"
-        : contentWidth >= 42
-          ? "←/→ jobs · ↑/↓ scroll · c cancel · Esc close"
-          : "↑/↓ scroll · Esc close";
+    const [wide, medium, narrow] = this.focus
+      ? ["Esc back   ←/→ executions   ↑/↓ scroll   End follow   ctrl+o tools   c cancel   q close",
+        "Esc back · ←/→ executions · ↑/↓ scroll · q close", "Esc back · q close"]
+      : this.choosing !== undefined
+      ? ["↑/↓/←/→ choose node   Enter open session   Esc back   PgUp/PgDn page   q close",
+        "↑/↓ choose · Enter open · Esc back", "Enter open · Esc back"]
+      : ["v select node   ←/→ jobs   ↑/↓ scroll   PgUp/PgDn page   c cancel   Esc close",
+        "v select node · ←/→ jobs · ↑/↓ scroll · Esc close", "v select · Esc close"];
+    const help = contentWidth >= 80 ? wide : contentWidth >= 42 ? medium : narrow;
     return [
       ...header,
+      ...(pinned.length ? [...pinned.map(row), rule("├", "┤")] : []),
       ...body.map(row),
       rule("├", "┤"),
       row(
@@ -176,35 +211,76 @@ export class BraidPanel implements Component {
     ];
   }
 
+  /** Graph definition order, which is also the flowchart's declaration order. */
+  private nodeIds(job: JobSnapshot): string[] {
+    return Object.keys(job.result?.nodes ?? job.live.nodes);
+  }
+
+  private choosingLine(job: JobSnapshot): string {
+    const nodes = job.result?.nodes ?? job.live.nodes;
+    const node = this.choosing !== undefined ? nodes[this.choosing] : undefined;
+    const ids = this.nodeIds(job);
+    return this.theme.fg("warning", `${SELECTED_NODE_MARK} Selected ${ids.indexOf(this.choosing ?? "") + 1}/${ids.length}: `) +
+      this.theme.bold(plain(this.choosing ?? "")) + this.theme.fg("muted", ` · ${node?.status ?? "pending"} · Enter to open its session`);
+  }
+
   /** A focused node can disappear after a live graph update; say so instead of failing. */
-  private renderFocus(job: JobSnapshot, focus: NodeFocus, width: number): string[] {
+  private renderFocus(job: JobSnapshot, focus: NodeFocus, width: number): { pinned: string[]; body: string[] } {
     let node;
     try {
       node = "nodeId" in focus
         ? this.jobs.getNode(job.jobId, focus.nodeId)
         : this.jobs.getNode(job.jobId, undefined, focus.executionId);
     } catch {
-      return [
+      return { pinned: [], body: [
         this.theme.fg("warning", "This node or execution is no longer in the job's graph."),
-        this.theme.fg("muted", "Press Backspace to return to the graph."),
-      ];
+        this.theme.fg("muted", "Press Esc to return to the graph."),
+      ] };
     }
     // Latest-node results omit the loop iteration; their execution record has it.
     const executions = job.result?.executions ?? job.execution?.executions;
     const iteration = (node as { iteration?: number }).iteration ??
       (node.executionId ? executions?.[node.executionId]?.iteration : undefined);
-    return renderNodeResult(iteration === undefined ? node : { ...node, iteration }, true, this.theme, undefined, job.live.progress[node.id], job.live.observedAt)
-      .render(width);
+    const withIteration = iteration === undefined ? node : { ...node, iteration };
+    const activity = node.executionId ? this.jobs.getActivity(job.jobId, node.executionId) : undefined;
+    const transcript = node.executionId ? this.jobs.getTranscript(job.jobId, node.executionId) : undefined;
+    const siblings = this.executionsOf(job, node.id);
+    const position = node.executionId ? siblings.indexOf(node.executionId) : -1;
+    const header = [
+      ...renderSessionHeader(withIteration, this.theme, job.live.observedAt, job.live.progress[node.id], activity),
+      ...(siblings.length > 1 ? [this.theme.fg("dim", `execution ${position + 1} of ${siblings.length} for this node · ←/→ to switch`)] : []),
+    ];
+    let failure: string | undefined;
+    if (transcript) {
+      try {
+        return { pinned: header, body: this.session.render(transcript, width) };
+      } catch (error) {
+        // A rendering failure must not take down the overlay; fall back to the summary.
+        failure = this.theme.fg("error", `Session view unavailable: ${plain(error instanceof Error ? error.message : String(error))}`);
+      }
+    }
+    // Pending, recorded before this session, or evicted: show details and history instead.
+    const note = failure ?? (node.executionId
+      ? this.theme.fg("muted", "The live session for this execution is no longer retained; showing its details and activity history.")
+      : this.theme.fg("muted", "This node has not run yet."));
+    return { pinned: header, body: [note, ...renderNodeDetails(node, this.theme, job.live.observedAt, activity)] };
+  }
+
+  private executionsOf(job: JobSnapshot, nodeId: string): string[] {
+    const executions = job.result?.executions ?? job.execution?.executions ?? {};
+    return Object.values(executions).filter(execution => execution.id === nodeId).map(execution => execution.executionId);
+  }
+
+  private open(job: JobSnapshot, nodeId: string): void {
+    const executionId = this.executionsOf(job, nodeId).at(-1);
+    this.focus = executionId ? { executionId } : { nodeId };
+    this.follow = true;
+    this.offset = 0;
   }
 
   handleInput(data: string): void {
-    if (
-      matchesKey(data, "escape") ||
-      data === "q" ||
-      matchesKey(data, "ctrl+c")
-    ) {
-      this.dispose();
-      this.done();
+    if (data === "q" || matchesKey(data, "ctrl+c")) {
+      this.close();
       return;
     }
     const jobs = this.jobs.list();
@@ -212,24 +288,73 @@ export class BraidPanel implements Component {
       0,
       jobs.findIndex((job) => job.jobId === this.selected),
     );
-    if (matchesKey(data, "left") || matchesKey(data, "right")) {
+    const job = this.selected ? this.jobs.get(this.selected) : undefined;
+    if (this.focus) this.sessionInput(data, job);
+    else if (this.choosing !== undefined && job) this.chooseInput(data, job);
+    else if (matchesKey(data, "escape")) {
+      this.close();
+      return;
+    } else if (data === "v" && job) {
+      const ids = this.nodeIds(job);
+      this.choosing = ids.find(id => (job.result?.nodes ?? job.live.nodes)[id]?.status === "running") ?? ids[0];
+    } else if (matchesKey(data, "left") || matchesKey(data, "right")) {
       const step = matchesKey(data, "right") ? 1 : -1;
       this.selected = jobs[(index + step + jobs.length) % jobs.length]?.jobId;
-      this.focus = undefined;
       this.offset = 0;
-    } else if (matchesKey(data, "backspace") && this.focus) {
-      this.focus = undefined;
-      this.offset = 0;
-    } else if (matchesKey(data, "up"))
-      this.offset = Math.max(0, this.offset - 1);
-    else if (matchesKey(data, "down"))
-      this.offset = Math.min(this.maxOffset, this.offset + 1);
-    else if (matchesKey(data, "pageUp"))
-      this.offset = Math.max(0, this.offset - 10);
-    else if (matchesKey(data, "pageDown"))
-      this.offset = Math.min(this.maxOffset, this.offset + 10);
-    else if (data === "c" && this.selected) this.jobs.cancel(this.selected);
+    } else this.scroll(data);
+    if (data === "c" && this.selected) this.jobs.cancel(this.selected);
     this.refresh();
+  }
+
+  private chooseInput(data: string, job: JobSnapshot): void {
+    const ids = this.nodeIds(job);
+    const at = Math.max(0, ids.indexOf(this.choosing!));
+    if (matchesKey(data, "escape") || matchesKey(data, "backspace")) this.choosing = undefined;
+    else if (matchesKey(data, "up") || matchesKey(data, "left")) this.choosing = ids[(at - 1 + ids.length) % ids.length];
+    else if (matchesKey(data, "down") || matchesKey(data, "right")) this.choosing = ids[(at + 1) % ids.length];
+    else if (matchesKey(data, "enter") && this.choosing !== undefined) this.open(job, this.choosing);
+    else this.scroll(data);
+  }
+
+  private sessionInput(data: string, job: JobSnapshot | undefined): void {
+    if (matchesKey(data, "escape") || matchesKey(data, "backspace")) {
+      // Return to selection on the same node, so another node is one keypress away.
+      const focus = this.focus!;
+      let nodeId: string | undefined;
+      try { nodeId = job && ("nodeId" in focus ? focus.nodeId : this.jobs.getNode(job.jobId, undefined, focus.executionId).id); }
+      catch { /* The node was removed; fall back to the plain graph. */ }
+      this.focus = undefined;
+      this.choosing = nodeId !== undefined && job && this.nodeIds(job).includes(nodeId) ? nodeId : undefined;
+      this.offset = 0;
+    } else if ((matchesKey(data, "left") || matchesKey(data, "right")) && job) {
+      let node;
+      try { node = "nodeId" in this.focus! ? this.jobs.getNode(job.jobId, this.focus.nodeId) : this.jobs.getNode(job.jobId, undefined, this.focus!.executionId); }
+      catch { return; }
+      const siblings = this.executionsOf(job, node.id);
+      const at = node.executionId ? siblings.indexOf(node.executionId) : -1;
+      const next = siblings[at + (matchesKey(data, "right") ? 1 : -1)];
+      if (next) { this.focus = { executionId: next }; this.follow = true; }
+    } else if (matchesKey(data, "end")) this.follow = true;
+    else if (matchesKey(data, "ctrl+o")) this.session.toggleExpanded();
+    else this.scroll(data);
+  }
+
+  private scroll(data: string): void {
+    const before = this.offset;
+    if (matchesKey(data, "up")) this.offset = Math.max(0, this.offset - 1);
+    else if (matchesKey(data, "down")) this.offset = Math.min(this.maxOffset, this.offset + 1);
+    else if (matchesKey(data, "pageUp")) this.offset = Math.max(0, this.offset - 10);
+    else if (matchesKey(data, "pageDown")) this.offset = Math.min(this.maxOffset, this.offset + 10);
+    else if (matchesKey(data, "home")) this.offset = 0;
+    else return;
+    // Scrolling up pauses following; reaching the bottom resumes it.
+    if (this.offset < before) this.follow = false;
+    else if (this.offset >= this.maxOffset) this.follow = true;
+  }
+
+  private close(): void {
+    this.dispose();
+    this.done();
   }
 
   invalidate(): void {}

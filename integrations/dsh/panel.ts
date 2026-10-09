@@ -3,14 +3,20 @@ import { Remote, RemoteError, TypertRemoteService } from "@deepseek-ai/dsh-typer
 import type {} from "@deepseek-ai/dsh-typert-registry";
 import type { BraidJobs, JobSnapshot } from "./jobs.js";
 import { PANEL_PACKAGE, panelDescriptors } from "./panel-contract.js";
-import type { ControlRequest, DetailRequest, PanelDetail, PanelFrame, PanelJob, PanelRequest } from "./panel-types.js";
+import type { ExecutionActivity } from "@chrok/braid";
+import type { ControlRequest, DetailRequest, PanelActivity, PanelDetail, PanelFrame, PanelJob, PanelRequest } from "./panel-types.js";
 
+export const DETAIL_ACTIVITY_ENTRIES = 50;
 const clip = (text: string, limit = 2000) => text.length > limit ? text.slice(0, limit) + "…" : text;
-export function panelJob(job: JobSnapshot): PanelJob {
+function panelActivity({ entries: _entries, executionId: _executionId, nodeId: _nodeId, ...activity }: ExecutionActivity): PanelActivity {
+  return activity;
+}
+/** activity supplies live summaries for running executions; history stays in detail reads. */
+export function panelJob(job: JobSnapshot, activity: (executionId: string) => ExecutionActivity | undefined = () => undefined): PanelJob {
   const state = job.execution;
   return {
     jobId: job.jobId, handle: job.handle, goal: clip(job.goal), status: job.status, createdAt: job.createdAt,
-    revision: state.revision, phase: state.status,
+    revision: state.revision, phase: state.status, observedAt: Date.now(),
     ...(job.error || state.error ? { error: clip(job.error ?? state.error!.message) } : {}),
     nodes: state.graph.nodes.map(node => ({ id: node.id, type: node.type, status: state.nodes[node.id]?.status ?? "pending" })),
     edges: state.graph.edges.map(edge => ({ ...edge })), loops: [...state.graph.loops ?? []],
@@ -20,6 +26,10 @@ export function panelJob(job: JobSnapshot): PanelJob {
       ...(e.loopId === undefined ? {} : { loopId: e.loopId }),
       ...(e.latencyMs === undefined ? {} : { latencyMs: e.latencyMs }),
       ...(job.progress[e.executionId] ? { progress: job.progress[e.executionId]! } : {}),
+      ...(() => {
+        const live = e.status === "running" ? activity(e.executionId) : undefined;
+        return live ? { activity: panelActivity(live) } : {};
+      })(),
     })),
     pausedExecutionIds: [...state.pausedExecutionIds],
     usage: { inputTokens: job.usage.inputTokens ?? 0, outputTokens: job.usage.outputTokens ?? 0,
@@ -47,7 +57,7 @@ export class BraidPanel extends TypertRemoteService {
       && (request.createdBefore === undefined || row.createdAt <= request.createdBefore)) : rows[0];
     if (request.jobId && !selected) throw new Error("Braid job is no longer available in this session");
     const id = selected?.jobId;
-    return { rows, job: id && jobs ? panelJob(jobs.get(id)) : null };
+    return { rows, job: id && jobs ? panelJob(jobs.get(id), executionId => jobs.getActivity(id, executionId, { limit: 0 })) : null };
   }
   @Remote({ mode: "stream" })
   async *watch(request: PanelRequest, signal: AbortSignal): AsyncIterable<PanelFrame> {
@@ -87,13 +97,18 @@ export class BraidPanel extends TypertRemoteService {
   detail(request: DetailRequest): PanelDetail {
     try {
       this.snapshot(request);
-      const node = this.find(request.sessionId)!.getNode(request.jobId, undefined, request.executionId);
+      const jobs = this.find(request.sessionId)!;
+      const node = jobs.getNode(request.jobId, undefined, request.executionId);
+      const activity = jobs.getActivity(request.jobId, request.executionId, {
+        limit: DETAIL_ACTIVITY_ENTRIES, ...(request.activityBefore === undefined ? {} : { before: request.activityBefore }),
+      });
       const output = node.output ?? "";
       const offset = Math.min(request.offset, output.length), next = Math.min(offset + 32768, output.length);
       return { executionId: request.executionId, status: node.status, output: output.slice(offset, next), offset, next, total: output.length,
         ...(node.decision === undefined ? {} : { decision: clip(node.decision) }),
         ...(node.error ? { error: clip(node.error.message) } : {}),
         ...(node.workspace ? { workspace: clip(JSON.stringify(node.workspace, null, 2), 8000) } : {}),
+        ...(activity ? { activity: { ...panelActivity(activity), entries: activity.entries } } : {}),
       };
     } catch (error) { throw this.failure(request, error); }
   }

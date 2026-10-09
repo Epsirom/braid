@@ -211,20 +211,25 @@ test("panel focuses one node with live details and returns to the graph", async 
   assert.match(focused, /Braid node b · completed/);
   assert.match(focused, /Line two\./);
   assert.match(focused, /elapsed .* · 1 in \/ 1 out tokens/);
-  assert.match(focused, /⌫ graph/);
+  assert.match(focused, /Esc back/);
   assert.doesNotMatch(focused, /Braid completed/);
   assert.ok(panel.render(100).every((line) => visibleWidth(line) === 100));
   panel.handleInput("\x7f");
-  const graph = panel.render(100).join("\n");
-  assert.match(graph, /Braid completed/);
-  assert.doesNotMatch(graph, /Braid node b|⌫ graph/);
+  const selecting = panel.render(100).join("\n");
+  assert.match(selecting, /Braid completed/);
+  assert.match(selecting, /◆ Selected 2\/2: b/, "leaving a session returns to selection on the same node");
+  assert.doesNotMatch(selecting, /Braid node b|Esc back   ←\/→ executions/);
+  panel.handleInput("\x1b");
+  assert.doesNotMatch(panel.render(100).join("\n"), /Selected/);
 
   const executionId = jobs.getNode(job.handle, "a").executionId!;
   const byExecution = new BraidPanel(jobs, focusTui, theme, () => {}, job.handle, { executionId });
   t.after(() => byExecution.dispose());
   assert.match(byExecution.render(100).join("\n"), /Braid node a · completed/);
   byExecution.handleInput("\x1b[C");
-  assert.doesNotMatch(byExecution.render(100).join("\n"), /Braid node a/, "switching jobs clears the focus");
+  assert.match(byExecution.render(100).join("\n"), /Braid node a/, "←/→ switch executions of the same node, not jobs");
+  byExecution.handleInput("\x1b");
+  assert.doesNotMatch(byExecution.render(100).join("\n"), /Braid node a/);
 
   const missing = new BraidPanel(jobs, focusTui, theme, () => {}, job.handle, { nodeId: "removed" });
   t.after(() => missing.dispose());

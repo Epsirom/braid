@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { startBraid, validateGraph, type BraidInput, type BraidRun, type BraidResult, type BraidSnapshot, type GraphUpdate, type ExecutionEvent, type NodeResult } from "@chrok/braid";
+import { ExecutionActivityTracker, startBraid, validateGraph, type BraidInput, type ExecutionActivity, type ExecutionActivityPage, type BraidRun, type BraidResult, type BraidSnapshot, type GraphUpdate, type ExecutionEvent, type NodeResult } from "@chrok/braid";
 import type { TokenUsage } from "@deepseek-ai/dsh-llm";
 import { createDshRunner, sumUsage, validateBudgets, type NodeProgress, type DshLlm } from "./runner.js";
 
@@ -40,6 +40,8 @@ interface Job {
   reports: TokenUsage[];
   progress: Record<string, NodeProgress>;
   events: ExecutionEvent[];
+  /** Kept outside snapshots: histories are read one execution at a time. */
+  activity: ExecutionActivityTracker;
 }
 
 export interface Completion {
@@ -80,7 +82,8 @@ export class BraidJobs {
     const reports: TokenUsage[] = [];
     const events: ExecutionEvent[] = [];
     const progress: Record<string, NodeProgress> = Object.create(null);
-    const invoke = createDshRunner(this.llm, { cwd: context.cwd,
+    const activity = new ExecutionActivityTracker({ onChange: () => this.changed() });
+    const invoke = createDshRunner(this.llm, { cwd: context.cwd, activity,
       ...(options.maxToolRounds === undefined ? {} : { maxToolRounds: options.maxToolRounds }),
       ...(options.maxToolCalls === undefined ? {} : { maxToolCalls: options.maxToolCalls }),
       onUsage: usage => { reports.push(usage); },
@@ -91,15 +94,19 @@ export class BraidJobs {
       cwd: context.cwd, ...options,
       nodeTimeoutMs: options.nodeTimeoutMs ?? Infinity, graphTimeoutMs: options.graphTimeoutMs ?? Infinity,
       ...(context.model ? { defaultModel: context.model } : {}),
-      runner: async request => { await nextTurn(); return invoke(request); },
+      runner: async request => {
+        try { await nextTurn(); return await invoke(request); }
+        finally { activity.workerFinished(request.execution.executionId); }
+      },
       onEvent: event => {
+        activity.observe(event);
         events.push(structuredClone(event));
         if (events.length > 80) events.shift();
         this.changed();
         this.onEvent(jobId, handle, event);
       },
     });
-    const job: Job = { jobId, handle, goal: input.goal, status: "running", createdAt: Date.now(), run, reports, progress, events, done: Promise.resolve() };
+    const job: Job = { jobId, handle, goal: input.goal, status: "running", createdAt: Date.now(), run, reports, progress, events, activity, done: Promise.resolve() };
     this.nextHandle++;
     this.jobs.set(jobId, job); this.handles.set(handle, jobId);
     job.done = (async () => {
@@ -140,7 +147,7 @@ export class BraidJobs {
   }
 
   get(id: string): JobSnapshot {
-    const { run, done: _done, reports, ...job } = this.lookup(id);
+    const { run, done: _done, reports, activity: _activity, ...job } = this.lookup(id);
     return structuredClone({ ...job, execution: run.snapshot(), usage: sumUsage(reports) });
   }
 
@@ -151,6 +158,11 @@ export class BraidJobs {
     const node = key && Object.hasOwn(selected, key) ? selected[key] : undefined;
     if (!node || (nodeId && node.id !== nodeId)) throw new Error("Unknown Braid node or execution; inspect braid_status with only jobId");
     return structuredClone(node);
+  }
+
+  /** Live activity for one exact execution; undefined until it is first observed. */
+  getActivity(id: string, executionId: string, page?: ExecutionActivityPage): ExecutionActivity | undefined {
+    return this.lookup(id).activity.get(executionId, page);
   }
 
   list() {

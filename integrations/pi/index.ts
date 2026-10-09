@@ -7,7 +7,7 @@ import {
   truncateHead,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import type { BraidInput, GraphUpdate, NodeResult } from "@chrok/braid";
+import type { BraidInput, ExecutionActivity, GraphUpdate, NodeResult } from "@chrok/braid";
 import { Text } from "@earendil-works/pi-tui";
 import { BraidJobs, type JobSnapshot } from "./jobs.js";
 import { registerBraidCommand, registerBraidWidget } from "./command.js";
@@ -125,7 +125,10 @@ function isJobSnapshot(value: unknown): value is JobSnapshot {
     !!job.live && typeof job.live.nodes === "object" && job.live.nodes !== null;
 }
 
-type BraidStatusDetails = JobSnapshot & { selectedNode?: NodeResult; nodeOutputPath?: string };
+type BraidStatusDetails = JobSnapshot & { selectedNode?: NodeResult; selectedActivity?: ExecutionActivity; nodeOutputPath?: string };
+
+/** Focused reads return the latest activity entries; activityBefore pages earlier ones. */
+export const STATUS_ACTIVITY_ENTRIES = 40;
 
 function executionControl(job: JobSnapshot) {
   return job.execution && {
@@ -244,6 +247,7 @@ export function createBraidTools(jobs: BraidJobs) {
       jobId: Type.Optional(text("Exact session handle (e.g. job-1) or UUID; omit all IDs to list jobs.")),
       executionId: Type.Optional(text("Exact execution ID from braid_status or a reminder; requires jobId. Takes precedence over nodeId; if both are provided they must match.")),
       nodeId: Type.Optional(text("Exact node ID; requires jobId. Retrieve this node's latest full output/error even while the job is running.")),
+      activityBefore: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: `Focused reads include activity: the current phase, model/tool waits, and the latest ${STATUS_ACTIVITY_ENTRIES} history entries. Pass an entry sequence to page earlier entries.` })),
     },
     { additionalProperties: false },
   );
@@ -254,7 +258,7 @@ export function createBraidTools(jobs: BraidJobs) {
     name: "braid_status",
     label: "Braid status",
     description:
-      "Retrieve a background Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Add executionId for an exact execution, or nodeId for the latest instance, including intermediate results while the job runs. All job reads include current execution.revision and execution.pausedExecutionIds for live control; node.revision is the historical invocation revision. Large results include a path to the full JSON, including while running. For usage totals use usage (Pi provider accounting, including rounds from failed nodes), or piUsage in the saved final result. Prefer the short handle from submission/reminders. Omit all IDs to list jobs in this session. Completion reminders arrive automatically; avoid repeated polling.",
+      "Retrieve a background Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Add executionId for an exact execution, or nodeId for the latest instance, including intermediate results while the job runs. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and recent history. Lack of observed activity is a diagnostic signal, not proof of a stall. All job reads include current execution.revision and execution.pausedExecutionIds for live control; node.revision is the historical invocation revision. Large results include a path to the full JSON, including while running. For usage totals use usage (Pi provider accounting, including rounds from failed nodes), or piUsage in the saved final result. Prefer the short handle from submission/reminders. Omit all IDs to list jobs in this session. Completion reminders arrive automatically; avoid repeated polling.",
     parameters: statusParameters,
     renderResult(result, options, theme, ctx) {
       const job = result.details;
@@ -273,7 +277,7 @@ export function createBraidTools(jobs: BraidJobs) {
         : nodeId && state && Object.hasOwn(state.nodes, nodeId) ? state.nodes[nodeId] : undefined);
       // Render at the read's observation time so a saved result never keeps counting.
       if (selectedNode) return renderNodeResult(selectedNode, options.expanded, theme, job.nodeOutputPath,
-        job.live.progress?.[selectedNode.id], job.live.observedAt);
+        job.live.progress?.[selectedNode.id], job.live.observedAt, job.selectedActivity);
       if (executionId || nodeId) return new Text(fallback || "Braid returned no node details", 0, 0);
       if (job.error)
         return new Text(
@@ -297,6 +301,8 @@ export function createBraidTools(jobs: BraidJobs) {
     async execute(_id, params) {
       if ((params.nodeId !== undefined || params.executionId !== undefined) && !params.jobId)
         throw new Error("nodeId/executionId requires jobId");
+      if (params.activityBefore !== undefined && params.nodeId === undefined && params.executionId === undefined)
+        throw new Error("activityBefore requires nodeId or executionId");
       if (!params.jobId)
         return {
           content: [{ type: "text", text: JSON.stringify(jobs.list()) }],
@@ -307,9 +313,18 @@ export function createBraidTools(jobs: BraidJobs) {
       if (params.nodeId !== undefined || params.executionId !== undefined) {
         const node = jobs.getNode(params.jobId, params.nodeId, params.executionId);
         const { id, executionId, status, error, output, ...nodeDetails } = node;
+        const activity = executionId ? jobs.getActivity(params.jobId, executionId, {
+          limit: STATUS_ACTIVITY_ENTRIES, ...(params.activityBefore === undefined ? {} : { before: params.activityBefore }),
+        }) : undefined;
+        // While running, activity is the useful part; afterwards the output is,
+        // so it comes first and history cannot push it out of the preview.
+        const running = activity && activity.finishedAt === undefined;
+        const live = activity ? { observedAt: job.live.observedAt, activity } : {};
         const full = JSON.stringify({
           jobId: job.jobId, handle: job.handle, status: job.status, execution: executionControl(job),
+          ...(running ? live : {}),
           node: { id, executionId, status, error, output, ...nodeDetails },
+          ...(running ? {} : live),
         }, null, 2);
         const preview = truncateHead(full);
         let suffix = "";
@@ -323,7 +338,7 @@ export function createBraidTools(jobs: BraidJobs) {
         }
         // Focused reads do not claim the whole job's usage; final job retrieval does.
         return { content: [{ type: "text", text: preview.content + suffix }], details: {
-          ...job, selectedNode: node, ...(nodeOutputPath ? { nodeOutputPath } : {}),
+          ...job, selectedNode: node, ...(activity ? { selectedActivity: activity } : {}), ...(nodeOutputPath ? { nodeOutputPath } : {}),
         } };
       }
       const { jobId, handle, status, error, usage: providerUsage, fullOutputPath, execution, ...snapshot } = job;

@@ -279,7 +279,7 @@ test("partial renderer remains compact before Braid has result details", () => {
   assert.match(rendered, /Braid is running…/);
 });
 
-test("flowchart fallback message is truncated to terminal width", () => {
+test("a too-wide flowchart is cropped to the terminal width around a running node", () => {
   const longId = "a-very-long-node-identifier-that-widens-the-chart";
   const { error: _error, ...base } = result;
   const wide: BraidResult = {
@@ -307,10 +307,17 @@ test("flowchart fallback message is truncated to terminal width", () => {
   const component = renderGraphResult(wide, false, false, theme);
   const rendered = component.render(width);
   assert.ok(
-    rendered.some((line) => line.includes("Flowchart needs")),
-    "expected the narrow-terminal fallback message",
+    rendered.some((line) => /^\[chart 1–40 of \d+ cols\]$/.test(line)),
+    "a too-wide chart is cropped from its left edge when nothing is running",
   );
-  for (const line of rendered) {
+  assert.ok(rendered.some((line) => line.includes("┌")), "the cropped chart itself is drawn");
+  // A running node is kept in view. Plain styling keeps tag markup out of column counts.
+  const plainTheme = { fg: (_color: string, value: string) => value, bg: (_color: string, value: string) => value, bold: (value: string) => value } as never;
+  const running = renderGraphResult({ ...wide, nodes: { ...wide.nodes, [`${longId}-two`]: { id: `${longId}-two`, status: "running", startedAt: 0 } } },
+    false, false, plainTheme).render(width);
+  assert.ok(running.some((line) => /^\[chart \d+–\d+ of \d+ cols · running node\]$/.test(line)), running.join("\n"));
+  assert.ok(running.some((line) => line.includes("▶ ACTIVE")), "the running node's box is inside the window");
+  for (const line of [...rendered, ...running]) {
     assert.ok(
       visibleWidth(line) <= width,
       `rendered line exceeds ${width} columns: ${line}`,

@@ -89,9 +89,13 @@ export function apply(ctx: Context): void {
         const refresh = () => {
           timer = undefined;
           const job = jobs.get(handle);
+          // The log records lifecycle changes; ticking activity belongs in the replaceable progress line.
           const panel = renderPanel(job);
           if (panel !== previous) { previous = panel; native.append("\n" + panel + "\n", { channel: "log" }); }
-          native.updateProgress(`${handle} · ${job.execution.status} · ${Object.keys(job.execution.executions).length} executions`);
+          const running = Object.values(job.execution.executions).find(execution => execution.status === "running");
+          const live = running && jobs.getActivity(handle, running.executionId, { limit: 0 });
+          native.updateProgress(`${handle} · ${job.execution.status} · ${Object.keys(job.execution.executions).length} executions` +
+            (live ? ` · ${running.id}: ${live.phase}${live.tools[0] ? ` (${live.tools[0].name})` : ""}` : ""));
         };
         const unsubscribe = jobs.subscribe(() => { timer ??= setTimeout(refresh, 250); });
         return {
@@ -121,7 +125,7 @@ export function apply(ctx: Context): void {
         if (parts.length > 1 || parts[0] === "cancel") return { kind: "error", text: "Usage: /braid [jobId] | cancel <jobId> | list" };
         if (parts[0] === "list") return { kind: "success", text: JSON.stringify(jobs.list(), null, 2) };
         const id = parts[0] ?? jobs.list()[0]?.handle;
-        return { kind: "success", text: id ? renderPanel(jobs.get(id)) : "No Braid jobs in this session." };
+        return { kind: "success", text: id ? renderPanel(jobs.get(id), executionId => jobs.getActivity(id, executionId, { limit: 0 })) : "No Braid jobs in this session." };
       } catch (error) { return { kind: "error", text: error instanceof Error ? error.message : String(error) }; }
     },
   });
