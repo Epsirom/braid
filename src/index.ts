@@ -29,6 +29,7 @@ export type {
   NodeWorkspace,
   GitResult,
   NodeOutput,
+  HumanInput,
   NodePrompt,
   NodeResult,
   NodeStatus,

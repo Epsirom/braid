@@ -30,6 +30,8 @@ import {
 } from "./display.js";
 import { createPiRunner, sumPiUsage } from "./runner.js";
 import { PiTranscripts, type PiTranscript } from "./transcript.js";
+import { PiHumanInputs, type PiPendingInput } from "./human-input.js";
+import { BraidAssistant } from "./assistant.js";
 
 export interface JobOptions {
   maxConcurrency?: number;
@@ -67,6 +69,7 @@ interface Job extends JobSnapshot {
   /** Kept outside snapshots: histories are read one execution at a time. */
   activity: ExecutionActivityTracker;
   transcripts: PiTranscripts;
+  humanInputs: PiHumanInputs;
 }
 
 export interface NodeCompletion {
@@ -85,6 +88,8 @@ export interface NodeCompletion {
 /** Jobs belong to one extension/session lifetime, independently of foreground turns. */
 export class BraidJobs {
   private jobs = new Map<string, Job>();
+  private assistants = new Map<string, BraidAssistant>();
+  private cwd = process.cwd();
   private handles = new Map<string, string>();
   private nextHandle = 1;
   private listeners = new Set<() => void>();
@@ -126,6 +131,7 @@ export class BraidJobs {
       : undefined;
     const registry = ctx.modelRegistry;
     const cwd = ctx.cwd;
+    this.cwd = cwd;
     const job: Job = {
       handle: `job-${this.nextHandle++}`,
       jobId: crypto.randomUUID(),
@@ -139,6 +145,7 @@ export class BraidJobs {
       runningExecutions: new Map(),
       activity: new ExecutionActivityTracker({ onChange: () => this.changed() }),
       transcripts: new PiTranscripts(() => this.changed()),
+      humanInputs: new PiHumanInputs(() => this.changed()),
       nodeResults: new Map(snapshot.nodes.map((node) => [node.id, { id: node.id, status: "pending" }])),
     };
     this.jobs.set(job.jobId, job);
@@ -171,6 +178,7 @@ export class BraidJobs {
             cwd,
             activity: job.activity,
             transcripts: job.transcripts,
+            humanInputs: job.humanInputs,
             maxToolRounds: options.maxToolRounds ?? Infinity,
             maxToolCalls: options.maxToolCalls ?? Infinity,
             onUsage: (usage) => {
@@ -190,6 +198,10 @@ export class BraidJobs {
               return await invoke(request);
             } finally {
               job.activity.workerFinished(request.execution.executionId);
+              const executionId = request.execution.executionId;
+              if (executionId !== undefined) {
+                job.transcripts.human(executionId, job.humanInputs.close(executionId).map(input => input.text), false);
+              }
               job.transcripts.finish(request.execution.executionId,
                 request.signal.aborted ? "Execution was stopped before this step finished" : undefined);
             }
@@ -309,6 +321,7 @@ export class BraidJobs {
       runningExecutions: _runningExecutions,
       activity: _activity,
       transcripts: _transcripts,
+      humanInputs: _humanInputs,
       ...snapshot
     } = job;
     const copy = structuredClone(snapshot);
@@ -343,6 +356,39 @@ export class BraidJobs {
     const job = this.lookup(jobId);
     if (!job) throw this.unknownJob(jobId);
     return job.transcripts.get(executionId);
+  }
+
+  /**
+   * Queue a human message for one running execution. The worker receives it
+   * before its next model request; running tools are not interrupted.
+   */
+  sendInput(jobId: string, executionId: string, text: string): PiPendingInput {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    if (!job.transcripts.isLive(executionId)) {
+      throw new Error("Messages can be sent only to a running execution whose live session has started");
+    }
+    return job.humanInputs.send(executionId, text);
+  }
+
+  /** Messages waiting for the execution's next model request. */
+  pendingInputs(jobId: string, executionId: string): readonly PiPendingInput[] {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    return structuredClone(job.humanInputs.pending(executionId));
+  }
+
+  /** The panel's side conversation about a job or one of its nodes, kept for the session. */
+  assistant(jobId: string, nodeId?: string): BraidAssistant {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    const key = JSON.stringify([job.jobId, nodeId ?? null]);
+    let assistant = this.assistants.get(key);
+    if (!assistant) {
+      assistant = new BraidAssistant(this, job.jobId, this.cwd, () => this.changed(), nodeId);
+      this.assistants.set(key, assistant);
+    }
+    return assistant;
   }
 
   update(jobId: string, patch: GraphUpdate): JobSnapshot {
@@ -423,6 +469,7 @@ export class BraidJobs {
   dispose(): void {
     this.disposed = true;
     for (const job of this.jobs.values()) job.controller.abort();
+    for (const assistant of this.assistants.values()) assistant.dispose();
     this.listeners.clear();
   }
 }

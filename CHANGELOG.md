@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Features
+
+- Add an assistant to the Pi `/braid` panel, toggled with Tab. On the graph it
+  talks about the whole job; with a node selected or its session open, it uses
+  that node's own conversation, shared by the node's executions. It reads job
+  status, execution details and activity, and worker conversations, and does
+  not see the main conversation. Asked to
+  steer a running execution, it messages that execution; the message waits as
+  pending and is delivered before the worker's next model request, never
+  interrupting a running tool, and a message that arrives during the final
+  answer gets one more round. Delivered messages are marked as human input in
+  the session, the activity history, the event log (`human_input`), and the
+  execution result (`humanInputs`); messages still pending when the execution
+  ends are shown as not delivered. The assistant cannot edit the graph, cancel,
+  or resume. In fullscreen Pi, the mouse wheel scrolls the conversation and the
+  graph or node session ([#59](https://github.com/Epsirom/braid/issues/59)).
+- Core adds `ModelRequest.recordHumanInput`, `NodeResult.humanInputs`, the
+  `human_input` event, and the `human_input` activity entry kind, so any adapter
+  can record human messages delivered to a running worker. These are additive;
+  exhaustive switches over event types or activity kinds need a new case.
+
 ## 0.3.3 — 2026-10-09
 
 ### Features

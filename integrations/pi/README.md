@@ -241,9 +241,51 @@ activity (see below)—stays pinned at the top while the session scrolls. The
 session follows the newest lines; scroll up to pause, and press End to follow again. Left/Right switch between
 invocations of the same node (for example loop iterations), and ctrl+o expands
 tool output. Escape steps back one level—session, then node selection, then the
-graph—and closes the panel from the graph; `q` closes it from anywhere. Sessions
-are read-only. Running invocations and the 20 most recently finished ones per
-job keep their session; older ones show the summary and activity history.
+graph—and closes the panel from the graph; `q` closes it from anywhere. Running
+invocations and the 20 most recently finished ones per job keep their session;
+older ones show the summary and activity history.
+
+### Assistant
+
+Press Tab to open an assistant and Tab again to hide it. While it is open,
+every key goes to it, including `q` and `c`; type a question and press Enter.
+Escape stops an answer in progress, or hides the assistant. PgUp/PgDn or the
+mouse wheel scroll the conversation. A panel at least 100 columns wide shows
+the assistant beside the graph or session; a narrower one shows it in their
+place.
+
+Conversations are scoped. On the graph, the assistant talks about the whole
+job. With a node selected (`v`) or its session open, it uses that node's own
+conversation, shared by all of the node's executions; each question says which
+execution is shown. Each scope keeps its history for the Pi session, including
+while the assistant or the panel is hidden.
+
+In fullscreen mode the mouse wheel also scrolls the left side: the graph, a
+node session, or a node's details and history. Scrolling a session up stops it
+following new output; scrolling back to the bottom resumes.
+
+The assistant uses the main session's current model. It does not see the main
+conversation; each question tells it what the panel shows (the graph, the
+selected node, or the open session), and it reads the job through its own
+tools: job status and graph, an execution's details and activity, and the
+latest messages of a worker's conversation. It cannot edit the graph, cancel,
+or resume; ask the main agent for that.
+
+To steer a running execution, tell the assistant what it should do. The
+assistant messages that execution for you, and only when you ask. The message
+waits, shown as pending in the execution's session, and is delivered before the
+worker's next model request. A tool batch that is running finishes first and is
+never interrupted. If it arrives while the worker is writing its final answer,
+the worker gets one more round to take it into account. The worker receives it
+labelled as a message from the supervising human, separate from the node prompt
+and predecessor outputs; it cannot lift tool, budget, workspace, or decision
+constraints (a decision node that has already called `decide` keeps its
+choice). Delivered messages appear in the session, in the activity history, in
+the event log, and in the execution's `humanInputs` in `braid_status` results,
+so it stays visible that the result did not come from the graph alone. Messages
+still pending when the execution ends are marked as not delivered and are not
+recorded as input. Finished executions, including those held by `pauseAfter`,
+cannot be messaged.
 
 Run `/braid <jobId> <nodeId>` to open that node's latest invocation directly in
 the session view, or `/braid <jobId> <executionId>` for an exact invocation such

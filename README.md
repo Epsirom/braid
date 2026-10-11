@@ -352,7 +352,8 @@ being retained and delivered.
 The event sequence includes initial `graph_created`, `node_created`, and
 `edge_created`; revision-bearing `graph_updated`; and per-instance
 `node_runnable`, `node_started`, `workspace_updated`, `handoff`, `node_completed`,
-`node_failed`, or `node_skipped`. Instance events carry `executionId`, admission
+`node_failed`, or `node_skipped`, plus `human_input` when an adapter delivers a
+human message to a running worker. Instance events carry `executionId`, admission
 `revision`, and optional `loopId`/`iteration`. Handoffs also identify their exact
 `fromExecutionId`.
 
@@ -408,6 +409,12 @@ provides `request.merge.sources` and `request.merge.finish(dispositions)` to
 merge agents. Adapters must enforce workspace capabilities and wrap mutating
 file tools in `request.withWorkspaceWrite(operation)`, so cleanup waits for
 in-flight writes and rejects later writes. Core Git mutations use this barrier.
+Adapters that let a human message a running worker call
+`request.recordHumanInput(text)` when they deliver it, before the model request
+that includes it. Core records it in the execution's `humanInputs` and as a
+`human_input` event, so results show that the execution did not run from its
+graph definition and predecessor inputs alone; it throws once the invocation
+has ended.
 The included Pi adapter provides guarded `write`/`edit` and Pi shell tools alongside its read tools.
 For read-only workspaces, adapters must omit mutating tools; the core write
 barrier also rejects writes. This includes all nodes outside Git. Writable Pi nodes

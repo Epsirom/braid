@@ -28,7 +28,8 @@ export interface ExecutionActivityEntry {
     | "assistant"
     | "reasoning"
     | "tool_call"
-    | "tool_result";
+    | "tool_result"
+    | "human_input";
   /** One line for lists. */
   summary: string;
   /** Bounded preview, shown on demand. */
@@ -196,6 +197,10 @@ export class ExecutionActivityTracker {
         const record = this.ensure(event.executionId, event.nodeId, event.timestamp);
         if (record.phase === "workspace") this.phase(record, "worker", event.timestamp);
         this.add(record, { kind: "lifecycle", summary: `Worker started${event.model ? ` · ${event.model}` : ""}` }, event.timestamp);
+      } else if (event.type === "human_input") {
+        const record = this.ensure(event.executionId, event.nodeId, event.timestamp);
+        if (record.finishedAt !== undefined) return;
+        this.add(record, { kind: "human_input", summary: `Human input · ${oneLine(event.text, 120)}`, ...this.preview(event.text) }, event.timestamp);
       } else if (event.type === "node_completed" || event.type === "node_failed") {
         const record = this.ensure(event.executionId, event.nodeId, event.timestamp);
         const failed = event.type === "node_failed";

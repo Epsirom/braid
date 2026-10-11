@@ -29,6 +29,7 @@ import { createWorktreeWriteTools } from "./write-tools.js";
 import { createAvailableReadTools } from "./read-tools.js";
 import { createWorkspaceShellTools } from "./shell-tools.js";
 import type { PiTranscripts } from "./transcript.js";
+import { formatHumanInput, type PiHumanInputs } from "./human-input.js";
 
 export interface PiNodeProgress {
   nodeId: string;
@@ -51,6 +52,8 @@ export interface PiRunnerOptions {
   activity?: ExecutionActivityTracker;
   /** Keep each execution's conversation for the live session view. */
   transcripts?: PiTranscripts;
+  /** Human messages for running executions, delivered before the next model request. */
+  humanInputs?: PiHumanInputs;
   cwd?: string;
   /** Per node, including decide and rejected requests. Omit or use Infinity for no limit. */
   maxToolRounds?: number;
@@ -219,6 +222,16 @@ export function createPiRunner(
       predecessors: request.predecessors.length,
       workspace: `${workspace.mode} · ${workingDirectory}`,
     }, toolByName as unknown as ReadonlyMap<string, ToolDefinition>);
+    const humanInputs = executionId === undefined ? undefined : options.humanInputs;
+    // Between model requests only: a running tool batch is never interrupted.
+    const deliverHumanInputs = (): void => {
+      const inputs = humanInputs?.take(executionId!) ?? [];
+      for (const input of inputs) {
+        request.recordHumanInput?.(input.text);
+        context.messages.push({ role: "user", content: formatHumanInput(input.text), timestamp: Date.now() });
+      }
+      transcripts?.human(executionId!, inputs.map(input => input.text), true);
+    };
     const systemPrompt = context.systemPrompt!;
     const sessionId = crypto.randomUUID();
     const usage = { inputTokens: 0, outputTokens: 0 };
@@ -231,6 +244,7 @@ export function createPiRunner(
 
     const complete = async (): Promise<AssistantMessage> => {
       request.signal.throwIfAborted();
+      deliverHumanInputs();
       const budgets: string[] = [];
       if (Number.isFinite(maxToolRounds)) {
         budgets.push(
@@ -439,7 +453,12 @@ export function createPiRunner(
         (block): block is ToolCall => block.type === "toolCall",
       );
       if (calls.length === 0) {
-        if (response.stopReason === "stop") break;
+        if (response.stopReason === "stop") {
+          // A message that arrived during the final request gets one more round.
+          if (!humanInputs?.pending(executionId!).length) break;
+          context.messages.push(response);
+          continue;
+        }
         throw new Error("Pi model requested tool use without a tool call");
       }
       if (response.stopReason !== "toolUse") {

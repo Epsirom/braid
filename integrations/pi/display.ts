@@ -393,6 +393,8 @@ function eventText(event: ExecutionEvent): string {
       return `handoff · ${compact(event.from, 40)} → ${compact(event.to, 40)}: ${compact(event.output, 64)}`;
     case "node_started":
       return `started · ${compact(event.nodeId, 40)}${event.model ? ` · ${compact(event.model, 50)}` : ""}`;
+    case "human_input":
+      return `human input · ${compact(event.nodeId, 40)}: ${compact(event.text, 64)}`;
     case "node_completed":
       return `completed · ${compact(event.nodeId, 40)}${event.decision ? ` → ${compact(event.decision, 30)}` : ""}: ${compact(event.output, 64)}`;
     case "node_skipped":
@@ -430,7 +432,9 @@ function renderEventLog(
         ? "success"
         : event.type === "node_started"
           ? "accent"
-          : "dim";
+          : event.type === "human_input"
+            ? "warning"
+            : "dim";
     lines.push(
       theme.fg(
         color,
@@ -459,6 +463,7 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
   const preview = { ...event };
   if ("output" in preview && preview.output !== undefined)
     preview.output = compact(preview.output, 180);
+  if (preview.type === "human_input") preview.text = compact(preview.text, 180);
   if ("error" in preview)
     preview.error = {
       ...preview.error,
@@ -554,6 +559,9 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
       node.skipReason = event.reason;
       node.finishedAt = event.timestamp;
       break;
+    case "human_input":
+      node.humanInputs = [...(node.humanInputs ?? []), { text: compact(event.text, 180), timestamp: event.timestamp }];
+      break;
   }
 }
 
@@ -601,7 +609,7 @@ export function renderActivity(
   const hidden = activity.droppedEntries + activity.entries.length - visible.length;
   lines.push(theme.fg("dim", `history · ${activity.sequence} events${hidden ? ` · ${hidden} earlier ${expanded ? "trimmed" : "hidden (expand for more)"}` : ""}:`));
   for (const entry of visible) {
-    const color = entry.isError ? "error" : entry.kind === "tool_call" ? "accent" : entry.kind === "assistant" ? "text" : "muted";
+    const color = entry.isError ? "error" : entry.kind === "tool_call" ? "accent" : entry.kind === "assistant" ? "text" : entry.kind === "human_input" ? "warning" : "muted";
     lines.push(theme.fg(color, `  ${`+${elapsed(Math.max(0, entry.timestamp - activity.startedAt))}`.padStart(7)} ${compact(entry.summary, 200)}`));
     // Show a detail preview only when the summary line does not already contain it.
     if (expanded && entry.detail && entry.kind !== "workspace" && !compact(entry.summary, 400).includes(compact(entry.detail, 400))) {
@@ -674,10 +682,14 @@ export function renderSessionHeader(
     theme.fg(failed ? "error" : "accent", `${failed ? "✗" : node.status === "completed" ? "✓" : node.status === "running" ? "▶" : "○"} Braid node ${compact(node.id, 80)} · ${node.status}`),
     ...(facts.length ? [theme.fg("muted", facts.join(" · "))] : []),
     ...(live ? [theme.fg("muted", `context ${live.contextSource === "estimate" ? "~" : ""}${compactCount(live.contextTokens)}/${live.contextWindow === undefined ? "—" : compactCount(live.contextWindow)} · ${live.toolCalls} tool calls in ${live.toolRounds} rounds · ${live.phase} phase`)] : []),
+    ...(node.humanInputs?.length ? [theme.fg("warning", humanInputNotice(node.humanInputs.length))] : []),
     ...(activity && activity.executionId === node.executionId ? renderActivity(activity, false, theme, now, "summary") : []),
     ...(node.error ? [theme.fg("error", `${node.error.code}: ${compact(node.error.message, 300)}`)] : []),
   ];
 }
+
+const humanInputNotice = (count: number): string =>
+  `✎ received ${count} human message${count === 1 ? "" : "s"} while running; its result is not from the graph alone`;
 
 /** What a node view shows below its pinned header when no live session is retained. */
 export function renderNodeDetails(
@@ -694,6 +706,10 @@ export function renderNodeDetails(
     ...(workspace ? [theme.fg("dim", `workspace: ${workspace.mode} · ${workspace.state}${workspaceRef ? ` · ${compact(workspaceRef, 160)}` : ""}`)] : []),
     ...(node.decision ? [theme.fg("accent", `decision: ${compact(node.decision, 80)}`)] : []),
     ...(node.skipReason ? [theme.fg("muted", `skipped: ${node.skipReason}`)] : []),
+    ...(node.humanInputs?.length ? [
+      theme.fg("warning", humanInputNotice(node.humanInputs.length)),
+      ...node.humanInputs.map(input => theme.fg("warning", `  ✎ ${compact(clean(input.text), 300)}`)),
+    ] : []),
     ...(activity && activity.executionId === node.executionId ? renderActivity(activity, true, theme, now, "history") : []),
     ...(node.output ? ["", ...clean(node.output).split("\n")] : []),
   ];

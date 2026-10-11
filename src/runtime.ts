@@ -214,6 +214,7 @@ async function runNode(
   const writes = new Set<Promise<unknown>>();
   let merge: Awaited<ReturnType<GitWorkspaces["beginMerge"]>> | undefined;
   let acceptingDecisions = true;
+  let acceptingHumanInput = true;
   let decision: string | undefined;
   let decisionError: RunError | undefined;
   // Capture choices separately: the runner cannot change the declared tool enum.
@@ -231,6 +232,12 @@ async function runNode(
     writes.add(pending);
     try { return await pending; }
     finally { writes.delete(pending); }
+  };
+  invocation.recordHumanInput = text => {
+    if (typeof text !== "string" || !text.trim()) throw new TypeError("Human input must be a non-empty string");
+    if (!acceptingHumanInput || signal.aborted) throw new Error("Node has finished; human input can no longer be delivered");
+    (result.humanInputs ??= []).push({ text, timestamp: Date.now() });
+    log.emit({ type: "human_input", nodeId: result.id, text });
   };
   if (Number.isFinite(timeoutMs) || Number.isFinite(graphDeadline)) {
     invocation.deadlines = {
@@ -322,6 +329,7 @@ async function runNode(
       }),
     ]);
     acceptingDecisions = false;
+    acceptingHumanInput = false;
     checkDeadline();
     checkResponse(response);
     result.output = response.output;
@@ -341,6 +349,7 @@ async function runNode(
     fail(result.error, !runnerStarted && !(error instanceof WorkspaceInputError) && !signal.aborted);
   } finally {
     acceptingDecisions = false;
+    acceptingHumanInput = false;
     acceptingWrites = false;
     await Promise.allSettled(writes);
     if (result.status === "completed") {

@@ -1,4 +1,4 @@
-import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 /** What the worker received, summarized; the raw request JSON is not a readable message. */
@@ -15,14 +15,22 @@ export interface PiToolPartial {
   details?: unknown;
 }
 
-/** One worker conversation, in the shapes Pi's own chat components render. */
-export interface PiTranscript {
-  executionId: string;
-  nodeId: string;
+/** A message a human sent to this execution, delivered to the worker or not. */
+export interface PiHumanMessage {
+  role: "human";
+  text: string;
+  timestamp: number;
+  /** False when the execution ended before its next model request. */
+  delivered: boolean;
+}
+
+/** A conversation in the shapes Pi's own chat components render. */
+export interface PiConversation {
   cwd: string;
-  intro: PiTranscriptIntro;
-  /** Completed assistant messages and tool results, in order. */
-  messages: (AssistantMessage | ToolResultMessage)[];
+  /** Shown first, as the request that started the conversation. */
+  intro?: PiTranscriptIntro;
+  /** Completed messages, in order. */
+  messages: (UserMessage | AssistantMessage | ToolResultMessage | PiHumanMessage)[];
   /** The assistant message being streamed; Pi mutates it in place. */
   streaming?: AssistantMessage;
   /** Tools that started and have not returned, with their latest partial output. */
@@ -31,6 +39,13 @@ export interface PiTranscript {
   renderers: ReadonlyMap<string, ToolDefinition>;
   /** Increments on every change, so views can skip identical frames. */
   version: number;
+}
+
+/** One worker conversation. */
+export interface PiTranscript extends PiConversation {
+  executionId: string;
+  nodeId: string;
+  intro: PiTranscriptIntro;
   finished: boolean;
 }
 
@@ -85,6 +100,20 @@ export class PiTranscripts {
       transcript.running.delete(result.toolCallId);
       transcript.messages.push(result);
     });
+  }
+
+  /** Record human messages: delivered before a model request, or left over when the execution ended. */
+  human(executionId: string, texts: readonly string[], delivered: boolean): void {
+    if (!texts.length) return;
+    this.update(executionId, transcript => {
+      for (const text of texts) transcript.messages.push({ role: "human", text, timestamp: Date.now(), delivered });
+    });
+  }
+
+  /** Accepting messages: the execution's session has started and has not finished. */
+  isLive(executionId: string): boolean {
+    const transcript = this.transcripts.get(executionId);
+    return transcript !== undefined && !transcript.finished;
   }
 
   /** Close interrupted streams and tools so the view does not show them as still running. */
