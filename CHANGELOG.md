@@ -4,6 +4,9 @@
 
 ### Features
 
+- Add the Pi `/braid:clear` command, which clears the progress widget above the
+  editor. Jobs submitted afterwards still appear; running the command again
+  while the widget is empty restores the most recently cleared jobs.
 - Add an assistant to the Pi `/braid` panel, toggled with Tab. On the graph it
   talks about the whole job; with a node selected or its session open, it uses
   that node's own conversation, shared by the node's executions. It reads job

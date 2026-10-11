@@ -13,10 +13,17 @@ function fixture(t: TestContext) {
   let updates = 0;
   let placement: string | undefined;
   let handler!: (event: never, ctx: ExtensionContext) => void;
+  let clearCommand!: (args: string, ctx: ExtensionContext) => Promise<void>;
+  const notices: string[] = [];
   const dispose = registerBraidWidget({
     on: (_event: string, callback: typeof handler) => { handler = callback; },
+    registerCommand: (name: string, options: { handler: typeof clearCommand }) => {
+      assert.equal(name, "braid:clear");
+      clearCommand = options.handler;
+    },
   } as never, jobs);
   const ui = {
+    notify: (message: string) => { notices.push(message); },
     setWidget: (
       key: string,
       factory: ((...args: unknown[]) => Component) | undefined,
@@ -36,6 +43,10 @@ function fixture(t: TestContext) {
     jobs,
     dispose,
     start: (mode: ExtensionContext["mode"] = "tui") => handler({} as never, { mode, ui } as never),
+    clear: async (mode: ExtensionContext["mode"] = "tui") => {
+      await clearCommand("", { mode, ui } as never);
+      return notices.at(-1);
+    },
     lines,
     text: (width = 120) => lines(width).map(stripTerminalSequences).join("\n"),
     updates: () => updates,
@@ -277,4 +288,53 @@ test("editor widget handles Unicode and narrow widths, skips non-TUI modes, and 
   const following = view.jobs.start(input, {}, context(async () => response()));
   await view.jobs.wait(following.handle);
   assert.equal(view.updates(), disposedUpdates);
+});
+
+test("/braid:clear clears the current widget, restores it on the next run, and still shows new jobs", { timeout: 3_000 }, async (t) => {
+  const view = fixture(t);
+  view.start();
+  assert.match((await view.clear())!, /No Braid progress to clear/);
+  const first = view.jobs.start({ ...input, goal: "First task" }, {}, context(async () => response()));
+  await view.jobs.wait(first.handle);
+  assert.match(view.text(), /Braid job-1 · completed/);
+  assert.match((await view.clear())!, /Cleared Braid progress/);
+  assert.deepEqual(view.lines(), []);
+  assert.match((await view.clear())!, /Restored Braid progress/);
+  assert.match(view.text(), /Braid job-1 · completed/);
+
+  await view.clear();
+  const started = deferred<void>();
+  const result = deferred<ReturnType<typeof response>>();
+  const second = view.jobs.start({ ...input, goal: "Second task" }, {}, context(async () => {
+    started.resolve();
+    return result.promise;
+  }));
+  await started.promise;
+  assert.match(view.text(), /Braid job-2 · running/);
+  result.resolve(response());
+  await view.jobs.wait(second.handle);
+  assert.equal(view.lines().length, 1);
+  assert.match(view.text(), /Braid job-2 · completed/);
+
+  // A visible widget is cleared rather than restored; only the latest clear comes back.
+  await view.clear();
+  assert.deepEqual(view.lines(), []);
+  await view.clear();
+  assert.match(view.text(), /Braid job-2 · completed/);
+  assert.doesNotMatch(view.text(), /job-1/);
+
+  // A job cleared while running stays cleared when it finishes.
+  const runningStarted = deferred<void>();
+  const running = deferred<ReturnType<typeof response>>();
+  const third = view.jobs.start(input, {}, context(async () => {
+    runningStarted.resolve();
+    return running.promise;
+  }));
+  await runningStarted.promise;
+  await view.clear();
+  running.resolve(response());
+  await view.jobs.wait(third.handle);
+  assert.deepEqual(view.lines(), []);
+
+  await assert.rejects(view.clear("rpc"), /requires interactive Pi/);
 });

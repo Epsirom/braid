@@ -551,22 +551,49 @@ export class BraidPanel implements Component {
 }
 
 export function registerBraidWidget(pi: ExtensionAPI, jobs: BraidJobs): () => void {
+  // Clearing hides the jobs present at that moment; jobs submitted later still show.
+  const cleared = new Set<string>();
+  let lastCleared: string[] = [];
+  const shown = () => jobs.list().filter(job => !cleared.has(job.jobId));
+  let refresh = () => {};
   let dispose = () => {};
   const clear = () => {
     dispose();
     dispose = () => {};
+    refresh = () => {};
   };
+  pi.registerCommand("braid:clear", {
+    description: "Clear the Braid progress widget; run again while it is empty to restore it",
+    handler: async (_args, ctx) => {
+      if (ctx.mode !== "tui")
+        throw new Error("The Braid progress widget requires interactive Pi.");
+      const visible = shown();
+      if (visible.length) {
+        lastCleared = visible.map(job => job.jobId);
+        for (const jobId of lastCleared) cleared.add(jobId);
+        ctx.ui.notify("Cleared Braid progress. Run /braid:clear again to restore it.", "info");
+      } else if (lastCleared.length) {
+        for (const jobId of lastCleared) cleared.delete(jobId);
+        lastCleared = [];
+        ctx.ui.notify("Restored Braid progress.", "info");
+      } else {
+        ctx.ui.notify("No Braid progress to clear.", "info");
+        return;
+      }
+      refresh();
+    },
+  });
   pi.on("session_start", (_event, ctx) => {
     clear();
     if (ctx.mode !== "tui") return;
-    const refresh = () => {
-      if (!jobs.list().length) {
+    refresh = () => {
+      if (!shown().length) {
         ctx.ui.setWidget("braid-status", undefined);
         return;
       }
       ctx.ui.setWidget("braid-status", (_tui, theme) => ({
         render(width) {
-          const all = jobs.list();
+          const all = shown();
           const active = all.filter(job => job.status === "running");
           const selected = active.length ? active.slice(0, 3) : all.slice(0, 1);
           const lines = selected.map(job => {
@@ -596,7 +623,7 @@ export function registerBraidWidget(pi: ExtensionAPI, jobs: BraidJobs): () => vo
         invalidate() {},
       }), { placement: "aboveEditor" });
     };
-    const unsubscribe = jobs.subscribe(refresh);
+    const unsubscribe = jobs.subscribe(() => refresh());
     dispose = () => {
       unsubscribe();
       ctx.ui.setWidget("braid-status", undefined);
