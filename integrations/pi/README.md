@@ -26,6 +26,8 @@ It registers:
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
 - `/braid:review [target or focus]` — run a bounded parallel review/fix loop.
+- `/braid:clear` — clear the progress widget above the editor; run it again while
+  the widget is empty to restore what was cleared.
 
 Submission and completion reminders use short session handles such as `job-1`.
 Status, cancellation and the panel accept either that exact handle or the original
@@ -212,7 +214,10 @@ Braid job-1 · running · 2/5 done · review
 The widget shows node progress, active node IDs, paused gates, and failures.
 It shows up to three active jobs, with an overflow count for the rest. When no
 jobs are active, the newest job's final completed/failed/cancelled status stays
-visible until another job is submitted or the session ends. Counts use the
+visible until another job is submitted or the session ends. Run `/braid:clear`
+to clear the widget: it clears every job submitted so far, including running
+ones, and jobs submitted afterwards still appear. Running it again while the widget
+is empty restores the most recently cleared jobs. Counts use the
 latest state of each current node definition; failed and skipped nodes count as
 done, and reruns or live edits can change progress and totals. RPC, JSON, and
 print modes do not create a terminal widget.
