@@ -2,11 +2,14 @@
 
 ## Unreleased
 
+## 0.3.4 — 2026-10-11
+
 ### Features
 
 - Add the Pi `/braid:clear` command, which clears the progress widget above the
   editor. Jobs submitted afterwards still appear; running the command again
-  while the widget is empty restores the most recently cleared jobs.
+  while the widget is empty restores the most recently cleared jobs
+  ([#70](https://github.com/Epsirom/braid/pull/70)) — @Epsirom.
 - Add an assistant to the Pi `/braid` panel, toggled with Tab. On the graph it
   talks about the whole job; with a node selected or its session open, it uses
   that node's own conversation, shared by the node's executions. It reads job
@@ -20,18 +23,32 @@
   execution result (`humanInputs`); messages still pending when the execution
   ends are shown as not delivered. The assistant cannot edit the graph, cancel,
   or resume. In fullscreen Pi, the mouse wheel scrolls the conversation and the
-  graph or node session ([#59](https://github.com/Epsirom/braid/issues/59)).
+  graph or node session ([#69](https://github.com/Epsirom/braid/pull/69),
+  closes [#59](https://github.com/Epsirom/braid/issues/59)) — @Epsirom.
 - Core adds `ModelRequest.recordHumanInput`, `NodeResult.humanInputs`, the
   `human_input` event, and the `human_input` activity entry kind, so any adapter
   can record human messages delivered to a running worker. These are additive;
-  exhaustive switches over event types or activity kinds need a new case.
+  exhaustive switches over event types or activity kinds need a new case
+  ([#69](https://github.com/Epsirom/braid/pull/69)) — @Epsirom.
 
 ### Fixes
 
 - On Windows, a shell command that timed out or was cancelled could report a
   `taskkill` error instead, when one of its child processes exited while the
   process tree was being stopped. Pi and DSH shell tools now report the timeout
-  or cancellation, and fail only if the shell itself survives.
+  or cancellation, and fail only if the shell itself survives
+  ([#69](https://github.com/Epsirom/braid/pull/69)) — @Epsirom.
+
+No breaking API changes or migration from 0.3.3 are required; consumers with
+exhaustive switches over `ExecutionEvent["type"]` or activity entry kinds need a
+`human_input` case. Pi 1.0.1 and DSH 0.2.0-rc.2 remain the tested host versions;
+integrations require Node.js 22.19+.
+
+### New Contributors
+
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.3.3...v0.3.4).
 
 ## 0.3.3 — 2026-10-09
 
