@@ -35,14 +35,22 @@ function managedOperations(resolveShell: typeof getShellConfig, prefix = ""): Ba
       const terminate = (): Promise<void> => termination ??= (async () => {
         if (!child.pid) return;
         if (process.platform === "win32") {
-          await new Promise<void>((resolve, reject) => {
+          const failure = await new Promise<Error | undefined>(resolve => {
             execFile(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
               ["/F", "/T", "/PID", String(child.pid)], { windowsHide: true }, error => {
                 // taskkill reports 128 when the process has already exited.
-                if (error && error.code !== 128) reject(error);
-                else resolve();
+                resolve(error && error.code !== 128 ? error : undefined);
               });
           });
+          if (failure) {
+            // With /T, a descendant that exits during the tree walk makes taskkill
+            // fail although the shell was killed. Fail only if the shell survives.
+            const stopped = await Promise.race([
+              exited.then(() => true, () => true),
+              new Promise<boolean>(resolve => setTimeout(() => resolve(false), 2000).unref()),
+            ]);
+            if (!stopped) throw failure;
+          }
         } else {
           try { process.kill(-child.pid, "SIGKILL"); }
           catch (error) {

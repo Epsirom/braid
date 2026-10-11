@@ -23,6 +23,13 @@
   can record human messages delivered to a running worker. These are additive;
   exhaustive switches over event types or activity kinds need a new case.
 
+### Fixes
+
+- On Windows, a shell command that timed out or was cancelled could report a
+  `taskkill` error instead, when one of its child processes exited while the
+  process tree was being stopped. Pi and DSH shell tools now report the timeout
+  or cancellation, and fail only if the shell itself survives.
+
 ## 0.3.3 — 2026-10-09
 
 ### Features
