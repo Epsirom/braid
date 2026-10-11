@@ -1,16 +1,21 @@
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import {
+  Input,
   matchesKey,
   stripTerminalSequences,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
   type AutocompleteItem,
   type Component,
   type TUI,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { BraidJobs, type JobSnapshot } from "./jobs.js";
 import { renderGraphResult, renderNodeDetails, renderSessionHeader, SELECTED_NODE_MARK } from "./display.js";
 import { NodeSessionView } from "./session-view.js";
+import type { AssistantModel } from "./assistant.js";
 
 // Match the overlay height exactly so Pi never clips the footer or bottom border.
 const panelHeight = (rows: number): number =>
@@ -19,12 +24,18 @@ const panelHeight = (rows: number): number =>
 const plain = (value: string): string =>
   stripTerminalSequences(value).replace(/\p{Cc}/gu, " ");
 
+/** Below this content width the graph and the assistant share the body, switched with Tab. */
+const SPLIT_WIDTH = 100;
+/** Marks a separator row so it can span the whole panel or only the left column. */
+const SEPARATOR = "\u0000separator";
+
 /** A node definition (latest invocation) or one exact execution. */
 export type NodeFocus = { nodeId: string } | { executionId: string };
 
 /**
  * A live, scrollable panel. Esc steps back one level: session → node selection →
- * graph → close. Closing the panel leaves jobs running.
+ * graph → close. Closing the panel leaves jobs running. Tab toggles an assistant
+ * that answers questions about the job and can message running executions.
  */
 export class BraidPanel implements Component {
   private selected: string | undefined;
@@ -38,7 +49,17 @@ export class BraidPanel implements Component {
   private offset = 0;
   private maxOffset = 0;
   private disposed = false;
+  /** While open, the assistant receives keys; it shares a wide panel and fills a narrow one. */
+  private assistantOpen = false;
+  /** Where the body sits in the last frame, for routing mouse wheel events. */
+  private layout: { top: number; height: number; chatLeft?: number } | undefined;
+  /** Assistant lines scrolled up from the newest. */
+  private chatOffset = 0;
+  private chatMaxOffset = 0;
+  private chatScope: string | undefined;
+  private readonly input: Input;
   private readonly session: NodeSessionView;
+  private readonly chat: NodeSessionView;
   private readonly unsubscribe: () => void;
   private readonly ticker: ReturnType<typeof setInterval>;
 
@@ -49,11 +70,27 @@ export class BraidPanel implements Component {
     private readonly done: () => void,
     jobId?: string,
     focus?: NodeFocus,
+    private readonly assistantModel: () => AssistantModel = () => ({ registry: { complete: () => Promise.reject(new Error("No Pi model registry")) } }),
   ) {
     this.selected = jobId ? jobs.get(jobId)?.jobId ?? jobId : undefined;
     this.focus = focus;
     // Pi's tool components only request renders through the TUI.
     this.session = new NodeSessionView(tui as TUI, theme);
+    this.chat = new NodeSessionView(tui as TUI, theme);
+    this.input = new Input({
+      prompt: theme.fg("accent", "› "),
+      placeholder: "Ask, or say how to steer…",
+      placeholderStyle: text => theme.fg("dim", text),
+    });
+    this.input.onSubmit = value => {
+      if (!value.trim() || !this.selected) return;
+      const job = this.jobs.get(this.selected);
+      if (!job) return;
+      this.jobs.assistant(job.jobId, this.assistantNode(job)).send(value, this.describeView(job), this.assistantModel());
+      this.input.setValue("");
+      this.chatOffset = 0;
+      this.refresh();
+    };
     this.unsubscribe = jobs.subscribe(() => this.refresh());
     this.ticker = setInterval(() => this.refresh(), 1000);
     this.ticker.unref();
@@ -138,16 +175,62 @@ export class BraidPanel implements Component {
     if (current && this.choosing !== undefined && !this.nodeIds(current).includes(this.choosing)) {
       this.choosing = this.nodeIds(current)[0];
     }
-    // The node summary (or the selected node) stays pinned while the body scrolls.
-    const focused = current && this.focus ? this.renderFocus(current, this.focus, contentWidth) : undefined;
-    let pinned = focused?.pinned ?? (current && this.choosing !== undefined ? [this.choosingLine(current)] : []);
+    if (!current) this.assistantOpen = false;
     const available = rows - header.length - 4;
+    const open = current !== undefined && this.assistantOpen;
+    const split = open && contentWidth >= SPLIT_WIDTH;
+    const leftWidth = split ? Math.floor((contentWidth - 3) * 0.6) : contentWidth;
+    const chatWidth = split ? contentWidth - leftWidth - 3 : contentWidth;
+    const graph = !open || split ? this.renderGraphPane(current, leftWidth, available) : undefined;
+    const chat = open ? this.renderAssistant(current, chatWidth, available) : [];
+    // Columns: border and gutter, then the left pane, " │ ", then the assistant.
+    this.layout = { top: header.length, height: available,
+      ...(open ? { chatLeft: split ? 2 + leftWidth + 3 : 2 } : {}) };
+    const body = split
+      ? graph!.lines.map((line, at) =>
+        (line === SEPARATOR ? border("─".repeat(leftWidth)) : truncateToWidth(line, leftWidth, "…", true)) +
+        " " + border("│") + " " + (chat[at] ?? ""))
+      : graph?.lines ?? chat;
+    const tab = current ? "Tab assistant   " : "";
+    const [wide, medium, narrow] = open
+      ? ["Enter send   Esc stop or hide   Tab hide   PgUp/PgDn or wheel scroll   ctrl+c close",
+        "Enter send · Esc hide · Tab hide", "Enter send · Tab hide"]
+      : this.focus
+      ? [`${tab}Esc back   ←/→ executions   ↑/↓ scroll   End follow   ctrl+o tools   c cancel   q close`,
+        "Esc back · ←/→ executions · ↑/↓ scroll · q close", "Esc back · q close"]
+      : this.choosing !== undefined
+      ? [`${tab}↑/↓/←/→ choose node   Enter open session   Esc back   PgUp/PgDn page   q close`,
+        "↑/↓ choose · Enter open · Esc back", "Enter open · Esc back"]
+      : [`${tab}v select node   ←/→ jobs   ↑/↓ scroll   PgUp/PgDn page   c cancel   Esc close`,
+        "v select node · ←/→ jobs · ↑/↓ scroll · Esc close", "v select · Esc close"];
+    const help = contentWidth >= 80 ? wide : contentWidth >= 42 ? medium : narrow;
+    const status = graph ? graph.range : "Assistant";
+    return [
+      ...header,
+      ...body.map(line => line === SEPARATOR ? rule("├", "┤") : row(line)),
+      rule("├", "┤"),
+      row(
+        this.theme.fg(
+          "dim",
+          `${status}${contentWidth >= 60 ? "  ·  Jobs keep running when this panel closes" : ""}`,
+        ),
+      ),
+      row(this.theme.fg("muted", help)),
+      rule("╰", "╯"),
+    ];
+  }
+
+  /** The graph, node selection, or a node session: pinned summary, separator, scrolled body. */
+  private renderGraphPane(current: JobSnapshot | undefined, width: number, available: number): { lines: string[]; range: string } {
+    // The node summary (or the selected node) stays pinned while the body scrolls.
+    const focused = current && this.focus ? this.renderFocus(current, this.focus, width) : undefined;
+    let pinned = focused?.pinned ?? (current && this.choosing !== undefined ? [this.choosingLine(current)] : []);
     const maxPinned = Math.max(2, Math.floor(available / 2));
     if (pinned.length > maxPinned) {
       pinned = [...pinned.slice(0, maxPinned - 1), this.theme.fg("dim", `… ${pinned.length - maxPinned + 1} more summary lines`)];
     }
     const content = focused
-      ? focused.body
+      ? [...focused.body, ...(current && focused.executionId ? this.pendingLines(current, focused.executionId) : [])]
       : current
       ? [
           ...(current.error
@@ -168,7 +251,7 @@ export class BraidPanel implements Component {
             "",
             false,
             this.choosing,
-          ).render(contentWidth),
+          ).render(width),
         ]
       : ["No Braid jobs in this session."];
     const height = available - (pinned.length ? pinned.length + 1 : 0);
@@ -185,30 +268,87 @@ export class BraidPanel implements Component {
     if (this.choosing === undefined) this.revealed = undefined;
     const body = content.slice(this.offset, this.offset + height);
     while (body.length < height) body.push("");
-    const range = `Lines ${this.offset + 1}–${Math.min(content.length, this.offset + height)}/${content.length}`;
-    const [wide, medium, narrow] = this.focus
-      ? ["Esc back   ←/→ executions   ↑/↓ scroll   End follow   ctrl+o tools   c cancel   q close",
-        "Esc back · ←/→ executions · ↑/↓ scroll · q close", "Esc back · q close"]
-      : this.choosing !== undefined
-      ? ["↑/↓/←/→ choose node   Enter open session   Esc back   PgUp/PgDn page   q close",
-        "↑/↓ choose · Enter open · Esc back", "Enter open · Esc back"]
-      : ["v select node   ←/→ jobs   ↑/↓ scroll   PgUp/PgDn page   c cancel   Esc close",
-        "v select node · ←/→ jobs · ↑/↓ scroll · Esc close", "v select · Esc close"];
-    const help = contentWidth >= 80 ? wide : contentWidth >= 42 ? medium : narrow;
+    return {
+      lines: [...(pinned.length ? [...pinned, SEPARATOR] : []), ...body],
+      range: `Lines ${this.offset + 1}–${Math.min(content.length, this.offset + height)}/${content.length}`,
+    };
+  }
+
+  /** The job's assistant conversation, newest lines at the bottom, above its input line. */
+  private renderAssistant(job: JobSnapshot, width: number, height: number): string[] {
+    const nodeId = this.assistantNode(job);
+    const assistant = this.jobs.assistant(job.jobId, nodeId);
+    // Each scope has its own conversation; a new one starts at its newest lines.
+    const scope = JSON.stringify([job.jobId, nodeId ?? null]);
+    if (scope !== this.chatScope) {
+      this.chatScope = scope;
+      this.chatOffset = 0;
+    }
+    const title = this.theme.fg("accent", this.theme.bold(nodeId === undefined ? "Assistant · job" : `Assistant · node ${plain(nodeId)}`)) +
+      this.theme.fg("muted", assistant.busy ? " · working… Esc to stop" : " · Tab to hide");
+    let lines: string[];
+    try {
+      lines = assistant.conversation.messages.length
+        ? this.chat.render(assistant.conversation, width)
+        : [
+            // Wrapped, not truncated, and kept off the input line like a finished reply.
+            ...[
+              nodeId === undefined
+                ? "Ask what a node is doing, why it failed, or what it produced."
+                : `Ask what ${plain(nodeId)} is doing, why it failed, or what it produced.`,
+              "To change a running execution's direction, say what it should do; the assistant messages that execution for you.",
+            ].flatMap(hint => wrapTextWithAnsi(this.theme.fg("dim", hint), width)),
+            "",
+          ];
+    } catch (error) {
+      lines = [this.theme.fg("error", `Assistant view unavailable: ${plain(error instanceof Error ? error.message : String(error))}`)];
+    }
+    const visible = Math.max(1, height - 3);
+    this.chatMaxOffset = Math.max(0, lines.length - visible);
+    this.chatOffset = Math.min(this.chatOffset, this.chatMaxOffset);
+    const end = lines.length - this.chatOffset;
+    const body = lines.slice(Math.max(0, end - visible), end);
+    while (body.length < visible) body.unshift("");
+    this.input.focused = true;
+    const input = this.input.render(width)[0] ?? "";
+    return [title, this.theme.fg("borderMuted", "─".repeat(width)), ...body, input].slice(0, height);
+  }
+
+  /** Messages the assistant sent that this execution has not received yet. */
+  private pendingLines(job: JobSnapshot, executionId: string): string[] {
+    let pending: readonly { text: string }[] = [];
+    try { pending = this.jobs.pendingInputs(job.jobId, executionId); }
+    catch { /* The job was removed; show nothing. */ }
+    if (!pending.length) return [];
     return [
-      ...header,
-      ...(pinned.length ? [...pinned.map(row), rule("├", "┤")] : []),
-      ...body.map(row),
-      rule("├", "┤"),
-      row(
-        this.theme.fg(
-          "dim",
-          `${range}${contentWidth >= 60 ? "  ·  Jobs keep running when this panel closes" : ""}`,
-        ),
-      ),
-      row(this.theme.fg("muted", help)),
-      rule("╰", "╯"),
+      ...pending.map(input => this.theme.fg("warning", `⧗ pending human input · ${plain(input.text)}`)),
+      this.theme.fg("dim", "  Delivered before the worker's next model request; running tools are not interrupted."),
     ];
+  }
+
+  /** The node whose conversation the assistant shows: the open session's, or the selected one. */
+  private assistantNode(job: JobSnapshot): string | undefined {
+    if (!this.focus) return this.choosing;
+    if ("nodeId" in this.focus) return this.focus.nodeId;
+    try { return this.jobs.getNode(job.jobId, undefined, this.focus.executionId).id; }
+    catch { return undefined; }
+  }
+
+  /** What the user is looking at, so "this node" means something to the assistant. */
+  private describeView(job: JobSnapshot): string {
+    if (this.focus) {
+      try {
+        const node = "nodeId" in this.focus ? this.jobs.getNode(job.jobId, this.focus.nodeId) : this.jobs.getNode(job.jobId, undefined, this.focus.executionId);
+        return `session of node ${JSON.stringify(node.id)}${node.executionId ? `, execution ${node.executionId}` : ""} (${node.status})`;
+      } catch {
+        return "a node that is no longer in the graph";
+      }
+    }
+    if (this.choosing !== undefined) {
+      const node = (job.result?.nodes ?? job.live.nodes)[this.choosing];
+      return `job graph with node ${JSON.stringify(this.choosing)} selected (${node?.status ?? "pending"})`;
+    }
+    return `job graph overview (${job.status})`;
   }
 
   /** Graph definition order, which is also the flowchart's declaration order. */
@@ -225,7 +365,7 @@ export class BraidPanel implements Component {
   }
 
   /** A focused node can disappear after a live graph update; say so instead of failing. */
-  private renderFocus(job: JobSnapshot, focus: NodeFocus, width: number): { pinned: string[]; body: string[] } {
+  private renderFocus(job: JobSnapshot, focus: NodeFocus, width: number): { pinned: string[]; body: string[]; executionId?: string } {
     let node;
     try {
       node = "nodeId" in focus
@@ -253,7 +393,7 @@ export class BraidPanel implements Component {
     let failure: string | undefined;
     if (transcript) {
       try {
-        return { pinned: header, body: this.session.render(transcript, width) };
+        return { pinned: header, body: this.session.render(transcript, width), executionId: node.executionId! };
       } catch (error) {
         // A rendering failure must not take down the overlay; fall back to the summary.
         failure = this.theme.fg("error", `Session view unavailable: ${plain(error instanceof Error ? error.message : String(error))}`);
@@ -279,7 +419,21 @@ export class BraidPanel implements Component {
   }
 
   handleInput(data: string): void {
-    if (data === "q" || matchesKey(data, "ctrl+c")) {
+    if (matchesKey(data, "ctrl+c")) {
+      this.close();
+      return;
+    }
+    if (matchesKey(data, "tab") && this.selected) {
+      this.assistantOpen = !this.assistantOpen;
+      this.refresh();
+      return;
+    }
+    if (this.assistantOpen) {
+      this.assistantInput(data);
+      this.refresh();
+      return;
+    }
+    if (data === "q") {
       this.close();
       return;
     }
@@ -337,6 +491,35 @@ export class BraidPanel implements Component {
     } else if (matchesKey(data, "end")) this.follow = true;
     else if (matchesKey(data, "ctrl+o")) this.session.toggleExpanded();
     else this.scroll(data);
+  }
+
+  /** The wheel scrolls whichever side it is over; other mouse events are left to Pi. */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    const layout = this.layout;
+    if (event.type !== "wheel" || !event.wheelDelta || !layout) return undefined;
+    if (event.y < layout.top || event.y >= layout.top + layout.height) return undefined;
+    if (layout.chatLeft !== undefined && event.x >= layout.chatLeft - 1) {
+      this.chatOffset = Math.max(0, Math.min(this.chatMaxOffset, this.chatOffset - event.wheelDelta));
+    } else {
+      const before = this.offset;
+      this.offset = Math.max(0, Math.min(this.maxOffset, this.offset + event.wheelDelta));
+      if (this.offset < before) this.follow = false;
+      else if (this.offset >= this.maxOffset) this.follow = true;
+    }
+    this.refresh();
+    return { handled: true };
+  }
+
+  /** Every key belongs to the question, including q and c. */
+  private assistantInput(data: string): void {
+    const job = this.selected ? this.jobs.get(this.selected) : undefined;
+    const assistant = job ? this.jobs.assistant(job.jobId, this.assistantNode(job)) : undefined;
+    if (matchesKey(data, "escape")) {
+      if (assistant?.busy) assistant.abort();
+      else this.assistantOpen = false;
+    } else if (matchesKey(data, "pageUp")) this.chatOffset = Math.min(this.chatMaxOffset, this.chatOffset + 10);
+    else if (matchesKey(data, "pageDown")) this.chatOffset = Math.max(0, this.chatOffset - 10);
+    else this.input.handleInput(data);
   }
 
   private scroll(data: string): void {
@@ -441,7 +624,9 @@ export function registerBraidCommand(pi: ExtensionAPI, jobs: BraidJobs): void {
       try {
         await ctx.ui.custom<void>(
           (tui, theme, _keys, done) => {
-            panel = new BraidPanel(jobs, tui, theme, done, jobId, focus);
+            // The assistant uses whichever model the main session has selected when asked.
+            panel = new BraidPanel(jobs, tui, theme, done, jobId, focus,
+              () => ({ registry: ctx.modelRegistry, ...(ctx.model ? { model: ctx.model } : {}) }));
             return panel;
           },
           {

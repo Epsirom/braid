@@ -5,8 +5,8 @@ import {
   UserMessageComponent,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Container, stripTerminalSequences, Text, type TUI } from "@earendil-works/pi-tui";
-import type { PiTranscript } from "./transcript.js";
+import { Container, Spacer, stripTerminalSequences, Text, type TUI } from "@earendil-works/pi-tui";
+import type { PiConversation } from "./transcript.js";
 
 const plain = (value: string): string => stripTerminalSequences(value).replace(/\p{Cc}/gu, " ");
 
@@ -16,7 +16,7 @@ const plain = (value: string): string => stripTerminalSequences(value).replace(/
  */
 export class NodeSessionView {
   private readonly chat = new Container();
-  private transcript: PiTranscript | undefined;
+  private transcript: PiConversation | undefined;
   private version = -1;
   private rendered = 0;
   private streaming: AssistantMessageComponent | undefined;
@@ -36,18 +36,33 @@ export class NodeSessionView {
     this.version = -1;
   }
 
-  render(transcript: PiTranscript, width: number): string[] {
+  render(transcript: PiConversation, width: number): string[] {
     this.sync(transcript);
     // Pi marks its own prompts for terminal shell integration; these are not prompts.
     return this.chat.render(width).map(line => line.replace(/\x1b\]133;[^\x07\x1b]*(?:\x07|\x1b\\)/g, ""));
   }
 
-  private sync(transcript: PiTranscript): void {
+  private sync(transcript: PiConversation): void {
     if (transcript !== this.transcript) this.reset(transcript);
     if (transcript.version === this.version) return;
     this.version = transcript.version;
     for (; this.rendered < transcript.messages.length; this.rendered++) {
       const message = transcript.messages[this.rendered]!;
+      if (message.role === "human") {
+        this.gap();
+        this.add(new Text(message.delivered
+          ? this.theme.fg("warning", "✎ Human input · delivered before the next model request")
+          : this.theme.fg("error", "✎ Human input · not delivered: the execution ended before its next model request"), 1, 0));
+        this.add(new UserMessageComponent(message.text, getMarkdownTheme()));
+        continue;
+      }
+      if (message.role === "user") {
+        const text = typeof message.content === "string" ? message.content
+          : message.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n");
+        this.gap();
+        this.add(new UserMessageComponent(text, getMarkdownTheme()));
+        continue;
+      }
       if (message.role === "toolResult") {
         this.tools.get(message.toolCallId)?.updateResult(message);
         this.partials.delete(message.toolCallId);
@@ -58,6 +73,8 @@ export class NodeSessionView {
       this.streaming = undefined;
       component.updateContent(message, false);
       this.toolCalls(message, transcript, true);
+      // A reply that requests no tools ends the turn; leave room below it right away.
+      if (message.stopReason !== "toolUse") this.gap();
     }
     if (transcript.streaming) {
       this.streaming ??= this.add(new AssistantMessageComponent(undefined, false, getMarkdownTheme()));
@@ -73,7 +90,7 @@ export class NodeSessionView {
     }
   }
 
-  private toolCalls(message: NonNullable<PiTranscript["streaming"]>, transcript: PiTranscript, complete: boolean): void {
+  private toolCalls(message: NonNullable<PiConversation["streaming"]>, transcript: PiConversation, complete: boolean): void {
     for (const block of message.content) {
       if (block.type !== "toolCall") continue;
       let tool = this.tools.get(block.id);
@@ -95,7 +112,7 @@ export class NodeSessionView {
     }
   }
 
-  private reset(transcript: PiTranscript): void {
+  private reset(transcript: PiConversation): void {
     this.transcript = transcript;
     this.chat.clear();
     this.tools.clear();
@@ -104,6 +121,7 @@ export class NodeSessionView {
     this.rendered = 0;
     this.version = -1;
     const intro = transcript.intro;
+    if (!intro) return;
     this.add(new UserMessageComponent(intro.prompt, getMarkdownTheme()));
     this.add(new Text(this.theme.fg("dim", [
       `goal: ${plain(intro.goal)}`,
@@ -111,7 +129,13 @@ export class NodeSessionView {
     ].join("\n")), 1, 0));
   }
 
-  private add<T extends AssistantMessageComponent | ToolExecutionComponent | UserMessageComponent | Text>(component: T): T {
+  /** One blank line between turns: after a finished reply, or before a new message. */
+  private gap(): void {
+    const last = this.chat.children.at(-1);
+    if (last && !(last instanceof Spacer)) this.add(new Spacer(1));
+  }
+
+  private add<T extends AssistantMessageComponent | ToolExecutionComponent | UserMessageComponent | Text | Spacer>(component: T): T {
     this.chat.addChild(component);
     return component;
   }

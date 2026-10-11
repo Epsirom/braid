@@ -154,6 +154,13 @@ export interface TokenUsage {
   outputTokens: number;
 }
 
+/** A message a human sent to a running execution, outside its graph definition and inputs. */
+export interface HumanInput {
+  text: string;
+  /** When the adapter delivered it to the worker. */
+  timestamp: number;
+}
+
 export interface NodeOutput {
   output: string;
   decision?: string;
@@ -202,6 +209,12 @@ export interface ModelRequest {
   };
   /** Present only on decision nodes. An adapter exposes this as the decide tool. */
   decide?: (choice: string) => void;
+  /**
+   * Adapters call this when they deliver a human message to the running worker,
+   * before the model request that includes it. Core records it on the execution
+   * and in the event log. Throws once the invocation has ended.
+   */
+  recordHumanInput?: (text: string) => void;
 }
 
 export interface ModelResponse {
@@ -248,6 +261,7 @@ export type ExecutionEvent = Readonly<
         fromExecutionId?: string;
       }
     | { type: "node_started"; nodeId: string; model?: string }
+    | { type: "human_input"; nodeId: string; text: string }
     | ({
         type: "node_completed";
         nodeId: string;
@@ -326,6 +340,11 @@ export interface NodeResult extends Partial<NodeOutput> {
   error?: ExecutionError;
   skipReason?: "inactive" | "upstream_failed" | "graph_timeout" | "cancelled" | "run_failed";
   workspace?: NodeWorkspace;
+  /**
+   * Human messages delivered while this execution ran. When present, its result
+   * did not come purely from the graph definition and predecessor inputs.
+   */
+  humanInputs?: HumanInput[];
 }
 
 export interface BraidResult {

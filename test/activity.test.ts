@@ -154,3 +154,26 @@ test("recorders without an execution identity and throwing observers never affec
   assert.deepEqual(activity.limitations, ["Provider stream events are unavailable"]);
   assert.ok(activity.entries.some(entry => entry.kind === "model_error" && entry.isError));
 });
+
+test("human input is recorded on the execution, in the event log, and in activity, only while the runner runs", async () => {
+  const tracker = new ExecutionActivityTracker();
+  let record: ModelRequest["recordHumanInput"];
+  const result = await braid(graph([execute("a")]), {
+    onEvent: event => tracker.observe(event),
+    runner: async request => {
+      record = request.recordHumanInput;
+      assert.throws(() => record!("  "), /non-empty/);
+      record!("Prefer the smaller fix");
+      return { output: "done" };
+    },
+  });
+  const execution = Object.values(result.executions)[0]!;
+  assert.deepEqual(execution.humanInputs?.map(input => input.text), ["Prefer the smaller fix"]);
+  assert.equal(result.nodes.a!.humanInputs?.length, 1);
+  const event = result.events.find(event => event.type === "human_input");
+  assert.ok(event && event.type === "human_input" && event.text === "Prefer the smaller fix" && event.executionId === execution.executionId);
+  const entry = tracker.get(execution.executionId)!.entries.find(entry => entry.kind === "human_input");
+  assert.equal(entry?.detail, "Prefer the smaller fix");
+  assert.throws(() => record!("too late"), /can no longer be delivered/);
+  assert.equal(Object.values(result.executions)[0]!.humanInputs?.length, 1);
+});
