@@ -13,7 +13,7 @@
   private context with local providers rooted at its workspace; Braid keeps its
   write boundary, live shell output, and cleanup of leftover processes before
   the checkpoint. `@chrok/dsh-braid` gains peer dependencies on these DSH
-  packages — @Epsirom.
+  packages ([#75](https://github.com/Epsirom/braid/pull/75)) — @Epsirom.
 
 ### Maintenance
 
