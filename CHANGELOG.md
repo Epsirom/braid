@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixes
+
+- The package smoke test (`npm run test:package`) failed after
+  `@earendil-works/pi-codemode` 1.2.0 removed `MCP_TYPESCRIPT_PREAMBLE`, which
+  the pinned Pi host (`@earendil-works/pi-coding-agent` 1.0.1) still imports
+  through its `^1.0.1` range. The smoke consumer now holds Pi's transitive
+  packages at the versions in `package-lock.json`. Published packages are
+  unchanged.
+
 ## 0.3.4 — 2026-10-11
 
 ### Features
