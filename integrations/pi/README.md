@@ -152,7 +152,7 @@ drops the queued message. Session shutdown suppresses delivery.
 
 Set `pauseAfter: true` to hold an execution's outgoing scheduling and receive a
 pause reminder. Independent branches continue. Fetch `braid_status` to obtain
-`execution.revision` and `execution.pausedExecutionIds`, then:
+the current graph revision and paused execution IDs, then:
 
 ```json
 {
@@ -178,9 +178,9 @@ Pause reminders describe the event when it occurred: check current status and
 paused IDs before attempting an update/resume, since the job can time out or be
 cancelled before the parent handles the reminder.
 
-Focused `braid_status` reads also include the current control fields; the
-returned `node.revision` is the revision captured when that invocation started.
-Use `execution.revision` for updates even when inspecting an older invocation.
+Focused `braid_status` reads also start with the current control fields: graph
+status, revision, and paused execution IDs. Use that current revision for
+updates even when inspecting an older invocation.
 After cancellation or finalization there are no resumable paused executions;
 the event log still records where pauses occurred.
 
@@ -317,9 +317,15 @@ counts, and the execution log. Active nodes are marked `▶ ACTIVE`. The status
 tool also renders a flowchart; expand its result to see more log events.
 When selecting `nodeId` or `executionId`, it instead shows that invocation's
 output/error and activity, with the full text and history available on expansion.
-The JSON includes `activity` with the latest 40 history entries; pass
+
+The Braid tools return plain-text documents to the model, not JSON. A
+whole-job read lists the control state, every execution, their outputs,
+workspaces, and the current graph without prompts. A focused read shows one
+execution's output and its activity with the latest 40 history entries; pass
 `activityBefore` with an entry sequence to page earlier ones. While the invocation
-runs, `activity` comes before `node` so it survives preview truncation.
+runs, the activity comes before the output so it survives preview truncation.
+Worker `git` results read like Pi's bash output, and `decide` returns
+`Recorded choice: <choice>`.
 
 `/braid` now opens this panel; it no longer arms the next prompt. To request
 Braid explicitly, ask the agent to analyze the task using Braid.
@@ -330,11 +336,9 @@ model lookup, credentials/OAuth, provider transport, filesystem tool execution,
 and token/cost accounting. The first
 whole-job `braid_status` retrieval of a finished job reports its accumulated Pi usage;
 subsequent retrievals do not count the same usage again.
-Use the status response's `usage` for Pi totals, including completed provider
-rounds from nodes that later fail or time out. Saved final result files expose
-the same accounting as `piUsage`; core `metadata.usage` only includes usage
-returned by runners. Large running status reads save a complete snapshot too,
-so truncation never requires waiting for job completion to inspect the graph.
+The whole-job status text reports Pi's totals as `Usage`, including completed
+provider rounds from nodes that later fail or time out; core `metadata.usage`
+only includes usage returned by runners.
 
 ## When Pi will use Braid
 
@@ -618,9 +622,9 @@ writes already made. Core waits for tracked writes, preserves checkpoints, and
 removes worker worktrees before completing cancellation.
 
 The tool output is capped at 50KB/2000 lines to protect Pi context. When exceeded,
-the adapter writes a full JSON result to a temporary file (mode 600 on POSIX;
-inherited ACLs on Windows) and includes
-its path in the tool output.
+the adapter writes the complete text to a temporary file (mode 600 on POSIX;
+inherited ACLs on Windows) and ends the preview with its path, for running jobs
+as well as finished ones.
 
 For a test of proactive selection, start a fresh Pi turn with a task such as:
 

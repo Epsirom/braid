@@ -1,4 +1,4 @@
-import type { ModelResponse, ModelRunner, TokenUsage } from "../types.js";
+import type { GitResult, ModelResponse, ModelRunner, TokenUsage } from "../types.js";
 import { formatBudgetReminder } from "../budgets.js";
 import { gitToolDefinition, finishMergeToolDefinition, mergeInstructions, parseGitToolArguments, parseFinishMergeArguments } from "../merge-tools.js";
 
@@ -18,6 +18,14 @@ interface ToolCall {
 
 interface Completion extends ModelResponse {
   toolCalls: ToolCall[];
+}
+
+/** Command-style text: stdout, a marked stderr section, and a nonzero exit marker. */
+function formatGitResult(result: GitResult): string {
+  let body = result.stdout;
+  if (result.stderr) body += `${body && !body.endsWith("\n") ? "\n" : ""}[stderr]\n${result.stderr}`;
+  if (!body) body = "(no output)";
+  return result.exitCode === 0 ? body : `${body}${body.endsWith("\n") ? "" : "\n"}[exit code: ${result.exitCode}]`;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -207,7 +215,7 @@ export function createOpenAICompatibleRunner(
             const args = JSON.parse(call.function.arguments) as Record<string, unknown>;
             if (call.function.name === "git" && request.git) {
               const parsed = parseGitToolArguments(args, true);
-              content = JSON.stringify(await request.git(parsed.args, parsed.input));
+              content = formatGitResult(await request.git(parsed.args, parsed.input));
             } else if (call.function.name === "finish_merge" && request.merge) {
               await request.merge.finish(parseFinishMergeArguments(args, request.merge.sources.map(source => source.executionId!)));
               content = "Merge dispositions recorded. Return your final answer.";
@@ -261,7 +269,7 @@ export function createOpenAICompatibleRunner(
         {
           role: "tool",
           tool_call_id: call.id,
-          content: JSON.stringify({ choice: args.choice }),
+          content: `Recorded choice: ${args.choice}`,
         },
       );
       // One bounded follow-up to obtain text; no tools or further tool loop.

@@ -238,16 +238,6 @@ test(
     const ctx = context(async () => response("x".repeat(100_000)));
     const job = jobs.start(input, {}, ctx);
     await jobs.wait(job.jobId);
-    const saved = jobs.get(job.jobId)!;
-    t.after(() => rm(dirname(saved.fullOutputPath!), { recursive: true }));
-    // Windows uses ACLs and does not implement POSIX owner/group mode bits.
-    if (process.platform !== "win32")
-      assert.equal((await stat(saved.fullOutputPath!)).mode & 0o777, 0o600);
-    assert.equal(
-      JSON.parse(await readFile(saved.fullOutputPath!, "utf8")).terminalOutputs
-        .a.output.length,
-      100_000,
-    );
     const result = await createBraidTools(jobs).statusTool.execute(
       "status",
       { jobId: job.jobId },
@@ -260,7 +250,15 @@ test(
       .map((item) => item.text)
       .join("\n");
     assert.ok(output.length < 52_000);
-    assert.match(output, /Full result\/log:/);
+    const path = output.match(/\[Truncated\. Full text: (.+)\]$/)![1]!;
+    t.after(() => rm(dirname(path), { recursive: true }));
+    assert.equal(result.details?.fullOutputPath, path);
+    // Windows uses ACLs and does not implement POSIX owner/group mode bits.
+    if (process.platform !== "win32")
+      assert.equal((await stat(path)).mode & 0o777, 0o600);
+    const saved = await readFile(path, "utf8");
+    assert.match(saved, /^Braid job job-1 · completed\n/);
+    assert.ok(saved.includes(`## a · ${jobs.get(job.jobId)!.result!.nodes.a!.executionId} · terminal\n${"x".repeat(100_000)}`));
   },
 );
 
@@ -307,11 +305,12 @@ test("large intermediate node results can be retrieved in full without claiming 
   assert.equal(block.type, "text");
   const text = block.type === "text" ? block.text : "";
   assert.ok(text.length < 52_000);
-  const path = text.match(/Full node result: (.+)\]/)![1]!;
+  const path = text.match(/\[Truncated\. Full text: (.+)\]$/)![1]!;
   t.after(() => rm(dirname(path), { recursive: true }));
-  const saved = JSON.parse(await readFile(path, "utf8"));
-  assert.equal(saved.status, "running");
-  assert.equal(saved.node.output, output);
+  assert.equal(result.details?.nodeOutputPath, path);
+  const saved = await readFile(path, "utf8");
+  assert.match(saved, /^Braid job job-1 · running · /);
+  assert.ok(saved.includes(`Output:\n${output}`));
   assert.equal(result.usage, undefined);
   if (process.platform !== "win32") assert.equal((await stat(path)).mode & 0o777, 0o600);
   const copy = jobs.getNode(job.jobId, "__proto__");
@@ -321,8 +320,6 @@ test("large intermediate node results can be retrieved in full without claiming 
   await assert.rejects(statusTool.execute("missing-node", { jobId: job.handle, nodeId: "toString" }, undefined, undefined, ctx), /Unknown Braid node/);
   other.resolve(response());
   await jobs.wait(job.handle);
-  const final = jobs.get(job.handle)!;
-  t.after(() => rm(dirname(final.fullOutputPath!), { recursive: true }));
   const read = await statusTool.execute("finished-node", { jobId: job.handle, nodeId: "other" }, undefined, undefined, ctx);
   assert.equal(read.usage, undefined);
   assert.ok(jobs.claimUsage(job.handle));

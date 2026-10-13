@@ -12,6 +12,11 @@ function result(args: object, value: object, isError = false): ToolCallPhaseProp
   return { phase: "result", block: { kind: "tool-result", callId: "call-1", seq: 1, time: 2000, callTime: 1000,
     call: { name: "braid", argsRaw: JSON.stringify(args) }, content: [{ type: "text", text: JSON.stringify(value) }], isError, subCalls: [] } };
 }
+/** Results now carry text content and their identifiers in presentation meta. */
+function textResult(name: string, args: object, meta: object): ToolCallPhaseProps {
+  return { phase: "result", block: { kind: "tool-result", callId: "call-1", seq: 1, time: 2000, callTime: 1000,
+    call: { name, argsRaw: JSON.stringify(args) }, content: [{ type: "text", text: "Braid job job-1 · running" }], isError: false, meta, subCalls: [] } };
+}
 const start: ToolCallPhaseProps = { phase: "start", block: { phase: "start", callId: "call-1", name: "braid", turn: 1, step: 1, time: 1000, argsRaw: "{}", subCalls: [] } };
 
 test("tool links resolve canonical receipts, exact historical execution, single resume, and legacy handles", () => {
@@ -28,6 +33,18 @@ test("tool links resolve canonical receipts, exact historical execution, single 
   assert.deepEqual(toolNavigation("braid_status", result({}, { jobs: [] })), {});
   assert.equal(toolNavigation("bash", result({}, { jobId: "uuid-1" })), null);
   assert.deepEqual(readNavigation({ jobId: [], executionId: "e", createdBefore: -1 }), { executionId: "e" });
+});
+
+test("text results link and summarize from presentation meta", () => {
+  const control = { jobId: "job-1", canonicalJobId: "uuid-1", status: "running",
+    execution: { status: "waiting", revision: 5, pausedExecutionIds: ["a"], total: 2, completed: 1 } };
+  assert.deepEqual(toolNavigation("braid", textResult("braid", {}, { jobId: "job-1", canonicalJobId: "uuid-1", nodeCount: 3 })), { jobId: "uuid-1", createdBefore: 2000 });
+  assert.equal(toolPresentation("braid", textResult("braid", {}, { canonicalJobId: "uuid-1", nodeCount: 3 })).summary, "Graph submitted · 3 nodes");
+  assert.match(toolPresentation("braid_status", textResult("braid_status", { jobId: "job-1" }, control)).summary, /^waiting · r5 · 1\/2 executions complete · 1 paused$/);
+  const focused = textResult("braid_status", { jobId: "job-1", nodeId: "a" }, { ...control, node: { id: "a", executionId: "a@1", status: "completed" } });
+  assert.deepEqual(toolNavigation("braid_status", focused), { jobId: "uuid-1", nodeId: "a", executionId: "a@1", createdBefore: 2000 });
+  assert.equal(toolPresentation("braid_status", focused).summary, "execution completed · graph waiting · r5 · 1 paused");
+  assert.match(toolPresentation("braid_status", textResult("braid_status", { jobId: "job-1" }, { ...control, truncated: true })).changes.at(-1)!, /full text is saved/);
 });
 
 test("operation summaries distinguish snapshot progress, updates not applied, resume and cancellation outcomes", () => {

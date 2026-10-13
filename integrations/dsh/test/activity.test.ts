@@ -57,9 +57,9 @@ test("stream chunks, tool calls, and lifecycle are visible while an execution ru
 
     const exec = { signal: new AbortController().signal } as ToolRunContext;
     const [, status] = createBraidTools(() => jobs, () => { throw new Error("should not submit"); });
-    const read = await status!.execute({ jobId: job.handle, executionId }, exec) as { activity: { phase: string }; node: unknown };
-    assert.equal(read.activity.phase, "model");
-    assert.ok(Object.keys(read).indexOf("activity") < Object.keys(read).indexOf("node"));
+    const read = (await status!.execute({ jobId: job.handle, executionId }, exec) as { text: string }).text;
+    assert.match(read, /^Activity: model for /m);
+    assert.ok(read.indexOf("Activity:") < read.indexOf("Output:"), "running activity precedes the output");
     await assert.rejects(status!.execute({ jobId: job.handle, activityBefore: 2 }, exec), /activityBefore requires/);
 
     gate.resolve();
@@ -70,8 +70,8 @@ test("stream chunks, tool calls, and lifecycle are visible while an execution ru
     const kinds = done.entries.map(entry => `${entry.kind}:${entry.toolName ?? ""}`);
     for (const kind of ["reasoning:", "tool_call:read", "tool_result:read", "assistant:"]) assert.ok(kinds.includes(kind), kinds.join(", "));
     assert.ok(done.entries.find(entry => entry.kind === "tool_result")!.isError);
-    const page = await status!.execute({ jobId: job.handle, executionId, activityBefore: 3 }, exec) as { activity: { entries: { sequence: number }[] } };
-    assert.deepEqual(page.activity.entries.map(entry => entry.sequence), [1, 2]);
+    const page = (await status!.execute({ jobId: job.handle, executionId, activityBefore: 3 }, exec) as { text: string }).text;
+    assert.deepEqual([...page.matchAll(/^- #(\d+) /gm)].map(match => Number(match[1])), [1, 2]);
     assert.equal(panelJob(jobs.get(job.handle), id => jobs.getActivity(job.handle, id)).executions[0]!.activity, undefined);
   } finally { gate.resolve(); await jobs.dispose(); }
 });

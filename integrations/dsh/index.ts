@@ -7,7 +7,8 @@ import type {} from "@deepseek-ai/dsh-system-prompt";
 import type {} from "@deepseek-ai/dsh-jobs";
 import type { BraidInput } from "@chrok/braid";
 import { BraidJobs, type JobOptions, type JobSnapshot } from "./jobs.js";
-import { createBraidTools, graphReceipt } from "./tools.js";
+import { createBraidTools } from "./tools.js";
+import { formatJobList, formatReceipt } from "./status-text.js";
 import { BRAID_USAGE_GUIDANCE } from "./schema.js";
 import { renderPanel } from "./display.js";
 import { BraidPanel } from "./panel.js";
@@ -104,13 +105,13 @@ export function apply(ctx: Context): void {
             clearTimeout(timer); unsubscribe(); refresh();
             const job = jobs.get(handle);
             return { status: job.status === "cancelled" ? "killed" as const : job.status === "completed" ? "completed" as const : "failed" as const,
-              detail: `Braid ${handle}; retrieve with braid_status`, result: JSON.stringify({ jobId: handle, status: job.status }) };
+              detail: `Braid ${handle}; retrieve with braid_status`, result: `Braid job ${handle} finished with status ${job.status}.` };
           }),
         };
       },
     });
-    return { jobId: snapshot!.handle, canonicalJobId: snapshot!.jobId, nativeJobId, status: snapshot!.status,
-      graph: graphReceipt(snapshot!), message: "Running in background. Open Braid in the session header for the live graph and execution details, or use the Jobs panel / /braid. Completion reminders wake an idle agent or steer at the next step. Do not poll repeatedly." };
+    return { text: formatReceipt(snapshot!, "Running in background. Open Braid in the session header for the live graph and execution details, or use the Jobs panel / /braid. Completion reminders wake an idle agent or steer at the next step. Do not poll repeatedly."),
+      jobId: snapshot!.handle, canonicalJobId: snapshot!.jobId, nativeJobId, status: snapshot!.status, nodeCount: snapshot!.execution.graph.nodes.length };
   })) ctx.tools.register(tool);
 
   ctx.systemPrompt.section({ name: "braid", order: 80, text: BRAID_USAGE_GUIDANCE, interpolate: false });
@@ -123,7 +124,7 @@ export function apply(ctx: Context): void {
         if (parts[0] === "cancel" && parts.length === 2)
           return { kind: "success", text: jobs.cancel(parts[1]!) ? "Cancellation requested." : "Job already finished." };
         if (parts.length > 1 || parts[0] === "cancel") return { kind: "error", text: "Usage: /braid [jobId] | cancel <jobId> | list" };
-        if (parts[0] === "list") return { kind: "success", text: JSON.stringify(jobs.list(), null, 2) };
+        if (parts[0] === "list") return { kind: "success", text: formatJobList(jobs.list()) };
         const id = parts[0] ?? jobs.list()[0]?.handle;
         return { kind: "success", text: id ? renderPanel(jobs.get(id), executionId => jobs.getActivity(id, executionId, { limit: 0 })) : "No Braid jobs in this session." };
       } catch (error) { return { kind: "error", text: error instanceof Error ? error.message : String(error) }; }

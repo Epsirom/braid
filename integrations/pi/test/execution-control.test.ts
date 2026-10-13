@@ -21,9 +21,10 @@ test("Pi atomically updates a paused job, resumes, and retrieves immutable execu
   assert.deepEqual(jobs.progress(paused.handle), {
     total: 1, done: 1, failed: 0, running: [], paused: 1,
   });
-  const receipt = JSON.parse((submitted.content[0] as { text: string }).text);
-  assert.deepEqual(receipt.graph.nodes, [{ type: "execute", id: "a", pauseAfter: true }]);
-  assert.deepEqual(receipt.graph.edges, []);
+  const receipt = (submitted.content[0] as { text: string }).text;
+  assert.match(receipt, /^Braid job job-1 started \(running\)\.\nID: \S+\n/);
+  assert.match(receipt, /Accepted graph \(revision 0\):\nNodes:\n- a: execute, pauseAfter\nEdges:\n- none$/);
+  assert.doesNotMatch(receipt, /work/, "prompts are not echoed");
   await assert.rejects(tools.updateTool.execute("invalid topology", {
     jobId: paused.handle, expectedRevision: 0,
     upsertNodes: [{ type: "merge", id: "check" }],
@@ -40,9 +41,8 @@ test("Pi atomically updates a paused job, resumes, and retrieves immutable execu
   }, undefined, undefined, ctx);
   assert.equal(updated.details.execution!.revision, 1);
   assert.equal(jobs.progress(paused.handle)!.total, 2);
-  const updateReceipt = JSON.parse((updated.content[0] as { text: string }).text);
-  assert.deepEqual(updateReceipt.graph.nodes, [{ type: "execute", id: "a" }, { type: "execute", id: "b" }]);
-  assert.deepEqual(updateReceipt.graph.edges, [{ from: "a", executionId: paused.executionId, to: "b" }]);
+  const updateReceipt = (updated.content[0] as { text: string }).text;
+  assert.equal(updateReceipt, `Braid job job-1 updated to revision 1.\nPaused executions: none\nCurrent graph:\nNodes:\n- a: execute\n- b: execute\nEdges:\n- a -> b [execution=${paused.executionId}]`);
   await jobs.wait(paused.handle);
   const exact = jobs.getNode(paused.handle, undefined, paused.executionId);
   assert.equal(exact.output, "old result");

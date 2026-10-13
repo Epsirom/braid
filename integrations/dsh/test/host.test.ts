@@ -60,6 +60,10 @@ test("loads in actual Cordis/DSH services, produces valid canonical results, nat
     assert.ok("value" in submitted);
     const receipt = submitted.value as { jobId: string; canonicalJobId: string; nativeJobId: string };
     assert.equal(receipt.jobId, "job-1");
+    assert.ok("content" in submitted);
+    assert.match((submitted.content[0] as { text: string }).text, /^Braid job job-1 started \(running\)\.\nID: \S+\nRunning in background\./);
+    assert.equal((submitted.meta as { canonicalJobId: string }).canonicalJobId, receipt.canonicalJobId);
+    assert.equal((submitted.meta as { text?: string }).text, undefined);
     await until(() => Boolean(ctx.get("braidPanel")));
     const observation = await ctx.typertGateway.stream({ namespace: "braidPanel", method: "watch", args: { request: { sessionId: a.agent.id } }, signal: new AbortController().signal });
     const iterator = observation[Symbol.asyncIterator]();

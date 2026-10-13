@@ -127,10 +127,10 @@ for (const idle of [true, false]) {
       const read = await status.execute("read", { jobId: details.handle, executionId: details.executionId }, undefined, undefined, ctx);
       const block = read.content[0]!;
       assert.equal(block.type, "text");
-      const result = JSON.parse(block.type === "text" ? block.text : "");
-      assert.equal(result.status, "running");
-      assert.equal(result.node.status, details.status);
-      assert.equal(failed ? result.node.error.message : result.node.output, output);
+      const result = block.type === "text" ? block.text : "";
+      assert.match(result, /^Braid job job-1 · running · /);
+      assert.ok(result.includes(`Execution ${details.executionId} · node ${nodeId} (execute) · ${details.status}\n`), result);
+      assert.ok(result.includes(failed ? `Error: MODEL_ERROR: ${output}` : `Output:\n${output}`));
       assert.equal(read.usage, undefined);
       fake.handlers.get("message_start")!({ message: { ...message, role: "custom" } } as never, ctx);
       fake.handlers.get("agent_settled")!({} as never, ctx);

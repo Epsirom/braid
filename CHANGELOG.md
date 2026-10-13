@@ -15,6 +15,20 @@
   the checkpoint. `@chrok/dsh-braid` gains peer dependencies on these DSH
   packages ([#75](https://github.com/Epsirom/braid/pull/75)) — @Epsirom.
 
+- Braid tools no longer return JSON strings to the model. In Pi and DSH,
+  `braid`, `braid_status`, `braid_update`, and `braid_resume` return plain-text
+  documents: the receipt and update list the accepted graph without prompts; a
+  whole-job status lists control state, executions, outputs, workspaces, and
+  the current graph; a focused read shows one execution's output and activity.
+  Control fields (graph status, revision, paused execution IDs) always come
+  first. Text over 50 KB is truncated and the complete text is saved to a
+  private file; the JSON result and snapshot files are gone. Worker `git`
+  results read like the host's bash output, and `decide` returns
+  `Recorded choice: <choice>`, also in the OpenAI-compatible adapter. DSH tool
+  values become `{ text, ... }` with only identifiers beside the text, which the
+  Web client reads from presentation meta; recorded sessions with JSON results
+  still link correctly ([#77](https://github.com/Epsirom/braid/pull/77)) — @Epsirom.
+
 ### Maintenance
 
 - Pi 1.2.0 is now the pinned Pi validation target, replacing 1.0.1. The Pi

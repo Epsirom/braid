@@ -126,7 +126,11 @@ the tools and commands without a Web UI.
 
 The five graph tools expose the same execution controls as the Pi integration.
 DSH presentation uses a native Web graph panel, jobs and commands; it does not
-include Pi's Mermaid terminal renderer. Tool results are canonical JSON for both native and PTC mode.
+include Pi's Mermaid terminal renderer. Tool results are plain-text documents
+for the model, in native and PTC mode alike. Each result value is `{ text, ... }`:
+besides `text` it carries only identifiers such as `jobId`, `canonicalJobId`,
+`status`, revision, and paused IDs, which the Web client reads from the
+result's presentation meta.
 
 ## Graphs and workspaces
 
@@ -197,8 +201,8 @@ and ports require execution-specific resources.
 `notifyOnCompletion: true` sends an intermediate success/failure reminder.
 `pauseAfter: true` additionally holds outgoing scheduling; independent branches
 continue. Reminders identify the exact invocation and loop iteration in the job
-data. Fetch `braid_status`, then use its **current** `execution.revision` and
-`execution.pausedExecutionIds`:
+data. Fetch `braid_status`, then use its **current** graph revision and paused
+execution IDs:
 
 ```json
 {
@@ -252,11 +256,12 @@ usage combines input/cache into `inputTokens`. DSH does not offer Pi's external
 tool-cost accounting contract: repeated status reads return the same totals
 without adding charges to the foreground agent. No dollar cost is inferred.
 
-Results over 50 KB are saved as private JSON files in the host's temporary
-directory. The bounded response preserves status/control fields and includes
-`fullOutputPath`, including for running graphs and focused execution reads.
-Running status retains the latest 80 events; finalized `result.events` contains
-the complete core event log. Saved files remain available after job cleanup.
+Text over 50 KB is truncated: the control fields come first, and the complete
+text is saved as a private file in the host's temporary directory whose path
+ends the preview (and is the value's `fullOutputPath`), for running graphs and
+focused execution reads alike. Saved files remain available after job cleanup.
+Worker `git` results read like DSH's bash output (`[stderr]`, `[exit code: N]`),
+and `decide` returns `Recorded choice: <choice>`.
 
 ## Development
 
