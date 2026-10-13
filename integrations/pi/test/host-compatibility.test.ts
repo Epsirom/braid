@@ -111,9 +111,9 @@ test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and 
               assert.ok(result && result.role === "toolResult");
               const block = result.content[0]!;
               assert.equal(block.type, "text");
-              const nodeStatus = JSON.parse(block.type === "text" ? block.text : "");
-              assert.equal(nodeStatus.status, "running");
-              assert.equal(nodeStatus.node.output, "worker result");
+              const nodeStatus = block.type === "text" ? block.text : "";
+              assert.match(nodeStatus, /^Braid job job-1 · running · /);
+              assert.match(nodeStatus, /\n\nOutput:\nworker result(\n|$)/);
               message.content = [{ type: "text", text: "Intermediate result received; waiting for the job." }];
             } else if (notifyNode && foregroundCalls === 5) {
               assert.ok(JSON.stringify(context.messages).includes("Braid job job-1 finished with status completed"));

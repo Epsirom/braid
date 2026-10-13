@@ -186,7 +186,7 @@ test("OpenAI-compatible adapter runs decision -> parallel branches -> join end t
         ["system", "user", "assistant", "tool"],
       );
       assert.equal(body.messages[3]!.tool_call_id, "call-1");
-      assert.deepEqual(decode(body.messages[3]!.content!), { choice: "left" });
+      assert.equal(body.messages[3]!.content, "Recorded choice: left");
       return Response.json(
         completion(
           "Proceed with the two perspectives.",
@@ -463,5 +463,5 @@ test("OpenAI rejects duplicate Git commands before invoking the runner capabilit
   });
   assert.deepEqual(calls, [["status", "--short"]]);
   assert.match(fake.calls[1]!.messages.at(-1)!.content!, /DUPLICATE_GIT_COMMAND/);
-  assert.match(fake.calls[2]!.messages.at(-1)!.content!, /change.txt/);
+  assert.equal(fake.calls[2]!.messages.at(-1)!.content, "?? change.txt\n");
 });

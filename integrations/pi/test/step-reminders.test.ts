@@ -82,14 +82,14 @@ for (const phase of ["response", "tool batch"]) {
               } else if (foregroundCalls === 4) {
                 const result = context.messages.find(m => m.role === "toolResult" && m.toolCallId === "inspect");
                 assert.ok(result?.role === "toolResult" && result.content[0]?.type === "text");
-                const status = JSON.parse(result.content[0].text);
-                assert.equal(status.execution.revision, 0);
-                assert.equal(status.execution.pausedExecutionIds.length, 1);
-                assert.match(status.node.output, /unknown model/);
+                const status = result.content[0].text;
+                const paused = status.match(/ · revision 0 · paused executions: (\S+)\n/)?.[1];
+                assert.ok(paused && !paused.includes(","), status);
+                assert.match(status, /Output:\n.*unknown model/);
                 message.content = [
                   call("update", "braid_update", { jobId: "job-1", expectedRevision: 0,
                     upsertNodes: [{ id: "next", type: "execute", prompt: "updated successor" }],
-                    resume: status.execution.pausedExecutionIds }),
+                    resume: [paused] }),
                   call("finish", "foreground_work", { id: "finish" }),
                 ];
               } else if (foregroundCalls === 5) {

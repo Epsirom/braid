@@ -241,9 +241,6 @@ export class BraidPanel implements Component {
               ...(current.result ?? current.live),
               progress: current.live.progress,
               ...(current.workspaces ? { workspaces: current.workspaces } : {}),
-              ...(current.fullOutputPath
-                ? { fullOutputPath: current.fullOutputPath }
-                : {}),
             },
             true,
             false,

@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { BraidJobs, type Completion } from "../jobs.js";
-import { boundedResult, createBraidTools } from "../tools.js";
+import { createBraidTools, type ToolValue } from "../tools.js";
 import { answer, calls, context, input, llm, payload, until } from "./helpers.js";
 
 test("immediate submission, exact handles, snapshots, and terminal reminders", async () => {
@@ -82,13 +82,40 @@ test("graph timeout keeps running through pauses", async () => {
   await jobs.dispose();
 });
 
-test("large running and focused results preserve current controls and save full JSON", async () => {
-  const original = { jobId: "uuid", handle: "job-1", status: "running", execution: { status: "waiting", revision: 4, pausedExecutionIds: ["execution"] }, node: { output: "x".repeat(100_000) } };
-  const result = await boundedResult(original) as typeof original & { fullOutputPath: string; truncated: boolean };
+test("status results are text documents; long ones keep controls first and save the full text", async () => {
+  const output = "finding\n".repeat(15_000);
+  const jobs = new BraidJobs(llm(() => answer(output)));
+  const exec = { signal: new AbortController().signal } as import("@deepseek-ai/dsh-tools").ToolRunContext;
+  const [, status] = createBraidTools(() => jobs, () => { throw new Error("should not submit"); });
+  const paths: string[] = [];
   try {
-    assert.equal(result.truncated, true); assert.deepEqual(result.execution, original.execution);
-    assert.deepEqual(JSON.parse(await readFile(result.fullOutputPath, "utf8")), original);
-  } finally { await rm(dirname(result.fullOutputPath), { recursive: true }); }
+    const job = jobs.start({ ...input, nodes: [{ ...input.nodes[0]!, pauseAfter: true }] }, {}, context());
+    await until(() => jobs.get(job.handle).execution.pausedExecutionIds.length === 1);
+    const executionId = jobs.get(job.handle).execution.pausedExecutionIds[0]!;
+    const whole = await status!.execute({ jobId: job.handle }, exec) as ToolValue;
+    const focused = await status!.execute({ jobId: job.handle, executionId }, exec) as ToolValue;
+    for (const [value, name] of [[whole, "status.txt"], [focused, "node.txt"]] as const) {
+      assert.ok(Buffer.byteLength(value.text) < 51_000);
+      assert.equal(value.truncated, true);
+      const path = value.fullOutputPath as string; paths.push(path);
+      assert.ok(path.endsWith(name));
+      assert.ok(value.text.endsWith(`\n[Truncated. Full text: ${path}]`));
+      assert.ok((await readFile(path, "utf8")).includes(output));
+      assert.deepEqual(status!.output.render({}, value as never), [{ type: "text", text: value.text }]);
+      const meta = status!.output.presentationMeta!({}, value as never) as Record<string, unknown>;
+      assert.equal(meta.text, undefined);
+      assert.deepEqual(meta.execution, { status: "waiting", revision: 0, pausedExecutionIds: [executionId], total: 1, completed: 1 });
+    }
+    assert.match(whole.text, new RegExp(`^Braid job job-1 · running\nID: \\S+\nGraph waiting · revision 0 · paused executions: ${executionId}\n`));
+    assert.match(focused.text, new RegExp(`^Braid job job-1 · running · Graph waiting · revision 0 · paused executions: ${executionId}\nExecution ${executionId} · node a \\(execute\\) · completed\n`));
+    assert.deepEqual(focused.node, { id: "a", executionId, status: "completed" });
+    const list = await status!.execute({}, exec) as ToolValue;
+    assert.match(list.text, /^1 Braid job in this session, newest first:\n- job-1 · running · /);
+    assert.deepEqual(list.jobs, [{ jobId: job.jobId, handle: "job-1", status: "running" }]);
+  } finally {
+    await jobs.dispose();
+    for (const path of paths) await rm(dirname(path), { recursive: true });
+  }
 });
 
 test("schemas reject malformed graph fields and invalid options before publishing jobs", async () => {

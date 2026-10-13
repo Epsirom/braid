@@ -44,10 +44,6 @@ async function repository(t: TestContext) {
   const jobs = new BraidJobs();
   t.after(async () => {
     jobs.dispose();
-    for (const job of jobs.list()) {
-      const saved = jobs.get(job.jobId)!;
-      if (saved.fullOutputPath) await rm(dirname(saved.fullOutputPath), { recursive: true, force: true });
-    }
     await rm(root, { recursive: true, force: true });
   });
   const ctx = context(async () => response());
@@ -157,7 +153,7 @@ test("/braid:review fixes one checkpoint, re-reviews it, and preserves staged an
     if (turn === 1) {
       const result = worker.messages.at(-1)!;
       assert.equal(result.role, "toolResult");
-      if (result.role === "toolResult") patch = JSON.parse((result.content[0] as { text: string }).text).stdout as string;
+      if (result.role === "toolResult") patch = (result.content[0] as { text: string }).text;
       return toolResponse({ type: "toolCall", id: "apply", name: "git", arguments: { command: "apply", args: ["-"], input: patch } });
     }
     if (turn === 2) return toolResponse({ type: "toolCall", id: "finish", name: "finish_merge", arguments: {

@@ -656,7 +656,7 @@ export function renderNodeResult(
     ...(activity && activity.executionId === node.executionId ? renderActivity(activity, expanded, theme, now) : []),
     ...(node.output ? [expanded ? clean(node.output) : compact(node.output, 400)] : []),
     ...(!expanded && node.output && (node.output.length > 400 || node.output.includes("\n")) ? [theme.fg("dim", "Expand for full node output")] : []),
-    ...(fullOutputPath ? [theme.fg("dim", `full node result: ${compact(fullOutputPath, 240)}`)] : []),
+    ...(fullOutputPath ? [theme.fg("dim", `full text: ${compact(fullOutputPath, 240)}`)] : []),
   ];
   return new Text(lines.join("\n"), 0, 0);
 }
@@ -797,7 +797,7 @@ export function renderGraphResult(
     lines.push(
       theme.fg(
         "dim",
-        `full result/log: ${compact(result.fullOutputPath, 240)}`,
+        `full text: ${compact(result.fullOutputPath, 240)}`,
       ),
     );
   return new FixedLines(lines, chartStart, chart.length, nodeList, [

@@ -22,6 +22,7 @@ import {
   parseGitToolArguments,
   parseFinishMergeArguments,
   type ExecutionActivityTracker,
+  type GitResult,
   type ModelRunner,
   type NodeWorkspace as PiNodeWorkspace,
 } from "@chrok/braid";
@@ -59,6 +60,17 @@ export interface PiRunnerOptions {
   maxToolRounds?: number;
   /** Per node, including decide and rejected requests. Omit or use Infinity for no limit. */
   maxToolCalls?: number;
+}
+
+/**
+ * Present a Git result the way Pi's bash tool presents command output. Output
+ * stays byte-exact, so a diff can be passed back to git apply.
+ */
+export function formatGitResult(result: GitResult): string {
+  let output = result.stdout;
+  if (result.stderr) output += (output && !output.endsWith("\n") ? "\n" : "") + result.stderr;
+  if (result.exitCode === 0) return output || "(no output)";
+  return `${output ? `${output.replace(/\n$/, "")}\n\n` : ""}Command exited with code ${result.exitCode}`;
 }
 
 /** Keep Pi's provider/auth plumbing and filesystem capabilities out of Braid's core. */
@@ -378,7 +390,7 @@ export function createPiRunner(
         if (call.name === "git" && request.git) {
           const args = parseGitToolArguments(call.arguments, (request.node.type === "merge" || request.node.type === "integrate"));
           const result = await request.git(args.args, args.input);
-          return toolResult(call, JSON.stringify(result), result.exitCode !== 0);
+          return toolResult(call, formatGitResult(result), result.exitCode !== 0);
         }
         if (call.name === "finish_merge" && request.merge) {
           const dispositions = parseFinishMergeArguments(call.arguments, request.merge.sources.map(source => source.executionId!));
@@ -439,7 +451,7 @@ export function createPiRunner(
       // No coercion or prose parsing: the core enforces the enum and exactly one call.
       request.decide!(args.choice);
       decided = true;
-      return toolResult(call, JSON.stringify({ choice: args.choice }), false);
+      return toolResult(call, `Recorded choice: ${args.choice}`, false);
     };
 
     while (true) {

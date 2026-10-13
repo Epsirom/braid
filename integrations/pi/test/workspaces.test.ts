@@ -392,7 +392,7 @@ for (const failure of ["error", "cancel"] as const) {
     assert.equal(await git(fixture.root, "show", `${workspace.checkpointRef}:partial.txt`), "keep this work");
     await assert.rejects(readFile(join(workspace.worktreeRoot!, "partial.txt")), { code: "ENOENT" });
     assert.ok(status.content.some(part => part.type === "text" &&
-      part.text.includes(JSON.stringify(workspace.worktreeRoot!))));
+      part.text.includes(workspace.worktreeRoot!)));
     await assert.rejects(readFile(join(fixture.root, "partial.txt")), { code: "ENOENT" });
   });
 }
@@ -434,7 +434,7 @@ test("Pi merge agent inspects, applies, and finishes through core tools before a
     assert.equal(toolResult.role, "toolResult");
     if (toolResult.role === "toolResult") {
       assert.equal(toolResult.isError, false, JSON.stringify(toolResult.content));
-      if (turn === 1) patch = JSON.parse((toolResult.content[0] as { text: string }).text).stdout as string;
+      if (turn === 1) patch = (toolResult.content[0] as { text: string }).text;
     }
     if (turn === 1) return toolResponse({ type: "toolCall", id: "apply", name: "git", arguments: { command: "apply", args: ["-"], input: patch } });
     if (turn === 2) return toolResponse({ type: "toolCall", id: "finish", name: "finish_merge", arguments: {

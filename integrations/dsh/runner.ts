@@ -6,7 +6,7 @@ import {
 import {
   formatBudgetReminder, gitToolDefinition, finishMergeToolDefinition,
   mergeInstructions, parseGitToolArguments, parseFinishMergeArguments,
-  type ExecutionActivityTracker, type ModelRunner,
+  type ExecutionActivityTracker, type GitResult, type ModelRunner,
 } from "@chrok/braid";
 import { createWorkerTools } from "./worker-tools.js";
 
@@ -36,6 +36,18 @@ export function validateBudgets(options: { maxToolRounds?: number | undefined; m
     if (value !== undefined && value !== Infinity && (!Number.isSafeInteger(value) || value < 1))
       throw new Error(`${key} must be a positive safe integer or Infinity`);
   }
+}
+
+/**
+ * Present a Git result the way DSH's bash tool presents command output: stdout,
+ * a marked stderr section, and an exit marker; a nonzero exit is a result, not
+ * a tool error. Output stays byte-exact, so a diff can be passed to git apply.
+ */
+export function formatGitResult(result: GitResult): string {
+  let body = result.stdout;
+  if (result.stderr) body += `${body && !body.endsWith("\n") ? "\n" : ""}[stderr]\n${result.stderr}`;
+  if (!body) body = "(no output)";
+  return result.exitCode === 0 ? body : `${body}${body.endsWith("\n") ? "" : "\n"}[exit code: ${result.exitCode}]`;
 }
 
 /** Fresh, private model contexts. DSH owns provider routing and credentials. */
@@ -168,11 +180,11 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
                 throw new Error("decide requires exactly one string argument: choice");
               request.decide(args.choice);
               decided = true;
-              text = JSON.stringify({ choice: args.choice });
+              text = `Recorded choice: ${args.choice}`;
             } else if (call.name === "git" && request.git) {
               const parsed = parseGitToolArguments(args, integrating);
               const result = await request.git(parsed.args, parsed.input);
-              text = JSON.stringify(result); isError = result.exitCode !== 0;
+              text = formatGitResult(result);
             } else if (call.name === "finish_merge" && request.merge) {
               await request.merge.finish(parseFinishMergeArguments(args, request.merge.sources.map(source => source.executionId!)));
               text = "Merge dispositions recorded. Return your final answer.";

@@ -13,6 +13,7 @@ import { BraidJobs, type JobSnapshot } from "./jobs.js";
 import { registerBraidCommand, registerBraidWidget } from "./command.js";
 import { registerReviewCommand } from "./review.js";
 import { renderGraphCall, renderGraphResult, renderNodeResult } from "./display.js";
+import { formatJobList, formatJobStatus, formatNodeStatus, formatReceipt, formatResume, formatUpdate } from "./status-text.js";
 
 const text = (description?: string) => Type.String({ minLength: 1, pattern: "\\S", ...(description ? { description } : {}) });
 const prompt = () => Type.Union([
@@ -125,27 +126,19 @@ function isJobSnapshot(value: unknown): value is JobSnapshot {
     !!job.live && typeof job.live.nodes === "object" && job.live.nodes !== null;
 }
 
-type BraidStatusDetails = JobSnapshot & { selectedNode?: NodeResult; selectedActivity?: ExecutionActivity; nodeOutputPath?: string };
+type BraidStatusDetails = JobSnapshot & { selectedNode?: NodeResult; selectedActivity?: ExecutionActivity; nodeOutputPath?: string; fullOutputPath?: string };
 
 /** Focused reads return the latest activity entries; activityBefore pages earlier ones. */
 export const STATUS_ACTIVITY_ENTRIES = 40;
 
-function executionControl(job: JobSnapshot) {
-  return job.execution && {
-    status: job.execution.status,
-    revision: job.execution.revision,
-    pausedExecutionIds: job.execution.pausedExecutionIds,
-  };
-}
-
-function graphReceipt(job: JobSnapshot) {
-  const graph = job.execution?.graph;
-  return graph && {
-    // Echo accepted types/policies without duplicating potentially large prompts.
-    nodes: graph.nodes.map(({ prompt: _prompt, ...node }) => node),
-    edges: graph.edges,
-    ...(graph.loops ? { loops: graph.loops } : {}),
-  };
+/** Bound a text result; the complete document stays readable in a private file. */
+async function boundedText(text: string, name: string): Promise<{ text: string; path?: string }> {
+  const preview = truncateHead(text);
+  if (!preview.truncated) return { text };
+  const directory = await mkdtemp(join(tmpdir(), "braid-status-"));
+  const path = join(directory, name);
+  await writeFile(path, text, { mode: 0o600 });
+  return { text: `${preview.content}\n[Truncated. Full text: ${path}]`, path };
 }
 
 export function createBraidTools(jobs: BraidJobs) {
@@ -221,14 +214,8 @@ export function createBraidTools(jobs: BraidJobs) {
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  jobId: job.handle,
-                  canonicalJobId: job.jobId,
-                  status: job.status,
-                  graph: graphReceipt(job),
-                  message:
-                    "Running in background. Check the accepted graph above. Use braid_status to retrieve progress/results. Reminders arrive after the current step or resume you when idle; do not poll repeatedly.",
-                }),
+                text: formatReceipt(job,
+                  "Running in background. Check the accepted graph below. Use braid_status to retrieve progress/results. Reminders arrive after the current step or resume you when idle; do not poll repeatedly."),
               },
             ],
             details: job,
@@ -258,7 +245,7 @@ export function createBraidTools(jobs: BraidJobs) {
     name: "braid_status",
     label: "Braid status",
     description:
-      "Retrieve a background Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Add executionId for an exact execution, or nodeId for the latest instance, including intermediate results while the job runs. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and recent history. Lack of observed activity is a diagnostic signal, not proof of a stall. All job reads include current execution.revision and execution.pausedExecutionIds for live control; node.revision is the historical invocation revision. Large results include a path to the full JSON, including while running. For usage totals use usage (Pi provider accounting, including rounds from failed nodes), or piUsage in the saved final result. Prefer the short handle from submission/reminders. Omit all IDs to list jobs in this session. Completion reminders arrive automatically; avoid repeated polling.",
+      "Retrieve a background Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Add executionId for an exact execution, or nodeId for the latest instance, including intermediate results while the job runs. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and recent history. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the current graph revision and paused execution IDs for live control. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. Usage is Pi's provider accounting, including rounds from failed nodes. Prefer the short handle from submission/reminders. Omit all IDs to list jobs in this session. Completion reminders arrive automatically; avoid repeated polling.",
     parameters: statusParameters,
     renderResult(result, options, theme, ctx) {
       const job = result.details;
@@ -305,69 +292,29 @@ export function createBraidTools(jobs: BraidJobs) {
         throw new Error("activityBefore requires nodeId or executionId");
       if (!params.jobId)
         return {
-          content: [{ type: "text", text: JSON.stringify(jobs.list()) }],
+          content: [{ type: "text", text: formatJobList(jobs.list()) }],
           details: undefined,
         };
       const job = jobs.get(params.jobId);
       if (!job) throw jobs.unknownJob(params.jobId);
       if (params.nodeId !== undefined || params.executionId !== undefined) {
         const node = jobs.getNode(params.jobId, params.nodeId, params.executionId);
-        const { id, executionId, status, error, output, ...nodeDetails } = node;
-        const activity = executionId ? jobs.getActivity(params.jobId, executionId, {
+        const activity = node.executionId ? jobs.getActivity(params.jobId, node.executionId, {
           limit: STATUS_ACTIVITY_ENTRIES, ...(params.activityBefore === undefined ? {} : { before: params.activityBefore }),
         }) : undefined;
-        // While running, activity is the useful part; afterwards the output is,
-        // so it comes first and history cannot push it out of the preview.
-        const running = activity && activity.finishedAt === undefined;
-        const live = activity ? { observedAt: job.live.observedAt, activity } : {};
-        const full = JSON.stringify({
-          jobId: job.jobId, handle: job.handle, status: job.status, execution: executionControl(job),
-          ...(running ? live : {}),
-          node: { id, executionId, status, error, output, ...nodeDetails },
-          ...(running ? {} : live),
-        }, null, 2);
-        const preview = truncateHead(full);
-        let suffix = "";
-        let nodeOutputPath: string | undefined;
-        if (preview.truncated) {
-          const directory = await mkdtemp(join(tmpdir(), "braid-node-result-"));
-          const path = join(directory, "result.json");
-          await writeFile(path, full, { mode: 0o600 });
-          nodeOutputPath = path;
-          suffix = `\n[Preview truncated. Full node result: ${path}]`;
-        }
+        const result = await boundedText(formatNodeStatus({ job, node, ...(activity ? { activity } : {}), now: Date.now() }), "node.txt");
         // Focused reads do not claim the whole job's usage; final job retrieval does.
-        return { content: [{ type: "text", text: preview.content + suffix }], details: {
-          ...job, selectedNode: node, ...(activity ? { selectedActivity: activity } : {}), ...(nodeOutputPath ? { nodeOutputPath } : {}),
+        return { content: [{ type: "text", text: result.text }], details: {
+          ...job, selectedNode: node, ...(activity ? { selectedActivity: activity } : {}), ...(result.path ? { nodeOutputPath: result.path } : {}),
         } };
       }
-      const { jobId, handle, status, error, usage: providerUsage, fullOutputPath, execution, ...snapshot } = job;
-      // Put control/error/accounting fields before large prompts, outputs and logs.
-      const full = JSON.stringify({
-        jobId, handle, status,
-        error: error ?? job.result?.error ?? execution?.error,
-        usage: providerUsage, fullOutputPath,
-        execution: execution && { ...executionControl(job), ...execution },
-        ...snapshot,
-      }, null, 2);
-      const preview = truncateHead(full);
-      let suffix = "";
-      let details = job;
-      if (preview.truncated) {
-        if (job.fullOutputPath) suffix = `\n[Preview truncated. Full result/log: ${job.fullOutputPath}]`;
-        else {
-          const directory = await mkdtemp(join(tmpdir(), "braid-status-"));
-          const path = join(directory, "status.json");
-          await writeFile(path, full, { mode: 0o600 });
-          details = { ...job, fullOutputPath: path };
-          suffix = `\n[Preview truncated. Full status snapshot: ${path}]`;
-        }
-      }
+      const result = await boundedText(formatJobStatus(job, Date.now()), "status.txt");
+      const details: BraidStatusDetails = result.path ? { ...job, fullOutputPath: result.path } : job;
       // Saving a running snapshot can race job completion; claim usage only
       // when this response actually contains a terminal snapshot.
       const usage = job.status === "running" ? undefined : jobs.claimUsage(job.jobId);
       return {
-        content: [{ type: "text", text: preview.content + suffix }],
+        content: [{ type: "text", text: result.text }],
         details,
         ...(usage ? { usage } : {}),
       };
@@ -401,14 +348,14 @@ export function createBraidTools(jobs: BraidJobs) {
   });
   const updateParameters = Type.Object({
     jobId: text("Exact session handle (e.g. job-1) or UUID."),
-    expectedRevision: Type.Integer({ minimum: 0, description: "Current execution.revision from braid_status. A stale revision rejects the entire update." }),
+    expectedRevision: Type.Integer({ minimum: 0, description: "Current graph revision from braid_status. A stale revision rejects the entire update." }),
     upsertNodes: Type.Optional(Type.Array(nodeParameters, { description: "Complete node definitions to add or replace, not partial patches. Add dependencies and loops in this SAME update: new roots may start immediately even if another execution is paused. Already admitted executions keep their captured definitions." })),
     removeNodeIds: Type.Optional(Type.Array(text(), { description: "Node IDs to remove, together with all incident edges." })),
     addEdges: Type.Optional(Type.Array(updateEdgeParameters, { description: "Edges to add. Pin a historical source using executionId when needed." })),
-    removeEdges: Type.Optional(Type.Array(updateEdgeParameters, { description: "Exact edge identities to remove: copy from, to, and every present choice/feedback/executionId from execution.graph.edges. Omitted optional fields do not act as wildcards." })),
+    removeEdges: Type.Optional(Type.Array(updateEdgeParameters, { description: "Exact edge identities to remove: copy from, to, and every present choice/feedback/executionId from the current graph edges in braid_status. Omitted optional fields do not act as wildcards." })),
     promptTemplates: Type.Optional(Type.Record(Type.String(), text(), { description: `${templateDescription} Replaces the entire template map; omit to preserve it. Include every template still referenced by nodes.` })),
     loops: Type.Optional(Type.Array(loopParameters, { description: "Replaces all loop definitions; omit to preserve them, or use [] to remove all (also remove their feedback edges)." })),
-    resume: Type.Optional(Type.Array(text(), { uniqueItems: true, description: "Paused execution IDs from execution.pausedExecutionIds, not node IDs. Releases them atomically with the graph edit." })),
+    resume: Type.Optional(Type.Array(text(), { uniqueItems: true, description: "Paused execution IDs from braid_status, not node IDs. Releases them atomically with the graph edit." })),
   }, { additionalProperties: false });
   const updateTool = defineTool<typeof updateParameters, JobSnapshot>({
     name: "braid_update", label: "Update Braid",
@@ -422,13 +369,13 @@ export function createBraidTools(jobs: BraidJobs) {
       } catch (error) {
         throw new Error(`Braid update rejected; no changes or resumes were applied. ${error instanceof Error ? error.message : String(error)}. Retry the complete corrected patch, including its edges/loops/resume; adding disconnected nodes separately can start them immediately.`);
       }
-      return { content: [{ type: "text", text: JSON.stringify({ jobId: job.handle, revision: job.execution!.revision, pausedExecutionIds: job.execution!.pausedExecutionIds, graph: graphReceipt(job) }) }], details: job };
+      return { content: [{ type: "text", text: formatUpdate(job) }], details: job };
     },
   });
   const resumeParameters = Type.Object({
     jobId: text("Exact session handle (e.g. job-1) or UUID."),
-    expectedRevision: Type.Integer({ minimum: 0, description: "Current execution.revision from braid_status." }),
-    executionIds: Type.Array(text(), { minItems: 1, uniqueItems: true, description: "IDs from execution.pausedExecutionIds, not node IDs. Only these completed, paused executions are released." }),
+    expectedRevision: Type.Integer({ minimum: 0, description: "Current graph revision from braid_status." }),
+    executionIds: Type.Array(text(), { minItems: 1, uniqueItems: true, description: "Paused execution IDs from braid_status, not node IDs. Only these completed, paused executions are released." }),
   }, { additionalProperties: false });
   const resumeTool = defineTool<typeof resumeParameters, JobSnapshot>({
     name: "braid_resume", label: "Resume Braid",
@@ -436,7 +383,7 @@ export function createBraidTools(jobs: BraidJobs) {
     parameters: resumeParameters,
     async execute(_id, params) {
       const job = jobs.resume(params.jobId, params.executionIds, params.expectedRevision);
-      return { content: [{ type: "text", text: JSON.stringify({ jobId: job.handle, revision: job.execution!.revision, pausedExecutionIds: job.execution!.pausedExecutionIds }) }], details: job };
+      return { content: [{ type: "text", text: formatResume(job) }], details: job };
     },
   });
   return { braidTool, statusTool, cancelTool, updateTool, resumeTool };

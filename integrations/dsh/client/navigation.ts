@@ -25,10 +25,15 @@ export function readNavigation(value: unknown): BraidNavigation {
 function toolData(props: ToolCallPhaseProps) {
   const args = json(props.phase === "result" ? props.block.call?.argsRaw ?? "" : props.phase === "start" ? props.block.argsRaw : "");
   let result: Record<string, unknown> = {};
-  if (props.phase === "result" && !props.block.isError) for (const content of props.block.content) {
-    if (content.type !== "text") continue;
-    const value = json(content.text);
-    if (Object.keys(value).length > 0) { result = value; break; }
+  if (props.phase === "result" && !props.block.isError) {
+    // Results carry their identifiers in presentation meta; sessions recorded
+    // before results became text kept them in JSON content.
+    result = record(props.block.meta);
+    if (!Object.keys(result).length) for (const content of props.block.content) {
+      if (content.type !== "text") continue;
+      const value = json(content.text);
+      if (Object.keys(value).length > 0) { result = value; break; }
+    }
   }
   return { args, result };
 }
@@ -98,16 +103,19 @@ export function toolPresentation(toolName: string, props: ToolCallPhaseProps): T
   } else if (toolName === "braid_status") {
     const execution = record(result.execution), node = record(result.node);
     const executions = Object.values(record(execution.executions));
+    const total = typeof execution.total === "number" ? execution.total : executions.length;
+    const completed = typeof execution.completed === "number" ? execution.completed : executions.filter(value => record(value).status === "completed").length;
     const details = id(node.status)
       ? [`execution ${id(node.status)}`, id(execution.status) ? `graph ${id(execution.status)}` : undefined, revision(execution.revision)]
       : [id(execution.status) ?? id(result.status), revision(execution.revision)];
-    if (executions.length) details.push(`${executions.filter(value => record(value).status === "completed").length}/${executions.length} executions complete`);
+    if (total && !id(node.status)) details.push(`${completed}/${total} executions complete`);
     if (Array.isArray(execution.pausedExecutionIds) && execution.pausedExecutionIds.length) details.push(`${execution.pausedExecutionIds.length} paused`);
     model.summary = failed ? "Status query failed" : details.filter(Boolean).join(" · ") || (settled ? "Recorded status" : "Reading status");
   } else {
-    const graph = record(result.graph), nodes = array(graph.nodes).length || array(args.nodes).length;
+    const graph = record(result.graph);
+    const nodes = (typeof result.nodeCount === "number" ? result.nodeCount : array(graph.nodes).length) || array(args.nodes).length;
     model.summary = failed ? "Submission failed" : `${settled ? "Graph submitted" : "Starting graph"}${nodes ? ` · ${nodes} nodes` : ""}`;
   }
-  if (result.truncated === true) model.changes.push("Large result saved to file; view fullOutputPath in tool details");
+  if (result.truncated === true) model.changes.push("Long result truncated; the full text is saved to the file named in the result");
   return model;
 }

@@ -120,7 +120,7 @@ test("integration applies selected snapshots, preserves caller edits, and retain
       const latest = options.messages.at(-1)!;
       assert.equal(latest.role, "tool");
       if (latest.role === "tool") assert.equal(latest.isError, false, JSON.stringify(latest));
-      if (round === 1) return calls({ name: "git", args: { command: "apply", args: ["-"], input: JSON.parse((latest.content[0] as { text: string }).text).stdout } });
+      if (round === 1) return calls({ name: "git", args: { command: "apply", args: ["-"], input: (latest.content[0] as { text: string }).text } });
       if (round === 2) return calls({ name: "finish_merge", args: { dispositions: [{ executionId: source.executionId, disposition: "integrated", reason: "Applied selected diff" }] } });
       return answer("applied");
     }), { cwd }),

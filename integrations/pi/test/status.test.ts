@@ -26,11 +26,11 @@ test("focused status includes current control state and renders the historical e
   const { statusTool } = createBraidTools(jobs);
   for (const selector of [{ executionId: paused.executionId }, { nodeId: "a" }]) {
     const result = await statusTool.execute("focused", { jobId: job.handle, ...selector }, undefined, undefined, ctx);
-    const body = JSON.parse(text(result));
-    assert.equal(body.execution.revision, 1);
-    assert.equal(body.node.revision, 0);
-    assert.deepEqual(body.execution.pausedExecutionIds, [paused.executionId]);
-    assert.equal(body.node.node.prompt, "work");
+    const body = text(result);
+    assert.match(body, new RegExp(`^Braid job job-1 · running · Graph \\w+ · revision 1 · paused executions: ${paused.executionId}\n`));
+    assert.ok(body.includes(`Execution ${paused.executionId} · node a (execute) · completed\n`));
+    assert.match(body, /Output:\nThe selected execution's complete output\.\nSecond line\./);
+    assert.doesNotMatch(body, /new definition/);
     assert.equal(result.usage, undefined);
     for (const expanded of [false, true]) {
       const rendered = statusTool.renderResult!(result, { expanded, isPartial: false }, theme, { isError: false } as never).render(300).join("\n");
@@ -49,14 +49,14 @@ test("focused status includes current control state and renders the historical e
   assert.equal(final.live.error?.code, "CANCELLED");
   assert.deepEqual(final.live.pausedExecutionIds, []);
   assert.deepEqual(final.execution!.pausedExecutionIds, []);
-  if (final.fullOutputPath) t.after(() => rm(dirname(final.fullOutputPath!), { recursive: true }));
 });
 
-test("large running status retains control fields and saves a retrievable current snapshot", { timeout: 5_000 }, async t => {
+test("large running status keeps control fields first and saves the full text", { timeout: 5_000 }, async t => {
   const held = deferred<NodeCompletion>();
   const jobs = new BraidJobs(undefined, value => held.resolve(value));
   t.after(() => jobs.dispose());
-  const ctx = context(async () => response("complete"));
+  const output = "finding\n".repeat(15_000);
+  const ctx = context(async () => response(output));
   const job = jobs.start({ ...input, goal: "g".repeat(70_000), nodes: [{ ...input.nodes[0]!, pauseAfter: true }] }, {}, ctx);
   const paused = await held.promise;
   const { statusTool } = createBraidTools(jobs);
@@ -65,25 +65,17 @@ test("large running status retains control fields and saves a retrievable curren
   assert.equal(claimUsage.mock.callCount(), 0, "a running snapshot must not claim terminal usage after asynchronous file export");
   const content = text(read);
   assert.ok(content.length < 52_000);
-  assert.match(content, /"revision": 0/);
-  assert.match(content, /"pausedExecutionIds"/);
-  assert.ok(content.includes(paused.executionId));
-  assert.match(content, /Full status snapshot:/);
-  const path = read.details!.fullOutputPath!;
-  assert.ok(path);
+  assert.match(content, new RegExp(`^Braid job job-1 · running\nID: \\S+\nGraph \\w+ · revision 0 · paused executions: ${paused.executionId}\nStarted .*\nGoal: g{2000}… \\[70000 chars\\]\n`));
+  const path = content.match(/\[Truncated\. Full text: (.+)\]$/)![1]!;
+  assert.equal(read.details!.fullOutputPath, path);
   t.after(() => rm(dirname(path), { recursive: true }));
-  const saved = JSON.parse(await readFile(path, "utf8"));
-  assert.equal(saved.execution.graph.goal.length, 70_000);
-  assert.equal(saved.execution.nodes.a.output, "complete");
-  assert.deepEqual(saved.execution.pausedExecutionIds, [paused.executionId]);
-  assert.equal(jobs.get(job.handle)!.fullOutputPath, undefined, "a running snapshot must not become the final result path");
+  const saved = await readFile(path, "utf8");
+  assert.ok(saved.includes(`## a · ${paused.executionId}\n${output}`));
   jobs.cancel(job.handle);
   await jobs.wait(job.handle);
-  const finalPath = jobs.get(job.handle)!.fullOutputPath;
-  if (finalPath) t.after(() => rm(dirname(finalPath), { recursive: true }));
 });
 
-test("failed-node provider usage survives truncated status and final result export", { timeout: 5_000 }, async t => {
+test("failed-node provider usage survives in focused and whole-job status", { timeout: 5_000 }, async t => {
   const jobs = new BraidJobs();
   t.after(() => jobs.dispose());
   let calls = 0;
@@ -100,11 +92,6 @@ test("failed-node provider usage survives truncated status and final result expo
   assert.equal(final.live.status, "failed");
   assert.equal(final.result!.metadata.usage.inputTokens, 0);
   assert.equal(final.usage!.totalTokens, 2, "Pi must retain the billed round even though the runner never returned usage");
-  const path = final.fullOutputPath!;
-  assert.ok(path);
-  t.after(() => rm(dirname(path), { recursive: true }));
-  const saved = JSON.parse(await readFile(path, "utf8"));
-  assert.deepEqual(saved.piUsage, final.usage);
   const { statusTool } = createBraidTools(jobs);
   const focused = await statusTool.execute("failed-node", { jobId: job.handle, nodeId: "a" }, undefined, undefined, ctx);
   const rendered = statusTool.renderResult!(focused, { expanded: false, isPartial: false }, theme, { isError: false } as never).render(300).join("\n");
@@ -113,10 +100,9 @@ test("failed-node provider usage survives truncated status and final result expo
   assert.equal(focused.usage, undefined);
   const whole = await statusTool.execute("failed-job", { jobId: job.handle }, undefined, undefined, ctx);
   const content = text(whole);
-  assert.match(content, /"code": "REQUIRED_NODE_FAILED"/);
-  assert.match(content, /"totalTokens": 2/);
-  assert.match(content, /"revision": 0/);
-  assert.match(content, /Full result\/log:/);
+  assert.match(content, /^Error: REQUIRED_NODE_FAILED: /m);
+  assert.match(content, /^Usage: input \d+, output \d+ \(2 tokens\)$/m);
+  assert.match(content, /^Graph failed · revision 0 · paused executions: none$/m);
   assert.equal(whole.usage!.totalTokens, 2);
   const again = await statusTool.execute("again", { jobId: job.handle }, undefined, undefined, ctx);
   assert.equal(again.usage, undefined);

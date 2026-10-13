@@ -1,12 +1,6 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { Usage } from "@earendil-works/pi-ai";
-import {
-  truncateHead,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   ExecutionActivityTracker,
   startBraid,
@@ -53,7 +47,6 @@ export interface JobSnapshot {
   result?: BraidResult;
   execution?: BraidSnapshot;
   error?: string;
-  fullOutputPath?: string;
   usage?: Usage;
   /** Core workspace lifecycle, including recovery refs for failed and cancelled nodes. */
   workspaces?: Record<string, PiNodeWorkspace>;
@@ -267,20 +260,6 @@ export class BraidJobs {
         job.result.error?.code === "CANCELLED"
           ? "cancelled"
           : job.result.status;
-      // Core metadata counts usage returned by runners; Pi also records completed
-      // provider rounds from workers that later fail or time out.
-      const full = JSON.stringify({ ...job.result, workspaces: job.workspaces, piUsage: job.usage }, null, 2);
-      const preview = JSON.stringify(
-        { ...this.get(job.jobId), status },
-        null,
-        2,
-      );
-      if (truncateHead(preview).truncated) {
-        const directory = await mkdtemp(join(tmpdir(), "braid-result-"));
-        const path = join(directory, "result.json");
-        await writeFile(path, full, { mode: 0o600 });
-        job.fullOutputPath = path;
-      }
       job.status = status;
     } catch (error) {
       job.status = "failed";
