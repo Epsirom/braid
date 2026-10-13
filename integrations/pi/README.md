@@ -378,7 +378,7 @@ only the current source IDs and diagnoses missing, duplicate or unexpected IDs.
 
 ## Install from npm
 
-Requires Node.js 22.19+ and Pi 1.0.1 (the tested version):
+Requires Node.js 22.19+ and Pi 1.2.0 (the tested version):
 
 ```sh
 pi install npm:@chrok/pi-braid
@@ -389,7 +389,7 @@ The package depends on the exact matching `@chrok/braid` release; npm installs
 core automatically. It does not bundle core or depend on a source checkout.
 Pi supplies its core peer packages at runtime.
 Their wildcard ranges follow Pi's packaging convention, not universal version
-compatibility. Development and CI pin Pi 1.0.1.
+compatibility. Development and CI pin Pi 1.2.0.
 
 ## Install this local checkout in Pi
 
