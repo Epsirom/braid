@@ -1,12 +1,11 @@
-import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /** Enforce the write boundary in filesystem operations, not in model instructions. */
-export async function createWriteOperations(
-  cwd: string, root: string, signal: AbortSignal,
+export async function createWriteBoundary(
+  root: string, signal: AbortSignal,
   readOnlyPaths: () => Promise<string[]> = async () => [],
-) {
+): Promise<(path: string) => Promise<string>> {
   const boundary = await realpath(root);
   const gitMetadata = await lstat(join(boundary, ".git"));
   const checked = async (path: string): Promise<string> => {
@@ -42,27 +41,5 @@ export async function createWriteOperations(
     signal.throwIfAborted();
     return current;
   };
-  const writeFile = async (path: string, content: string): Promise<void> => {
-    const target = await checked(path);
-    // O_NOFOLLOW prevents following a replaced final symlink. Nodes have no
-    // operations that create links or rename directories; workspaces are private.
-    const file = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o644);
-    try {
-      const stat = await file.stat();
-      if (!stat.isFile() || stat.nlink > 1) throw new Error("Writing special files or hard links is not allowed");
-      signal.throwIfAborted();
-      await file.truncate(0);
-      await file.writeFile(content, "utf8");
-    } finally {
-      await file.close();
-    }
-  };
-  return {
-    read: async (path: string) => readFile(await checked(resolve(cwd, path)), "utf8"),
-    write: async (path: string, content: string) => {
-      const target = await checked(resolve(cwd, path));
-      await mkdir(await checked(resolve(target, "..")), { recursive: true });
-      await writeFile(target, content);
-    },
-  };
+  return checked;
 }

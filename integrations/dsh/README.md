@@ -168,22 +168,29 @@ integration can leave partial changes or conflicts; core never resets the caller
 Workers receive a fresh DSH context containing the goal, rendered node prompt,
 direct predecessor outputs, execution identity, and workspace/merge metadata.
 They do not inherit the parent transcript, skills, extension/MCP tools, or Braid
-itself. Fixed local tools are:
+itself. File and shell tools are DSH's own, so their schemas, guidance, and
+results match what the parent agent sees:
 
-- `read` and `ls`; `grep` and `find` when `rg` is installed. Missing search
-  dependencies are not downloaded; use `ls`/`read` instead.
-- `write`, `edit`, and `bash` for writable Git workspaces; `powershell` on Windows.
+- `read`, `glob`, and `grep` (`dsh-tool-fs`, `dsh-tool-fs-search`).
+- `write`, `edit`, and `bash` (`dsh-tool-fs`, `dsh-tool-bash`) for writable Git
+  workspaces; also `pwsh` (`dsh-tool-pwsh`) on Windows.
 - `git` when core provides Git access; `finish_merge` for merge/integrate nodes.
 - `decide` only for decision nodes, with exactly one declared choice.
 
-Guarded writes reject paths outside the assigned workspace, Git metadata,
-submodules, symlinks, hard links, and special files. Shell commands use host
-permissions and can bypass file guards; worktrees are not an OS sandbox. Workers
-are instructed to keep writes local, preserve shared Git state, and avoid global
-or externally visible actions unless requested. Commands run in the foreground;
-completion, timeout, and cancellation terminate their process group. Ignored new
-dependencies, caches, and build outputs are not checkpointed and disappear during
-cleanup. Shared services and ports require execution-specific resources.
+Each execution runs these tools in its own Cordis context with local
+providers rooted at its workspace (`dsh-fs-local`, `dsh-bash-local`,
+`dsh-subprocess-local`), so they do not depend on the host's filesystem or shell
+composition. DSH's read-before-write observation policy applies. Braid's
+filesystem provider rejects writes outside the assigned workspace, to Git
+metadata, submodules, symlinks, hard links, and special files. Shell commands use
+host permissions and can bypass file guards; worktrees are not an OS sandbox.
+Workers are instructed to keep writes local, preserve shared Git state, and avoid
+global or externally visible actions unless requested. Commands run in the
+foreground with no background jobs or sandbox escalation; timeout and
+cancellation stop them, and processes a command leaves behind are stopped when
+the execution ends, before its checkpoint. Ignored new dependencies, caches, and
+build outputs are not checkpointed and disappear during cleanup. Shared services
+and ports require execution-specific resources.
 
 ## Pauses, updates, loops, and reminders
 

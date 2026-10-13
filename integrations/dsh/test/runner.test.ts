@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { braid, type BraidInput } from "@chrok/braid";
 import type { GenerateOptions } from "@deepseek-ai/dsh-llm";
 import { createDshRunner } from "../runner.js";
-import { runCommand } from "../shell-tools.js";
 import { directory, input, llm, answer, calls, payload } from "./helpers.js";
 
 test("uses exact routes, fresh contexts, native tools, cache usage and direct predecessor output", async () => {
@@ -69,7 +68,7 @@ test("bounded loops use fresh invocations and prompt templates", async () => {
 test("tool limits fail before an over-budget batch can write", async () => {
   const cwd = directory(true);
   const result = await braid(input, { cwd, defaultModel: "fake/model", runner: createDshRunner(llm(() => calls(
-    { name: "write", args: { path: "no.txt", content: "no" } }, { name: "write", args: { path: "also-no.txt", content: "no" } },
+    { name: "write", args: { file_path: "no.txt", content: "no" } }, { name: "write", args: { file_path: "also-no.txt", content: "no" } },
   )), { cwd, maxToolCalls: 1 }) });
   assert.equal(result.nodes.a!.status, "failed"); assert.match(result.nodes.a!.error!.message, /budget/);
   assert.equal(existsSync(join(cwd, "no.txt")), false);
@@ -80,12 +79,13 @@ test("writable workers edit isolated snapshots and checkpoints exclude ignored o
   let round = 0;
   const result = await braid(input, { cwd, defaultModel: "fake/model", runner: createDshRunner(llm(options => {
     assert.notEqual(payload(options).workspace.workingDirectory, cwd);
-    if (!round++) return calls({ name: "edit", args: { path: "file.txt", oldText: "original", newText: "changed" } },
-      { name: "write", args: { path: "ignored.txt", content: "cache" } },
-      { name: "write", args: { path: "../escape.txt", content: "bad" } },
-      { name: "write", args: { path: ".git", content: "bad" } });
+    if (!round++) return calls({ name: "read", args: { file_path: "file.txt" } },
+      { name: "edit", args: { file_path: "file.txt", old_string: "original", new_string: "changed" } },
+      { name: "write", args: { file_path: "ignored.txt", content: "cache" } },
+      { name: "write", args: { file_path: "../escape.txt", content: "bad" } },
+      { name: "write", args: { file_path: ".git", content: "bad" } });
     const results = options.messages.filter(message => message.role === "tool");
-    assert.equal(results[0]!.isError, false); assert.equal(results[2]!.isError, true); assert.equal(results[3]!.isError, true);
+    assert.deepEqual(results.map(result => result.role === "tool" && result.isError), [false, false, false, true, true]);
     return answer();
   }), { cwd }) });
   assert.equal(result.nodes.a!.status, "completed");
@@ -107,7 +107,7 @@ test("integration applies selected snapshots, preserves caller edits, and retain
     cwd, defaultModel: "fake/model", runner: createDshRunner(llm(options => {
       const p = payload(options), round = rounds.get(p.nodeId) ?? 0;
       rounds.set(p.nodeId, round + 1);
-      if (p.nodeId === "implement") return round ? answer() : calls({ name: "write", args: { path: "selected.txt", content: "selected" } });
+      if (p.nodeId === "implement") return round ? answer() : calls({ name: "write", args: { file_path: "selected.txt", content: "selected" } });
       if (p.nodeId === "review") {
         assert.equal(readFileSync(join(p.workspace.workingDirectory, "selected.txt"), "utf8"), "selected");
         assert.ok(!options.tools!.some(tool => tool.name === "write")); return answer("reviewed");
@@ -135,7 +135,7 @@ test("read-only tools execute locally and malformed/unknown calls return errors 
   const cwd = directory(); writeFileSync(join(cwd, "sample.txt"), "hello");
   let round = 0;
   const result = await braid(input, { cwd, defaultModel: "fake/model", runner: createDshRunner(llm(options => {
-    if (!round++) return calls({ name: "read", args: { path: "sample.txt" } }, { name: "read", args: {} }, { name: "bash", args: { command: "false" } });
+    if (!round++) return calls({ name: "read", args: { file_path: "sample.txt" } }, { name: "read", args: {} }, { name: "bash", args: { command: "false", description: "Fail" } });
     const results = options.messages.filter(message => message.role === "tool");
     assert.match(JSON.stringify(results[0]), /hello/); assert.equal(results[1]!.isError, true); assert.equal(results[2]!.isError, true);
     return answer();
@@ -143,18 +143,18 @@ test("read-only tools execute locally and malformed/unknown calls return errors 
   assert.equal(result.status, "completed");
 });
 
-test("bounded file reads preserve UTF-8 characters across windows", async () => {
-  const cwd = directory(), original = "你好".repeat(10_000);
-  writeFileSync(join(cwd, "unicode.txt"), original);
-  let text = "", round = 0;
+test("workers receive DSH's native tool schemas, guidance, and results", async () => {
+  const cwd = directory(); writeFileSync(join(cwd, "unicode.txt"), "你好\n世界\n");
+  let round = 0;
   const result = await braid(input, { cwd, defaultModel: "fake/model", runner: createDshRunner(llm(options => {
-    if (!round++) return calls({ name: "read", args: { path: "unicode.txt" } });
+    assert.deepEqual(options.tools!.map(tool => tool.name).sort(), ["glob", "grep", "read"]);
+    assert.match(options.system!, /Use the read tool — not shell commands like cat/);
+    if (!round++) return calls({ name: "read", args: { file_path: "unicode.txt", offset: 2 } });
     const latest = options.messages.at(-1)!;
-    const read = JSON.parse((latest.content[0] as { text: string }).text);
-    text += read.text;
-    return read.eof ? answer() : calls({ name: "read", args: { path: "unicode.txt", offset: read.nextOffset } });
+    assert.match((latest.content[0] as { text: string }).text, /<content>\n2: 世界\n/);
+    return answer();
   }), { cwd }) });
-  assert.equal(result.status, "completed"); assert.equal(text, original);
+  assert.equal(result.status, "completed");
 });
 
 test("rejects incomplete streams, empty output, max tokens and duplicate decisions", async () => {
@@ -169,12 +169,3 @@ test("rejects incomplete streams, empty output, max tokens and duplicate decisio
   assert.equal(result.nodes.a!.status, "failed");
 });
 
-test("shell commands obey timeout and cancellation and use the assigned cwd", async () => {
-  const cwd = directory();
-  const result = JSON.parse(await runCommand(process.execPath, ["-e", "console.log(process.cwd())"], cwd, new AbortController().signal));
-  assert.equal(result.exitCode, 0); assert.match(result.output, /braid-dsh-test-/);
-  await assert.rejects(runCommand(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], cwd, new AbortController().signal, 0.03), /timeout/);
-  const controller = new AbortController();
-  const pending = runCommand(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], cwd, controller.signal);
-  controller.abort(); await assert.rejects(pending, /aborted/);
-});
