@@ -17,7 +17,7 @@
 
 - Braid tools no longer return JSON strings to the model. In Pi and DSH,
   `braid`, `braid_status`, `braid_update`, and `braid_resume` return plain-text
-  documents: the receipt and update list the accepted graph without prompts; a
+  documents: update results list the resulting graph without prompts; a
   whole-job status lists control state, executions, outputs, workspaces, and
   the current graph; a focused read shows one execution's output and activity.
   Control fields (graph status, revision, paused execution IDs) always come
@@ -28,6 +28,17 @@
   values become `{ text, ... }` with only identifiers beside the text, which the
   Web client reads from presentation meta; recorded sessions with JSON results
   still link correctly ([#77](https://github.com/Epsirom/braid/pull/77)) — @Epsirom.
+
+- Pi and DSH tell the parent agent more directly how waiting for a Braid job
+  works. The `braid` and `braid_status` descriptions, the system prompt, and
+  the submission receipt say that the job keeps running after the turn ends and
+  that a reminder resumes the agent when it finishes. They tell the agent to
+  continue independent work, or end its turn if it needs the result, and not to
+  sleep, use a timer, or poll in a loop to wait for the job. The `braid`
+  receipt is now just the job ID and this guidance: it no longer repeats the
+  graph the agent submitted, and the system prompt no longer asks the agent to
+  check it ([#74](https://github.com/Epsirom/braid/pull/74), closes
+  [#73](https://github.com/Epsirom/braid/issues/73)) — @Epsirom.
 
 ### Maintenance
 

@@ -9,7 +9,7 @@ import type { BraidInput } from "@chrok/braid";
 import { BraidJobs, type JobOptions, type JobSnapshot } from "./jobs.js";
 import { createBraidTools } from "./tools.js";
 import { formatJobList, formatReceipt } from "./status-text.js";
-import { BRAID_USAGE_GUIDANCE } from "./schema.js";
+import { BRAID_USAGE_GUIDANCE, BRAID_WAIT_REMINDER } from "./schema.js";
 import { renderPanel } from "./display.js";
 import { BraidPanel } from "./panel.js";
 
@@ -110,7 +110,7 @@ export function apply(ctx: Context): void {
         };
       },
     });
-    return { text: formatReceipt(snapshot!, "Running in background. Open Braid in the session header for the live graph and execution details, or use the Jobs panel / /braid. Completion reminders wake an idle agent or steer at the next step. Do not poll repeatedly."),
+    return { text: formatReceipt(snapshot!, `${BRAID_WAIT_REMINDER} Open Braid in the session header for the live graph and execution details, or use the Jobs panel / /braid.`),
       jobId: snapshot!.handle, canonicalJobId: snapshot!.jobId, nativeJobId, status: snapshot!.status, nodeCount: snapshot!.execution.graph.nodes.length };
   })) ctx.tools.register(tool);
 

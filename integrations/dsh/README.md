@@ -56,7 +56,9 @@ Submission immediately returns a short `job-1` handle, a canonical UUID, and
 `nativeJobId` (for DSH's generic job tools/panel). Braid tools accept the short
 handle or UUID, exactly. Handles are scoped to the live agent; another agent or
 session cannot retrieve them. Native job IDs belong to DSH's separate registry.
-Receipts echo accepted node types, policies, overrides, and edges without prompts.
+Submission receipts give the job IDs and how to wait for the job; they do not
+repeat the submitted graph. Update receipts list the resulting graph without
+prompts.
 
 ## Braid Web panel
 
@@ -234,8 +236,10 @@ for the shared graph semantics.
 Completion and pause messages use DSH `agent.steer`: a running agent consumes
 them at the next step, and an idle agent wakes. Acknowledged messages are removed;
 discarded messages retry when the agent returns to idle. DSH's generic job
-controller may also show its native job completion notice. Retrieve results after
-the reminder instead of polling. Stopping a foreground response does not cancel
+controller may also show its native job completion notice. Tool descriptions, the
+system prompt, and the submission receipt tell the agent to continue independent
+work, or end its turn if it needs the result, and to retrieve results after the
+reminder instead of sleeping or polling. Stopping a foreground response does not cancel
 submitted jobs. Plugin or owning-agent disposal aborts workers, awaits cleanup,
 and suppresses Braid reminders. Switching the UI to another still-live agent does
 not dispose the original owner or redirect its reminders. Jobs are in memory;

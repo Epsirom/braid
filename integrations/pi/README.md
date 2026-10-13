@@ -44,8 +44,10 @@ On completion, failure, or cancellation, the extension sends a custom
 Pi queues it as steering during streaming: it enters context after the current
 assistant response and its entire tool batch, before the next model step. It
 does not wait for the whole foreground task to finish or skip remaining tools.
-When idle, it starts a new agent turn automatically. The agent should wait for
-this reminder rather than poll.
+When idle, it starts a new agent turn automatically. Tool descriptions, the
+system prompt, and the submission receipt tell the agent to continue independent
+work, or end its turn if it needs the result, and not to sleep, use a timer, or
+poll in a loop to wait for the job.
 Stopping the foreground response does not stop background jobs.
 
 Jobs live in memory for the current Pi session. Quitting, reloading extensions,
@@ -107,9 +109,10 @@ All four types accept `model`, `notifyOnCompletion`, `pauseAfter`, and
 default to writable worktrees in Git; outside Git, all workers are read-only.
 The model-facing schema exposes these fields in one object with a `type` enum;
 core validation enforces the type-specific requirements before a submission or
-update takes effect. Submission/update replies echo the accepted node types,
-model overrides, policies, and edges without repeating prompts. If a definition
-problem repeats, inspect/report the mismatch instead of launching more probe jobs.
+update takes effect. The submission reply gives the job ID and how to wait for
+it; it does not repeat the graph the agent just sent. Update replies list the
+resulting graph without prompts. If a definition problem repeats,
+inspect/report the mismatch instead of launching more probe jobs.
 
 Edges use exact node IDs in `from` and `to`. `choice` is an exact label declared
 by the source decision; omitting it makes the edge unconditional. Pass `edges: []`
