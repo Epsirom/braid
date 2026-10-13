@@ -27,7 +27,7 @@
   `Recorded choice: <choice>`, also in the OpenAI-compatible adapter. DSH tool
   values become `{ text, ... }` with only identifiers beside the text, which the
   Web client reads from presentation meta; recorded sessions with JSON results
-  still link correctly — @Epsirom.
+  still link correctly ([#77](https://github.com/Epsirom/braid/pull/77)) — @Epsirom.
 
 ### Maintenance
 
