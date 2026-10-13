@@ -56,7 +56,9 @@ Submission immediately returns a short `job-1` handle, a canonical UUID, and
 `nativeJobId` (for DSH's generic job tools/panel). Braid tools accept the short
 handle or UUID, exactly. Handles are scoped to the live agent; another agent or
 session cannot retrieve them. Native job IDs belong to DSH's separate registry.
-Receipts echo accepted node types, policies, overrides, and edges without prompts.
+Submission receipts give the job IDs and how to wait for the job; they do not
+repeat the submitted graph. Update receipts list the resulting graph without
+prompts.
 
 ## Braid Web panel
 

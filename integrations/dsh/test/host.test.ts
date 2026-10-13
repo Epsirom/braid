@@ -65,7 +65,8 @@ test("loads in actual Cordis/DSH services, produces valid canonical results, nat
     const receipt = submitted.value as { jobId: string; canonicalJobId: string; nativeJobId: string; message: string };
     assert.equal(receipt.jobId, "job-1");
     assert.ok("content" in submitted);
-    assert.match((submitted.content[0] as { text: string }).text, /^Braid job job-1 started \(running\)\.\nID: \S+\nRunning in background\./);
+    assert.match((submitted.content[0] as { text: string }).text, /^Braid job job-1 started \(running\)\.\nID: \S+\nBraid runs asynchronously and notifies you when the job finishes\./);
+    assert.doesNotMatch((submitted.content[0] as { text: string }).text, /Nodes:|Edges:/, "the receipt does not echo the submitted graph");
     assert.equal((submitted.meta as { canonicalJobId: string }).canonicalJobId, receipt.canonicalJobId);
     assert.equal((submitted.meta as { text?: string }).text, undefined);
     assert.match((submitted.content[0] as { text: string }).text, /Do not sleep or poll in a loop to wait for this job/);

@@ -109,9 +109,10 @@ All four types accept `model`, `notifyOnCompletion`, `pauseAfter`, and
 default to writable worktrees in Git; outside Git, all workers are read-only.
 The model-facing schema exposes these fields in one object with a `type` enum;
 core validation enforces the type-specific requirements before a submission or
-update takes effect. Submission/update replies echo the accepted node types,
-model overrides, policies, and edges without repeating prompts. If a definition
-problem repeats, inspect/report the mismatch instead of launching more probe jobs.
+update takes effect. The submission reply gives the job ID and how to wait for
+it; it does not repeat the graph the agent just sent. Update replies list the
+resulting graph without prompts. If a definition problem repeats,
+inspect/report the mismatch instead of launching more probe jobs.
 
 Edges use exact node IDs in `from` and `to`. `choice` is an exact label declared
 by the source decision; omitting it makes the edge unconditional. Pass `edges: []`

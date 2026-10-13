@@ -110,7 +110,7 @@ export function apply(ctx: Context): void {
         };
       },
     });
-    return { text: formatReceipt(snapshot!, `Running in background. Open Braid in the session header for the live graph and execution details, or use the Jobs panel / /braid. ${BRAID_WAIT_REMINDER}`),
+    return { text: formatReceipt(snapshot!, `${BRAID_WAIT_REMINDER} Open Braid in the session header for the live graph and execution details, or use the Jobs panel / /braid.`),
       jobId: snapshot!.handle, canonicalJobId: snapshot!.jobId, nativeJobId, status: snapshot!.status, nodeCount: snapshot!.execution.graph.nodes.length };
   })) ctx.tools.register(tool);
 

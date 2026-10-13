@@ -74,10 +74,9 @@ function control(execution: Pick<BraidSnapshot, "status" | "revision" | "pausedE
   return execution ? `Graph ${execution.status} · revision ${execution.revision} · paused executions: ${ids(execution.pausedExecutionIds)}` : "Graph not started";
 }
 
-/** The submission receipt. */
+/** The submission receipt. The caller already has the graph it submitted. */
 export function formatReceipt(job: JobSnapshot, message: string): string {
-  return [`Braid job ${job.handle} started (${job.status}).`, `ID: ${job.jobId}`, message,
-    ...job.execution ? [`Accepted graph (revision ${job.execution.revision}):`, formatGraph(job.execution.graph)] : []].join("\n");
+  return [`Braid job ${job.handle} started (${job.status}).`, `ID: ${job.jobId}`, message].join("\n");
 }
 
 export function formatUpdate(job: JobSnapshot): string {

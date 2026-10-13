@@ -127,7 +127,7 @@ const BRAID_USAGE_GUIDANCE = [
   "When Braid fits, submit a graph: use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. Use braid_status with the jobId to retrieve terminal outputs before relying on them.",
   BRAID_ASYNC_GUIDANCE,
   "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Use braid_status({jobId, executionId}) to retrieve the exact execution; nodeId selects the latest instance. Use pauseAfter=true to hold outgoing scheduling. Definitions can always be changed with braid_update using expectedRevision; existing executions retain their captured inputs. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes.",
-  "Make the delegation choice once per user request. Reminders and definition errors are not new tasks. Check the accepted node types and settings in the tool response. If the same definition problem recurs, stop resubmitting and report the concrete mismatch; do not launch repeated probe/replacement jobs. In braid_update, add new nodes together with their dependencies and loops: a node added without incoming edges can start immediately, even while another execution is paused.",
+  "Make the delegation choice once per user request. Reminders and definition errors are not new tasks. If the same definition problem recurs, stop resubmitting and report the concrete mismatch; do not launch repeated probe/replacement jobs. In braid_update, add new nodes together with their dependencies and loops: a node added without incoming edges can start immediately, even while another execution is paused.",
   "Do not use braid for a simple one-step answer, a trivial direct edit, a single shell command, or when decomposition adds no value. Writable nodes can implement and test their work. The parent reviews results and performs any remaining validation after Braid completes.",
 ].join("\n");
 
@@ -230,7 +230,7 @@ export function createBraidTools(jobs: BraidJobs) {
               {
                 type: "text",
                 text: formatReceipt(job,
-                  `Running in background. Check the accepted graph below. ${BRAID_WAIT_REMINDER}`),
+                  `${BRAID_WAIT_REMINDER} Humans can follow it live in /braid.`),
               },
             ],
             details: job,
