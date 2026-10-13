@@ -91,12 +91,26 @@ const BRAID_FILESYSTEM_GUIDANCE =
   "Do not set workspace on merge/integrate nodes. Checkpoints remain recoverable after cleanup. Optional failed predecessors pass errors and partial work along unconditional edges; requireSuccess=true makes failure abort the job. " +
   "Nodes have DSH's native read, glob, and grep tools and Git inspection; writable nodes also have DSH's write/edit and bash tools (plus pwsh on Windows) for dependencies, builds, and tests, while merge/integrate also have local Git integration tools. Outside Git all filesystem access is read-only; read-only nodes have no shell. Worktrees are not an OS sandbox: prompts constrain shell writes and shared resources. Checkpoints omit ignored new files. Parent extension/MCP tools and recursive Braid calls are not provided. Nodes should verify their changes; the parent reviews results and performs any remaining validation after integration.";
 
+/** Lifecycle guidance shared by the system prompt and tool descriptions. */
+export const BRAID_ASYNC_GUIDANCE =
+  "Braid is asynchronous: braid returns a jobId immediately and the job keeps running independently of the foreground response; ending your turn does not cancel it. " +
+  "Completion, failure, or cancellation sends a reminder: an idle agent is resumed automatically, and a running agent receives it at the next model step. " +
+  "After submitting, continue useful independent work. If nothing else can proceed until the result arrives, end your turn and let the reminder resume the task. " +
+  "Do not call sleep, run a shell sleep, use a timer, or enter a sleep/poll loop solely to wait for a Braid job; delays required by the user's actual task remain allowed. " +
+  "On the reminder, retrieve results with braid_status and continue the original task. Between reminders, use braid_status only for deliberate progress checks or diagnosis.";
+
+/** Short reminder repeated in every submission receipt. */
+export const BRAID_WAIT_REMINDER =
+  "Braid runs asynchronously and notifies you when the job finishes. Continue independent work, or end your turn if you need the result before proceeding; the completion reminder will resume you. " +
+  "Do not sleep or poll in a loop to wait for this job. Retrieve its results with braid_status after the reminder.";
+
 export const BRAID_USAGE_GUIDANCE = [
   "Braid is a proactive execution primitive, not only a user-requested command.",
   "Selection rule: for a code review, bug investigation, design comparison, test-planning request, or change spanning multiple files, call braid FIRST when two or more concerns can be handled independently. Nodes can analyze the project and implement changes in isolated Git worktrees. Do this without waiting for the user to say Braid; do not read everything in the parent and then decide whether to delegate.",
   BRAID_FILESYSTEM_GUIDANCE,
   "For repeated instructions, define promptTemplates once and use prompt={template: name, variables: {name: value}} on nodes. Values are strings inserted literally into {{name}} placeholders; plain-string prompts remain supported.",
-  "When Braid fits, submit a graph: use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. The tool returns a jobId immediately. Continue independent work or finish your turn while it runs; do not poll repeatedly. A completion reminder will resume you. Use braid_status with the jobId to retrieve terminal outputs before relying on them.",
+  "When Braid fits, submit a graph: use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. Use braid_status with the jobId to retrieve terminal outputs before relying on them.",
+  BRAID_ASYNC_GUIDANCE,
   "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Use braid_status({jobId, executionId}) to retrieve the exact execution; nodeId selects the latest instance. Use pauseAfter=true to hold outgoing scheduling. Definitions can always be changed with braid_update using expectedRevision; existing executions retain their captured inputs. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes.",
   "Make the delegation choice once per user request. Reminders and definition errors are not new tasks. Check the accepted node types and settings in the tool response. If the same definition problem recurs, stop resubmitting and report the concrete mismatch; do not launch repeated probe/replacement jobs. In braid_update, add new nodes together with their dependencies and loops: a node added without incoming edges can start immediately, even while another execution is paused.",
   "Do not use braid for a simple one-step answer, a trivial direct edit, a single shell command, or when decomposition adds no value. Writable nodes can implement and test their work. The parent reviews results and performs any remaining validation after Braid completes.",

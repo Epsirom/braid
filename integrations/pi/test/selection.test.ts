@@ -58,7 +58,14 @@ test("extension registers background tools, a panel command, and guidance to wai
     prompt.systemPrompt,
     /two or more concerns can be handled independently/,
   );
-  assert.match(prompt.systemPrompt, /do not poll repeatedly/);
+  const status = fake.tools.get("braid_status") as ReturnType<typeof createBraidTools>["statusTool"];
+  for (const guidance of [prompt.systemPrompt, (fake.tools.get("braid") as { description: string }).description]) {
+    assert.match(guidance, /returns a jobId immediately/);
+    assert.match(guidance, /ending your turn does not cancel it/);
+    assert.match(guidance, /end your turn and let the reminder resume the task/);
+    assert.match(guidance, /Do not call sleep, run a shell sleep, use a timer, or enter a sleep\/poll loop solely to wait for a Braid job/);
+  }
+  assert.match(status.description, /do not sleep, use a timer, or poll in a loop to wait for a job/);
   assert.match(prompt.systemPrompt, /fresh worktree/);
   assert.match(prompt.systemPrompt, /Outside Git all filesystem access is read-only/);
   assert.match(prompt.systemPrompt, /integrate writes selected changes to the invoking checkout/);

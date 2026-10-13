@@ -24,7 +24,9 @@ test("Pi atomically updates a paused job, resumes, and retrieves immutable execu
   const receipt = (submitted.content[0] as { text: string }).text;
   assert.match(receipt, /^Braid job job-1 started \(running\)\.\nID: \S+\n/);
   assert.match(receipt, /Accepted graph \(revision 0\):\nNodes:\n- a: execute, pauseAfter\nEdges:\n- none$/);
-  assert.doesNotMatch(receipt, /work/, "prompts are not echoed");
+  assert.doesNotMatch(receipt, /^- a: .*work/m, "prompts are not echoed");
+  assert.match(receipt, /end your turn if you need the result before proceeding/);
+  assert.match(receipt, /Do not sleep or poll in a loop to wait for this job/);
   await assert.rejects(tools.updateTool.execute("invalid topology", {
     jobId: paused.handle, expectedRevision: 0,
     upsertNodes: [{ type: "merge", id: "check" }],

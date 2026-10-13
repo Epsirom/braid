@@ -234,8 +234,10 @@ for the shared graph semantics.
 Completion and pause messages use DSH `agent.steer`: a running agent consumes
 them at the next step, and an idle agent wakes. Acknowledged messages are removed;
 discarded messages retry when the agent returns to idle. DSH's generic job
-controller may also show its native job completion notice. Retrieve results after
-the reminder instead of polling. Stopping a foreground response does not cancel
+controller may also show its native job completion notice. Tool descriptions, the
+system prompt, and the submission receipt tell the agent to continue independent
+work, or end its turn if it needs the result, and to retrieve results after the
+reminder instead of sleeping or polling. Stopping a foreground response does not cancel
 submitted jobs. Plugin or owning-agent disposal aborts workers, awaits cleanup,
 and suppresses Braid reminders. Switching the UI to another still-live agent does
 not dispose the original owner or redirect its reminders. Jobs are in memory;

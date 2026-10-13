@@ -44,8 +44,10 @@ On completion, failure, or cancellation, the extension sends a custom
 Pi queues it as steering during streaming: it enters context after the current
 assistant response and its entire tool batch, before the next model step. It
 does not wait for the whole foreground task to finish or skip remaining tools.
-When idle, it starts a new agent turn automatically. The agent should wait for
-this reminder rather than poll.
+When idle, it starts a new agent turn automatically. Tool descriptions, the
+system prompt, and the submission receipt tell the agent to continue independent
+work, or end its turn if it needs the result, and not to sleep, use a timer, or
+poll in a loop to wait for the job.
 Stopping the foreground response does not stop background jobs.
 
 Jobs live in memory for the current Pi session. Quitting, reloading extensions,
