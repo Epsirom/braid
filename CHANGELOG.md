@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changes
+
+- DSH workers now use DSH's own `read`, `write`, `edit`, `glob`, `grep`, and
+  `bash` tools (`pwsh` on Windows) instead of Braid's reimplementations, so
+  their schemas, guidance, and results match the parent agent's: line-numbered
+  `read` with `offset`/`limit`, `[stderr]` and `[exit code: N]` markers from
+  `bash`, and no JSON-encoded results. `ls` and `find` are replaced by `glob`,
+  and DSH's read-before-write policy applies. Each execution runs the tools in a
+  private context with local providers rooted at its workspace; Braid keeps its
+  write boundary, live shell output, and cleanup of leftover processes before
+  the checkpoint. `@chrok/dsh-braid` gains peer dependencies on these DSH
+  packages ([#75](https://github.com/Epsirom/braid/pull/75)) — @Epsirom.
+
 ### Maintenance
 
 - Pi 1.2.0 is now the pinned Pi validation target, replacing 1.0.1. The Pi

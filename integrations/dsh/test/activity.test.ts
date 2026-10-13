@@ -5,7 +5,6 @@ import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import { BraidJobs } from "../jobs.js";
 import { renderPanel } from "../display.js";
 import { panelJob } from "../panel.js";
-import { runCommand } from "../shell-tools.js";
 import { createBraidTools } from "../tools.js";
 import { answer, context, input, until } from "./helpers.js";
 
@@ -77,11 +76,3 @@ test("stream chunks, tool calls, and lifecycle are visible while an execution ru
   } finally { gate.resolve(); await jobs.dispose(); }
 });
 
-test("shell commands report incremental output to observers without changing the result", async () => {
-  const chunks: string[] = [];
-  const result = JSON.parse(await runCommand(process.execPath, ["-e", "console.log('first'); setTimeout(() => console.log('second'), 20)"],
-    process.cwd(), new AbortController().signal, undefined, text => { chunks.push(text); throw new Error("observer"); }));
-  assert.equal(result.exitCode, 0);
-  assert.match(result.output, /first\n.*second/s);
-  assert.match(chunks.join(""), /first\n.*second/s);
-});
