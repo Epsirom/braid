@@ -93,8 +93,14 @@ try {
 
   const consumer = join(temp, "consumer");
   mkdirSync(consumer);
-  writeFileSync(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }));
   const peers = Object.fromEntries(Object.keys(piManifest.peerDependencies).map(name => [name, piManifest.devDependencies[name]]));
+  // Pi's own packages depend on each other with caret ranges, so a fresh install can pull a
+  // newer sibling the pinned host was never built against. Hold them at the locked versions.
+  const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+  const overrides = Object.fromEntries(Object.entries(lock.packages)
+    .map(([path, entry]) => [path.match(/^node_modules\/(@earendil-works\/[^/]+)$/)?.[1], entry.version])
+    .filter(([name]) => name && !(name in peers)));
+  writeFileSync(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module", overrides }));
   await run([npm, "install", "--no-audit", "--no-fund", `--@chrok:registry=${origin}`, "--cache", join(temp, "npm-cache"), join(temp, pi.filename), ...Object.entries(peers).map(([name, version]) => `${name}@${version}`)], consumer);
   assert.ok(downloads > 0, "Pi installation must download its core dependency");
   const consumerManifest = JSON.parse(readFileSync(join(consumer, "package.json"), "utf8"));

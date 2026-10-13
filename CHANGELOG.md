@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Maintenance
+
+- Pi 1.2.0 is now the pinned Pi validation target, replacing 1.0.1. The Pi
+  integration needed no code changes, and its peer dependencies stay `*`. On
+  Pi 1.2.0, runs started by Braid's completion reminders also receive the Braid
+  execution policy in their system prompt, because Pi now fires
+  `before_agent_start` for them.
+
+### Fixes
+
+- The package smoke test (`npm run test:package`) failed after
+  `@earendil-works/pi-codemode` 1.2.0 removed `MCP_TYPESCRIPT_PREAMBLE`, which
+  `@earendil-works/pi-coding-agent` 1.0.1 still imports through its `^1.0.1`
+  range. The smoke consumer now holds Pi's transitive packages at the versions
+  in `package-lock.json`, so a later Pi sibling release can no longer change
+  what it tests. Published packages are unchanged.
+
 ## 0.3.4 — 2026-10-11
 
 ### Features
