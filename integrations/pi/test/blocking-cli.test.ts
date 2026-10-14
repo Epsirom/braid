@@ -71,6 +71,11 @@ export default function (pi) {
   assert.match(stdout, /CLI observed completed Braid result/);
   if (mode === "json") {
     const events = stdout.trim().split("\n").map(line => JSON.parse(line));
+    const progress = events.findIndex(event => event.type === "tool_execution_update" && event.toolName === "braid");
+    assert.ok(progress >= 0);
+    assert.equal(events[progress].partialResult.details.handle, "job-1");
+    assert.match(JSON.stringify(events[progress].partialResult.content), /Waiting for the graph/);
+    assert.ok(progress < events.findIndex(event => event.type === "tool_execution_end" && event.toolName === "braid"));
     const completed = events.find(event => event.type === "tool_execution_end" && event.toolName === "braid");
     assert.equal(completed?.result.details.status, "completed");
     assert.equal(completed?.result.usage.totalTokens, 2);

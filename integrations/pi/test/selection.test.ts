@@ -69,17 +69,17 @@ test("extension registers background tools, a panel command, and guidance to wai
     /two or more concerns can be handled independently/,
   );
   const status = fake.tools.get("braid_status") as ReturnType<typeof createBraidTools>["statusTool"];
-  for (const guidance of [prompt.systemPrompt, (fake.tools.get("braid") as { description: string }).description]) {
-    assert.match(guidance, /returns a jobId immediately/);
-    assert.match(guidance, /ending your turn does not cancel it/);
-    assert.match(guidance, /end your turn and let the reminder resume the task/);
-    assert.match(guidance, /Do not call sleep, run a shell sleep, use a timer, or enter a sleep\/poll loop solely to wait for a Braid job/);
-  }
+  assert.match(prompt.systemPrompt, /returns a jobId immediately/);
+  assert.match(prompt.systemPrompt, /ending your turn does not cancel it/);
+  assert.match(prompt.systemPrompt, /end your turn and let the reminder resume the task/);
+  assert.match(prompt.systemPrompt, /Do not call sleep, run a shell sleep, use a timer, or enter a sleep\/poll loop solely to wait for a Braid job/);
   assert.match(status.description, /do not sleep, use a timer, or poll in a loop to wait for a job/);
   assert.match(prompt.systemPrompt, /fresh worktree/);
   assert.match(prompt.systemPrompt, /Outside Git all filesystem access is read-only/);
   assert.match(prompt.systemPrompt, /integrate writes selected changes to the invoking checkout/);
   const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
+  assert.match(tool.description, /current session's Braid execution policy in the system prompt/);
+  assert.doesNotMatch(tool.description, /end your turn|Completion reminders are suppressed|Use pauseAfter=true|Set notifyOnCompletion=true/);
   assert.deepEqual(tool.parameters.properties.nodes.items.properties.workspace.enum, ["read-only", "worktree"]);
   assert.equal(tool.parameters.properties.nodes.items.properties.notifyOnCompletion.type, "boolean");
   assert.match(prompt.systemPrompt, /notifyOnCompletion=true/);
@@ -107,6 +107,7 @@ test("the manual flag enables blocking after extension registration and guides t
   const prompt = fake.handlers.get("before_agent_start")!({ systemPrompt: "base" } as never, ctx) as { systemPrompt: string };
   assert.match(prompt.systemPrompt, /Blocking mode is enabled/);
   assert.doesNotMatch(prompt.systemPrompt, /end your turn and let the reminder resume/);
+  assert.doesNotMatch(prompt.systemPrompt, /Use pauseAfter=true|Set notifyOnCompletion=true|Use braid_status with the jobId to retrieve terminal outputs/);
   const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
   assert.equal("blocking" in tool.parameters.properties.options.properties, false);
   let returned = false;
@@ -118,6 +119,41 @@ test("the manual flag enables blocking after extension registration and guides t
   assert.equal(result.details!.status, "completed");
   assert.match(JSON.stringify(result.content), /CI result/);
   assert.equal(fake.reminders(), 0);
+});
+
+test("cancelled blocking jobs send a reminder with their handle and retain partial outputs", { timeout: 2_000 }, async t => {
+  const fake = extension();
+  fake.flagValues.set("braid-blocking", true);
+  const started = deferred<void>();
+  let calls = 0;
+  const ctx = context(async () => {
+    if (++calls === 1) return response("retained partial output");
+    started.resolve();
+    return new Promise(() => {});
+  });
+  t.after(() => fake.handlers.get("session_shutdown")!({} as never, ctx));
+  const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
+  const status = fake.tools.get("braid_status") as ReturnType<typeof createBraidTools>["statusTool"];
+  const controller = new AbortController();
+  const running = tool.execute("cancel", {
+    ...input,
+    nodes: ["saved", "running"].map(id => ({ type: "execute", id, prompt: "work" })),
+    options: { maxConcurrency: 1 },
+  }, controller.signal, undefined, ctx);
+  await started.promise;
+  controller.abort();
+  const cancelled = await running;
+  assert.equal(cancelled.usage, undefined);
+  const { message } = await fake.reminder.promise;
+  assert.equal(message.customType, "braid-completed");
+  assert.match(String(message.content), /job-1 finished with status cancelled/);
+  assert.match(String(message.content), /partial outputs/);
+  const read = await status.execute("retained", { jobId: "job-1" }, undefined, undefined, ctx);
+  assert.equal(read.details!.result!.nodes.saved!.output, "retained partial output");
+  assert.equal(read.usage!.totalTokens, 2);
+  const again = await status.execute("again", { jobId: "job-1" }, undefined, undefined, ctx);
+  assert.equal(again.usage, undefined);
+  assert.equal(fake.reminders(), 1);
 });
 
 test("the session command reports the mode, overrides the CLI flag, and rejects invalid arguments", async t => {

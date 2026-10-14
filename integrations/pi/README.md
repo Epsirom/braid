@@ -69,9 +69,14 @@ mode. The session override is not persisted. These are user controls, not model
 tool parameters; the default remains background execution.
 For CI pass/fail decisions, inspect the returned job status: a failed graph does
 not by itself set Pi's process exit code.
-Blocking calls suppress node/job completion reminders; foreground cancellation
-cancels their work and waits for cleanup. `pauseAfter: true` is rejected before
-starting a blocking job because it requires a later resume call. The interactive
+Blocking calls emit an initial progress update with the job handle while waiting.
+They suppress node/job completion reminders except for cancellation: stopping the
+foreground response cancels their work, waits for cleanup, and sends a reminder
+so the next turn can retrieve partial outputs and recovery checkpoints.
+Wait/result retrieval errors include the existing job handle and any terminal
+usage; retrieve that job with `braid_status` instead of submitting the graph again.
+`pauseAfter: true` is rejected before starting a blocking job because it requires
+a later resume call. The interactive
 `/braid:review` command continues to use its background review workflow.
 
 Jobs live in memory for the current Pi session. Quitting, reloading extensions,

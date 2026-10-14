@@ -27,18 +27,20 @@ test("blocking waits for parallel branches and their join, returns outputs and c
     return response("joined result");
   });
   const { braidTool, statusTool } = createBraidTools(jobs, () => true);
+  const updates: { handle: string | undefined; text: string }[] = [];
   let returned = false;
   const call = braidTool.execute("blocking", {
     ...input,
     nodes: ["a", "b", "join"].map(id => ({ type: "execute", id, prompt: "work", notifyOnCompletion: true })),
     edges: [{ from: "a", to: "join" }, { from: "b", to: "join" }],
-  }, undefined, undefined, ctx).then(result => { returned = true; return result; });
+  }, undefined, update => updates.push({ handle: update.details?.handle, text: JSON.stringify(update.content) }), ctx)
+    .then(result => { returned = true; return result; });
   await rootsStarted.promise;
   assert.equal(returned, false);
-  assert.throws(() => jobs.update("job-1", {
-    expectedRevision: 0, upsertNodes: [{ type: "execute", id: "a", prompt: "work", pauseAfter: true }],
-  }), /cannot use pauseAfter/);
-  assert.equal(jobs.get("job-1")!.execution!.revision, 0);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0]!.handle, "job-1");
+  assert.match(updates[0]!.text, /Waiting for the graph and workspace cleanup/);
+  assert.doesNotMatch(updates[0]!.text, /runs asynchronously/);
   first.resolve(response("first branch"));
   await firstFinished.promise;
   assert.equal(returned, false);
@@ -53,6 +55,50 @@ test("blocking waits for parallel branches and their join, returns outputs and c
   const again = await statusTool.execute("again", { jobId: "job-1" }, undefined, undefined, ctx);
   assert.equal(again.usage, undefined);
   assert.deepEqual(notifications, []);
+});
+
+for (const phase of ["wait", "status"] as const) test(`blocking ${phase} errors retain the existing job and account only terminal usage`, bounds, async t => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const { braidTool, statusTool } = createBraidTools(jobs, () => true);
+  const failure = phase === "wait"
+    ? t.mock.method(jobs, "wait", async () => { throw new Error("wait failed"); })
+    : t.mock.method(statusTool, "execute", async () => { throw new Error("status.txt write failed"); });
+  const ctx = context(async () => response("retained output"));
+  const result = await braidTool.execute("failure", input, undefined, undefined, ctx);
+  assert.equal(result.isError, true);
+  assert.equal(result.details!.handle, "job-1");
+  assert.equal(result.details!.status, phase === "wait" ? "running" : "completed");
+  assert.match(JSON.stringify(result.content), /Braid job job-1 was started/);
+  assert.match(JSON.stringify(result.content), /Do not resubmit/);
+  assert.match(JSON.stringify(result.content), /braid_status/);
+  assert.match(JSON.stringify(result.content), phase === "wait" ? /wait failed/ : /status\.txt write failed/);
+  assert.doesNotMatch(JSON.stringify(result.content), /Braid submission failed/);
+  assert.equal(result.usage?.totalTokens, phase === "wait" ? undefined : 2);
+  assert.equal(jobs.list().length, 1);
+  failure.mock.restore();
+  if (phase === "wait") jobs.cancel("job-1");
+  await jobs.wait("job-1");
+  if (phase === "status") {
+    const retried = await statusTool.execute("retry", { jobId: "job-1" }, undefined, undefined, ctx);
+    assert.equal(retried.details!.result!.terminalOutputs.a!.output, "retained output");
+    assert.equal(retried.usage, undefined);
+  }
+});
+
+for (const action of ["throw", "abort"] as const) test(`a progress callback can ${action} without orphaning the blocking job`, bounds, async t => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const controller = new AbortController();
+  let updates = 0;
+  const result = await createBraidTools(jobs, () => true).braidTool.execute("progress", input, controller.signal, () => {
+    updates++;
+    if (action === "abort") controller.abort();
+    else throw new Error("progress renderer failed");
+  }, context(async () => response()));
+  assert.equal(updates, 1);
+  assert.equal(result.details!.status, action === "abort" ? "cancelled" : "completed");
+  assert.notEqual(result.isError, true);
 });
 
 test("blocking returns required failures with successful partial outputs", bounds, async t => {
