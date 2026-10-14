@@ -11,8 +11,10 @@ execution-control foundation. The 0.3.1 release adds DeepSeek Harness integratio
 and a native Web graph panel. The 0.3.2 release adds Pi editor progress, focused
 node details, and a bounded parallel review command. The 0.3.3 release adds live
 per-execution activity and read-only Pi node sessions. The 0.3.4 release adds a Pi
-panel assistant that can message running executions, and `/braid:clear`. Source
-availability and npm availability are separate milestones. Check
+panel assistant that can message running executions, and `/braid:clear`. The 0.3.5
+release returns plain-text Braid tool results and runs DSH workers on DSH's own
+file and shell tools. Source availability and npm availability are separate
+milestones. Check
 [GitHub releases](https://github.com/Epsirom/braid/releases),
 [@chrok/braid](https://www.npmjs.com/package/@chrok/braid),
 [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid), and
@@ -34,6 +36,7 @@ availability and npm availability are separate milestones. Check
 - [x] Bounded Pi parallel review/fix command with review-only requests and isolated fixes.
 - [x] Live per-execution activity in core, Pi, and DSH, plus read-only Pi node sessions.
 - [x] Pi panel assistant that can message running executions, recorded as human input.
+- [x] Plain-text Braid tool results in Pi and DSH, and DSH workers on DSH's native tools.
 
 Read the [0.2 → 0.3 migration guide](docs/compatibility.md#migrating-from-02-to-03)
 for workspace capabilities and artifact preservation.

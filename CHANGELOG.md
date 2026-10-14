@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.5 — 2026-10-14
+
 ### Changes
 
 - DSH workers now use DSH's own `read`, `write`, `edit`, `glob`, `grep`, and
@@ -46,16 +48,28 @@
   integration needed no code changes, and its peer dependencies stay `*`. On
   Pi 1.2.0, runs started by Braid's completion reminders also receive the Braid
   execution policy in their system prompt, because Pi now fires
-  `before_agent_start` for them.
-
-### Fixes
-
+  `before_agent_start` for them
+  ([#76](https://github.com/Epsirom/braid/pull/76)) — @Epsirom.
 - The package smoke test (`npm run test:package`) failed after
   `@earendil-works/pi-codemode` 1.2.0 removed `MCP_TYPESCRIPT_PREAMBLE`, which
   `@earendil-works/pi-coding-agent` 1.0.1 still imports through its `^1.0.1`
   range. The smoke consumer now holds Pi's transitive packages at the versions
   in `package-lock.json`, so a later Pi sibling release can no longer change
-  what it tests. Published packages are unchanged.
+  what it tests. Published packages are unchanged
+  ([#76](https://github.com/Epsirom/braid/pull/76)) — @Epsirom.
+
+No breaking core API changes or migration from 0.3.4 are required. Code that
+parsed the JSON text of Braid tool results, or read the JSON result and
+snapshot files they saved, must read the plain-text documents instead.
+`@chrok/dsh-braid` adds peer dependencies on DSH's file and shell tool packages
+at 0.2.0-rc.2. Pi 1.2.0 and DSH 0.2.0-rc.2 are the tested host versions;
+integrations require Node.js 22.19+.
+
+### New Contributors
+
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.3.4...v0.3.5).
 
 ## 0.3.4 — 2026-10-11
 
