@@ -15,6 +15,8 @@ function extension(onSend?: (message: Parameters<ExtensionAPI["sendMessage"]>[0]
     { handler: (args: string, ctx: unknown) => Promise<void> }
   >();
   const handlers = new Map<string, Handler>();
+  const flags = new Map<string, Parameters<ExtensionAPI["registerFlag"]>[1]>();
+  const flagValues = new Map<string, boolean | string>();
   const reminder = deferred<{
     message: Parameters<ExtensionAPI["sendMessage"]>[0];
     options: Parameters<ExtensionAPI["sendMessage"]>[1];
@@ -22,6 +24,11 @@ function extension(onSend?: (message: Parameters<ExtensionAPI["sendMessage"]>[0]
   let reminders = 0;
   const messages: Parameters<ExtensionAPI["sendMessage"]>[0][] = [];
   braidExtension({
+    registerFlag: (name: string, options: Parameters<ExtensionAPI["registerFlag"]>[1]) => {
+      flags.set(name, options);
+      if (options.default !== undefined) flagValues.set(name, options.default);
+    },
+    getFlag: (name: string) => flagValues.get(name),
     registerTool: (tool: { name: string }) => tools.set(tool.name, tool),
     registerCommand: (name: string, command: never) =>
       commands.set(name, command),
@@ -36,16 +43,19 @@ function extension(onSend?: (message: Parameters<ExtensionAPI["sendMessage"]>[0]
       reminder.resolve({ message, options });
     },
   } as unknown as ExtensionAPI);
-  return { tools, commands, handlers, reminder, messages, reminders: () => reminders };
+  return { tools, commands, handlers, flags, flagValues, reminder, messages, reminders: () => reminders };
 }
 
 test("extension registers background tools, a panel command, and guidance to wait for reminders", async () => {
   const fake = extension();
+  assert.equal(fake.flags.get("braid-blocking")?.type, "boolean");
+  assert.equal(fake.flags.get("braid-blocking")?.default, false);
   assert.deepEqual(
     [...fake.tools.keys()],
     ["braid", "braid_status", "braid_cancel", "braid_update", "braid_resume"],
   );
   assert.ok(fake.commands.has("braid"));
+  assert.ok(fake.commands.has("braid:blocking"));
   assert.ok(fake.commands.has("braid:review"));
   assert.ok(fake.handlers.has("session_start"));
   assert.equal(fake.handlers.has("input"), false);
@@ -85,6 +95,77 @@ test("extension registers background tools, a panel command, and guidance to wai
     /Completion reminders refer to existing jobs/,
   );
   fake.handlers.get("session_shutdown")!({} as never, {} as never);
+});
+
+test("the manual flag enables blocking after extension registration and guides the parent", { timeout: 2_000 }, async t => {
+  const fake = extension();
+  fake.flagValues.set("braid-blocking", true);
+  const started = deferred<void>();
+  const completion = deferred<ReturnType<typeof response>>();
+  const ctx = context(async () => { started.resolve(); return completion.promise; });
+  t.after(() => fake.handlers.get("session_shutdown")!({} as never, ctx));
+  const prompt = fake.handlers.get("before_agent_start")!({ systemPrompt: "base" } as never, ctx) as { systemPrompt: string };
+  assert.match(prompt.systemPrompt, /Blocking mode is enabled/);
+  assert.doesNotMatch(prompt.systemPrompt, /end your turn and let the reminder resume/);
+  const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
+  assert.equal("blocking" in tool.parameters.properties.options.properties, false);
+  let returned = false;
+  const call = tool.execute("call", input, undefined, undefined, ctx).then(result => { returned = true; return result; });
+  await started.promise;
+  assert.equal(returned, false);
+  completion.resolve(response("CI result"));
+  const result = await call;
+  assert.equal(result.details!.status, "completed");
+  assert.match(JSON.stringify(result.content), /CI result/);
+  assert.equal(fake.reminders(), 0);
+});
+
+test("the session command reports the mode, overrides the CLI flag, and rejects invalid arguments", async t => {
+  const fake = extension();
+  fake.flagValues.set("braid-blocking", true);
+  const notices: string[] = [];
+  const ctx = context(async () => response());
+  ctx.ui = { notify: (message: string) => notices.push(message) } as never;
+  t.after(() => fake.handlers.get("session_shutdown")!({} as never, ctx));
+  const command = fake.commands.get("braid:blocking")!;
+  await command.handler("", ctx);
+  assert.match(notices.at(-1)!, /mode: on/);
+  await command.handler("off", ctx);
+  await command.handler("", ctx);
+  assert.match(notices.at(-1)!, /mode: off/);
+  await assert.rejects(command.handler("off extra", ctx), /Usage: \/braid:blocking \[on\|off\]/);
+  await command.handler("", ctx);
+  assert.match(notices.at(-1)!, /mode: off/);
+  await command.handler(" ON ", ctx);
+  assert.match(notices.at(-1)!, /mode: on/);
+});
+
+for (const initiallyBlocking of [false, true]) test(`switching ${initiallyBlocking ? "off" : "on"} affects new calls and preserves the running job's mode`, { timeout: 2_000 }, async t => {
+  const fake = extension();
+  fake.flagValues.set("braid-blocking", initiallyBlocking);
+  const started = deferred<void>();
+  const completion = deferred<ReturnType<typeof response>>();
+  const ctx = context(async () => { started.resolve(); return completion.promise; });
+  ctx.ui = { notify() {} } as never;
+  t.after(() => fake.handlers.get("session_shutdown")!({} as never, ctx));
+  const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
+  let returned = false;
+  const running = tool.execute("running", input, undefined, undefined, ctx).then(result => { returned = true; return result; });
+  await started.promise;
+  assert.equal(returned, !initiallyBlocking);
+  await fake.commands.get("braid:blocking")!.handler(initiallyBlocking ? "off" : "on", ctx);
+  assert.equal(returned, !initiallyBlocking);
+  const prompt = fake.handlers.get("before_agent_start")!({ systemPrompt: "base" } as never, ctx) as { systemPrompt: string };
+  assert.equal(prompt.systemPrompt.includes("Blocking mode is enabled"), !initiallyBlocking);
+  completion.resolve(response("original result"));
+  const original = await running;
+  assert.equal(original.details!.status, initiallyBlocking ? "completed" : "running");
+  if (!initiallyBlocking) await fake.reminder.promise;
+  assert.equal(fake.reminders(), initiallyBlocking ? 0 : 1);
+  const next = await tool.execute("next", input, undefined, undefined, ctx);
+  assert.equal(next.details!.status, initiallyBlocking ? "running" : "completed");
+  if (initiallyBlocking) await fake.reminder.promise;
+  assert.equal(fake.reminders(), 1);
 });
 
 for (const idle of [true, false]) {

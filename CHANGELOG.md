@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Pi supports opt-in blocking execution with `--braid-blocking` and the session
+  command `/braid:blocking [on|off]`. Blocking tool calls wait for the graph and
+  workspace cleanup before returning final results, suppress completion reminders,
+  and cancel their work when the foreground response is stopped. Background
+  execution remains the default; session switches affect only new tool calls.
+
 ## 0.3.5 — 2026-10-14
 
 ### Changes

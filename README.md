@@ -37,7 +37,7 @@ and [execution control](docs/execution-control.md) when you need those features.
 | Where you want to use Braid | Start here |
 | --- | --- |
 | In your own application | [Install `@chrok/braid`](#install-in-your-application) and supply a model runner |
-| In Pi | [Install `@chrok/pi-braid`](#install-in-pi) to run agents in the background and inspect them in a live panel |
+| In Pi | [Install `@chrok/pi-braid`](#install-in-pi) for background agents and a live panel; use `pi --braid-blocking -p "task"` to wait in CI |
 | In DeepSeek Harness | [Install `@chrok/dsh-braid`](#install-in-deepseek-harness) for background agents and a native Web graph panel |
 
 ## Install in your application
