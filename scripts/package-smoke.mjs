@@ -122,9 +122,17 @@ try {
     assert.equal(typeof createOpenAICompatibleRunner(), 'function');
     const tools = new Map();
     const handlers = new Map();
+    const flags = new Map();
+    const commands = new Map();
+    let reminders = 0;
     let finished;
     const completion = new Promise(resolve => { finished = resolve; });
-    extension({ registerTool: t => tools.set(t.name, t), registerCommand() {}, on: (event, handler) => handlers.set(event, handler), sendMessage: finished });
+    extension({
+      registerFlag: (name, options) => flags.set(name, options.default), getFlag: name => flags.get(name),
+      registerTool: t => tools.set(t.name, t), registerCommand: (name, options) => commands.set(name, options),
+      on: (event, handler) => handlers.set(event, handler), sendMessage: message => { reminders++; finished(message); },
+    });
+    assert.equal(flags.get('braid-blocking'), false);
     assert.deepEqual([...tools.keys()].sort(), ['braid', 'braid_cancel', 'braid_resume', 'braid_status', 'braid_update']);
     const result = await braid({ goal: 'smoke', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] }, { runner: async () => ({ output: 'PASS' }) });
     assert.equal(result.terminalOutputs.a.output, 'PASS');
@@ -147,6 +155,12 @@ try {
       const final = await tools.get('braid_status').execute('status', { jobId: submitted.details.jobId });
       assert.equal(final.details.result.status, 'completed');
       assert.equal(final.details.result.terminalOutputs.a.output, 'PI PASS');
+      await commands.get('braid:blocking').handler('on', { ui: { notify() {} } });
+      const blocking = await tools.get('braid').execute('blocking', { goal: 'packed blocking', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] }, undefined, undefined, context);
+      assert.equal(blocking.details.status, 'completed');
+      assert.equal(blocking.details.result.terminalOutputs.a.output, 'PI PASS');
+      assert.equal(blocking.usage.totalTokens, 2);
+      assert.equal(reminders, 1, 'Blocking results must not send another completion reminder');
     } finally { clearTimeout(timer); handlers.get('session_shutdown')(); }
   `);
   await run([join(consumer, "check.mjs")], consumer);
@@ -219,7 +233,7 @@ try {
   await run(["check.mjs"], dshConsumer);
   writeFileSync(join(dshConsumer, "check.mts"), `import { apply, name, inject } from '@chrok/dsh-braid'; void apply; void name; void inject;`);
   await run([join(root, "node_modules/typescript/bin/tsc"), "--noEmit", "--strict", "--skipLibCheck", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "check.mts"], dshConsumer);
-  console.log(`Package smoke passed: ${core.id} (${core.entryCount} files), ${pi.id} (${pi.entryCount} files), ${dsh.id} (${dsh.entryCount} files). Public imports, types, Pi/DSH background jobs, and clean builds verified outside the checkout.`);
+  console.log(`Package smoke passed: ${core.id} (${core.entryCount} files), ${pi.id} (${pi.entryCount} files), ${dsh.id} (${dsh.entryCount} files). Public imports, types, Pi background/blocking jobs, DSH background jobs, and clean builds verified outside the checkout.`);
 } finally {
   if (registry) await new Promise((resolve, reject) => registry.close(error => error ? reject(error) : resolve()));
   rmSync(temp, { recursive: true, force: true });
