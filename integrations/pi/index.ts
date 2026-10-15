@@ -12,7 +12,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { BraidJobs, type JobSnapshot } from "./jobs.js";
 import { registerBraidCommand, registerBraidWidget } from "./command.js";
 import { registerReviewCommand } from "./review.js";
-import { BRAID_DRAIN_GUIDANCE, isSingleShot, registerDrain } from "./drain.js";
+import { BRAID_DRAIN_GUIDANCE, BRAID_FINISH_GUIDANCE, isSingleShot, registerDrain } from "./drain.js";
 import { renderGraphCall, renderGraphResult, renderNodeResult } from "./display.js";
 import { formatJobList, formatJobStatus, formatNodeStatus, formatReceipt, formatResume, formatUpdate } from "./status-text.js";
 
@@ -515,6 +515,6 @@ export default function braidExtension(pi: ExtensionAPI) {
     disposeWidget();
   });
   pi.on("before_agent_start", (event, ctx) => ({
-    systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${blocking() ? "Blocking mode is enabled for this session. " + BRAID_BLOCKING_GUIDANCE : BRAID_ASYNC_GUIDANCE}${isSingleShot(ctx) ? `\n${BRAID_DRAIN_GUIDANCE}` : ""}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
+    systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${blocking() ? "Blocking mode is enabled for this session. " + BRAID_BLOCKING_GUIDANCE : BRAID_ASYNC_GUIDANCE}${isSingleShot(ctx) ? `\n${BRAID_DRAIN_GUIDANCE}\n${BRAID_FINISH_GUIDANCE}` : ""}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
   }));
 }

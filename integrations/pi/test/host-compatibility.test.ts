@@ -92,6 +92,7 @@ test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and 
             if (foregroundCalls === 1) {
               assert.match(prompt, /Braid execution policy/);
               assert.ok(tools.includes("braid"));
+              assert.ok(!tools.includes("braid_finish"), "braid_finish is for single-shot runs only");
               message.content = [{ type: "toolCall", id: "launch", name: "braid", arguments: submission }];
               message.stopReason = "toolUse";
             } else if (foregroundCalls === 2) {
