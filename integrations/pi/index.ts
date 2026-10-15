@@ -12,6 +12,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { BraidJobs, type JobSnapshot } from "./jobs.js";
 import { registerBraidCommand, registerBraidWidget } from "./command.js";
 import { registerReviewCommand } from "./review.js";
+import { BRAID_DRAIN_GUIDANCE, isSingleShot, registerDrain } from "./drain.js";
 import { renderGraphCall, renderGraphResult, renderNodeResult } from "./display.js";
 import { formatJobList, formatJobStatus, formatNodeStatus, formatReceipt, formatResume, formatUpdate } from "./status-text.js";
 
@@ -499,6 +500,7 @@ export default function braidExtension(pi: ExtensionAPI) {
     }
   });
   const { braidTool, statusTool, cancelTool, updateTool, resumeTool } = createBraidTools(jobs, blocking);
+  registerDrain(pi, jobs, () => pending.size > 0);
   registerBraidCommand(pi, jobs);
   registerReviewCommand(pi, jobs);
   const disposeWidget = registerBraidWidget(pi, jobs);
@@ -512,7 +514,7 @@ export default function braidExtension(pi: ExtensionAPI) {
     jobs.dispose();
     disposeWidget();
   });
-  pi.on("before_agent_start", (event) => ({
-    systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${blocking() ? "Blocking mode is enabled for this session. " + BRAID_BLOCKING_GUIDANCE : BRAID_ASYNC_GUIDANCE}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
+  pi.on("before_agent_start", (event, ctx) => ({
+    systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${blocking() ? "Blocking mode is enabled for this session. " + BRAID_BLOCKING_GUIDANCE : BRAID_ASYNC_GUIDANCE}${isSingleShot(ctx) ? `\n${BRAID_DRAIN_GUIDANCE}` : ""}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
   }));
 }

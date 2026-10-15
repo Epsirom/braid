@@ -133,6 +133,7 @@ try {
       on: (event, handler) => handlers.set(event, handler), sendMessage: message => { reminders++; finished(message); },
     });
     assert.equal(flags.get('braid-blocking'), false);
+    assert.ok(flags.has('braid-ci-timeout'));
     assert.deepEqual([...tools.keys()].sort(), ['braid', 'braid_cancel', 'braid_resume', 'braid_status', 'braid_update']);
     const result = await braid({ goal: 'smoke', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] }, { runner: async () => ({ output: 'PASS' }) });
     assert.equal(result.terminalOutputs.a.output, 'PASS');

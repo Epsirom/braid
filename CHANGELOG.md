@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Features
+
+- Pi print and JSON modes (`pi -p`, `--mode json`) keep background execution
+  and stay open until every Braid job finishes and its reminder is delivered, so
+  single-shot runs no longer exit before their graphs complete. Only paused
+  executions remaining when the parent ends its turn get one warning, then
+  cancellation and exit status 1. `--braid-ci-timeout <duration>` bounds the run
+  the same way ([#80](https://github.com/Epsirom/braid/issues/80)).
+
+### Behavior changes
+
+- Pi SDK sessions default to print mode, so `session.prompt()` now returns only
+  after outstanding Braid jobs drain. Bind with another mode, such as
+  `session.bindExtensions({ mode: "rpc" })`, to keep settle-driven reminders.
+
 ## 0.3.6 — 2026-10-15
 
 ### Features
