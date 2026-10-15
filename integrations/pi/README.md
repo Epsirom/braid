@@ -25,7 +25,7 @@ It registers:
 - `braid_update` / `braid_resume` — edit live definitions or release paused executions.
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
-- `/braid:blocking [on|off]` — enable or disable blocking for new `braid` tool calls;
+- `/braid:blocking [on|off]` — experimental: enable or disable blocking for new `braid` tool calls;
   omit the argument to show the current mode.
 - `/braid:review [target or focus]` — run a bounded parallel review/fix loop.
 - `/braid:clear` — clear the progress widget above the editor; run it again while
@@ -51,6 +51,11 @@ system prompt, and the submission receipt tell the agent to continue independent
 work, or end its turn if it needs the result, and not to sleep, use a timer, or
 poll in a loop to wait for the job.
 Stopping the foreground response does not stop background jobs.
+
+> **Experimental:** blocking mode is a stopgap for single-shot runs. Its flag,
+> command, and behavior may change or be replaced by an async-preserving CI mode
+> that keeps reminders, `pauseAfter`, and live updates
+> ([#80](https://github.com/Epsirom/braid/issues/80)).
 
 For CI or other single-shot runs, enable blocking manually when starting Pi:
 

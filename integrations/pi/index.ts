@@ -434,14 +434,14 @@ export function createBraidTools(jobs: BraidJobs, blocking: () => boolean = () =
 
 export default function braidExtension(pi: ExtensionAPI) {
   pi.registerFlag("braid-blocking", {
-    description: "Wait for braid tool calls to finish in the foreground (for CI/print mode)",
+    description: "Experimental: wait for braid tool calls to finish in the foreground (for CI/print mode)",
     type: "boolean",
     default: false,
   });
   let sessionBlocking: boolean | undefined;
   const blocking = () => sessionBlocking ?? (pi.getFlag("braid-blocking") === true);
   pi.registerCommand("braid:blocking", {
-    description: "Set blocking mode for new braid tool calls: /braid:blocking [on|off]; omit to show the current mode",
+    description: "Experimental: set blocking mode for new braid tool calls: /braid:blocking [on|off]; omit to show the current mode",
     handler: async (args, ctx) => {
       const setting = args.trim().toLowerCase();
       if (setting === "on" || setting === "off") sessionBlocking = setting === "on";
