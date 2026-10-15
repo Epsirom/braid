@@ -17,7 +17,8 @@ For the previous release, use the
 
 It registers:
 
-- `braid` — submit a graph with optional bounded loops and immediately receive a `jobId`.
+- `braid` — submit a graph with optional bounded loops; receive a `jobId`
+  immediately in background mode, or final results in experimental blocking mode.
 - `braid_status` — retrieve progress and results with `{ "jobId": "..." }`, or
   add `"executionId": "..."` for an exact invocation's full output/error.
   `"nodeId": "..."` selects that definition's latest invocation. Omit all IDs
