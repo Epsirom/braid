@@ -90,6 +90,41 @@ const scenarios: Record<string, Scenario> = {
       `assert.match(last(), /Braid job job-1 finished with status cancelled/); return say("TIMED OUT");`,
     ],
   },
+  // braid_finish records a failure, which the run reports once it drains.
+  finishFailure: {
+    graph: input,
+    workerDelayMs: 200,
+    parent: [
+      `assert.ok(tools().includes("braid_finish")); return launch();`,
+      `return say("Waiting.");`,
+      `assert.match(last(), /Braid job job-1 finished with status completed/);
+       return call("braid_finish", { status: "failure", summary: "Review found 2 blocking issues." });`,
+      `assert.match(last(), /Recorded failure\\. End your turn/); return say("REPORTED FAILURE");`,
+    ],
+  },
+  // A success reported while a job is outstanding keeps the run open for its reminder.
+  finishSuccess: {
+    graph: input,
+    workerDelayMs: 200,
+    parent: [
+      `return launch();`,
+      `return call("braid_finish", { status: "success", summary: "Submitted the review." });`,
+      `assert.match(last(), /Recorded success\\. 1 Braid job\\(s\\) are still outstanding/); return say("Waiting.");`,
+      `assert.match(last(), /Braid job job-1 finished with status completed/); return say("REPORTED SUCCESS");`,
+    ],
+  },
+  // A reported success cannot mask the failure of a forced cancellation.
+  finishAfterTimeout: {
+    graph: input,
+    workerDelayMs: 60_000,
+    parent: [
+      `return launch();`,
+      `return say("Waiting.");`,
+      `assert.match(last(), /Braid job job-1 finished with status cancelled/);
+       return call("braid_finish", { status: "success", summary: "Nothing to report." });`,
+      `return say("CLAIMED SUCCESS");`,
+    ],
+  },
 };
 
 async function runPi(name: string, mode: "text" | "json", flags: string[] = []) {
@@ -100,8 +135,8 @@ async function runPi(name: string, mode: "text" | "json", flags: string[] = []) 
 import assert from "node:assert/strict";
 import { appendFileSync } from "node:fs";
 import { setTimeout } from "node:timers/promises";
-import { createAssistantMessageEventStream, getCurrentSystemPrompt } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai"))};
-const steps = [${scenario.parent.map(body => `(last, say, call, launch) => { ${body} }`).join(",\n")}];
+import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai"))};
+const steps = [${scenario.parent.map(body => `(last, say, call, launch, tools) => { ${body} }`).join(",\n")}];
 const failures = ${JSON.stringify(join(cwd, "failures.log"))};
 export default function (pi) {
   let parentCalls = 0;
@@ -133,7 +168,8 @@ export default function (pi) {
               message.stopReason = "toolUse";
               return [{ type: "toolCall", id: "call-" + parentCalls, name, arguments: args }];
             };
-            message.content = step(last, say, call, () => call("braid", ${JSON.stringify(scenario.graph)}));
+            const tools = () => getCurrentTools(context.messages).map(tool => tool.name);
+            message.content = step(last, say, call, () => call("braid", ${JSON.stringify(scenario.graph)}), tools);
           }
           stream.push({ type: "start", partial: message });
           stream.push({ type: "done", reason: message.stopReason, message });
@@ -201,6 +237,39 @@ test("--braid-ci-timeout cancels outstanding jobs, lets the parent report, and e
   assert.equal(code, 1, stderr);
   assert.match(stdout, /TIMED OUT/);
   assert.match(stderr, /Braid: --braid-ci-timeout expired; cancelled outstanding Braid jobs/);
+});
+
+test("braid_finish with failure exits 1 and reports the summary in JSON output", { timeout: 15_000 }, async () => {
+  const { code, stdout, stderr } = await runPi("finishFailure", "json");
+  assert.equal(code, 1, stderr);
+  assert.match(stderr, /Braid: run reported failure: Review found 2 blocking issues\./);
+  const events = stdout.trim().split("\n").map(line => JSON.parse(line));
+  const finish = events.filter(event => event.type === "entry_appended" && event.entry.customType === "braid-finish");
+  assert.deepEqual(finish.map(event => event.entry.data), [
+    { status: "failure", summary: "Review found 2 blocking issues.", forcedFailures: [] },
+  ]);
+  assert.ok(events.some(event => event.type === "tool_execution_end" && event.toolName === "braid_finish" &&
+    event.result.details.status === "failure"));
+});
+
+test("braid_finish with success keeps the run open for outstanding jobs and exits 0", { timeout: 15_000 }, async () => {
+  const { code, stdout, stderr } = await runPi("finishSuccess", "text");
+  assert.equal(code, 0, stderr);
+  assert.equal(stdout, "REPORTED SUCCESS\n");
+  assert.doesNotMatch(stderr, /Braid:/);
+});
+
+test("braid_finish success does not mask a --braid-ci-timeout cancellation", { timeout: 15_000 }, async () => {
+  const { code, stdout, stderr } = await runPi("finishAfterTimeout", "json", ["--braid-ci-timeout", "300ms"]);
+  assert.equal(code, 1, stderr);
+  assert.match(stdout, /CLAIMED SUCCESS/);
+  assert.match(stderr, /Braid: --braid-ci-timeout expired; cancelled outstanding Braid jobs/);
+  const finish = stdout.trim().split("\n").map(line => JSON.parse(line))
+    .find(event => event.type === "entry_appended" && event.entry.customType === "braid-finish");
+  assert.deepEqual(finish?.entry.data, {
+    status: "success", summary: "Nothing to report.",
+    forcedFailures: ["--braid-ci-timeout expired; cancelled outstanding Braid jobs"],
+  });
 });
 
 test("--braid-ci-timeout accepts milliseconds and s/m/h suffixes", () => {

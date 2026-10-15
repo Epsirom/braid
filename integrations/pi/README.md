@@ -26,6 +26,8 @@ It registers:
   to list jobs in the current session.
 - `braid_update` / `braid_resume` — edit live definitions or release paused executions.
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
+- `braid_finish` — print/JSON runs only: record the run outcome with
+  `{ "status": "success" | "failure", "summary": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
 - `/braid:blocking [on|off]` — experimental: enable or disable blocking for new `braid` tool calls;
   omit the argument to show the current mode.
@@ -75,9 +77,28 @@ jobs, gives the parent a final turn on the cancellation reminder, and exits 1.
 prompt. It accepts milliseconds or an `s`, `m`, or `h` suffix (for example
 `--braid-ci-timeout 30m`). On expiry, outstanding jobs are cancelled, the parent
 gets a final turn on the cancellation reminders, and the run exits 1. Either
-forced cancellation prints a `Braid:` line on stderr. Otherwise the exit status
-is Pi's own: a failed graph does not by itself fail the run, so inspect job
-status in the parent's response for CI pass/fail decisions.
+forced cancellation prints a `Braid:` line on stderr.
+
+A failed graph does not by itself fail the run. Instead, the parent is told to
+call `braid_finish` with `status` `success` or `failure` and a short `summary`
+once the task is done. The tool only records the outcome; the run still ends
+when the parent ends its turn with no Braid job outstanding, and a later call
+replaces the earlier outcome. A final `failure` exits 1 and prints
+`Braid: run reported failure: <summary>` on stderr. `success` never overrides a
+non-zero exit from a forced cancellation or from Pi itself. If the parent never
+calls it, the exit status is Pi's own apart from forced cancellations.
+
+In `--mode json`, the final outcome is also written as a session entry, after the
+`tool_execution_end` event of the call itself:
+
+```json
+{"type":"entry_appended","entry":{"type":"custom","customType":"braid-finish","data":{"status":"failure","summary":"Review found 2 blocking issues.","forcedFailures":[]},...}}
+```
+
+`forcedFailures` lists any forced cancellations, which fail the run whatever the
+reported status. The entry is not part of model context, and text mode still
+prints only the parent's final response. `braid_finish` is not offered in
+interactive or RPC sessions.
 
 Pi SDK sessions default to print mode too, so `session.prompt()` returns only
 after outstanding Braid jobs drain. Hosts that stay running and want reminders

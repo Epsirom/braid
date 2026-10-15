@@ -1,8 +1,10 @@
-import type {
-  AgentBeforeSettleEvent,
-  BoundaryResult,
-  ExtensionAPI,
-  ExtensionContext,
+import { StringEnum, Type } from "@earendil-works/pi-ai";
+import {
+  defineTool,
+  type AgentBeforeSettleEvent,
+  type BoundaryResult,
+  type ExtensionAPI,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { BraidJobs, OutstandingJob } from "./jobs.js";
 
@@ -12,6 +14,12 @@ export const isSingleShot = (ctx: Pick<ExtensionContext, "mode">) => ctx.mode ==
 export const BRAID_DRAIN_GUIDANCE =
   "This is a single-shot run. It stays open until every Braid job finishes and its reminder is delivered, so submit, end your turn, and continue from the reminder as usual. " +
   "Paused executions are not resumed automatically: resume or cancel them before ending your turn. If only paused executions remain when you end a turn, you get one warning; ending the next turn without resuming them cancels their jobs and the run exits with a failure status.";
+
+export const BRAID_FINISH_GUIDANCE =
+  "When the task is done and no Braid job is outstanding, call braid_finish once with status success or failure and a short summary of the outcome, then end your turn with your final response. " +
+  "A failure status makes the run exit 1. braid_finish only records the outcome: the run still ends when your turn ends and every Braid job has finished. Call it again to replace the outcome if more work follows.";
+
+export type BraidFinishOutcome = { status: "success" | "failure"; summary: string };
 
 /** The run's wall-clock budget is checked by a timer, so the drain also wakes periodically. */
 const RECHECK_MS = 1_000;
@@ -46,6 +54,8 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
   let timedOut = false;
   let warnedStall: string | undefined;
   const failures = new Set<string>();
+  let outcome: BraidFinishOutcome | undefined;
+  let reported: BraidFinishOutcome | undefined;
 
   const fail = (reason: string): void => {
     if (failures.has(reason)) return;
@@ -73,6 +83,60 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
     const unsubscribe = jobs.subscribe(done);
   });
 
+  const finishParameters = Type.Object({
+    status: StringEnum(["success", "failure"] as const, { description: "Whether the run achieved its task. failure makes the process exit 1." }),
+    summary: Type.String({ minLength: 1, description: "Short summary of the outcome for CI logs and JSON output." }),
+  }, { additionalProperties: false });
+  pi.registerTool(defineTool<typeof finishParameters, BraidFinishOutcome>({
+    name: "braid_finish",
+    label: "Finish Braid run",
+    description:
+      "Single-shot (print/JSON) runs only: record the run outcome for CI. status failure makes the process exit 1. " +
+      "It does not end the run; call it once the task is done and no Braid job is outstanding, then end your turn. A later call replaces the outcome.",
+    parameters: finishParameters,
+    // Activated in single-shot sessions only, so interactive runs never see it.
+    defaultActive: false,
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      if (!isSingleShot(ctx)) throw new Error("braid_finish is only available in print and JSON runs");
+      outcome = { status: params.status, summary: params.summary };
+      const outstanding = jobs.outstanding().length;
+      return {
+        content: [{
+          type: "text",
+          text: `Recorded ${params.status}.` + (outstanding
+            ? ` ${outstanding} Braid job(s) are still outstanding; the run stays open until they finish, so continue from their reminders and call braid_finish again if the outcome changes.`
+            : " End your turn with your final response."),
+        }],
+        details: outcome,
+      };
+    },
+  }));
+
+  /** Applies the reported outcome once the run is about to settle with nothing outstanding. */
+  const settle = (event: AgentBeforeSettleEvent): BoundaryResult | undefined => {
+    if (!outcome || outcome === reported) return;
+    reported = outcome;
+    // Never reset the exit code: success must not mask a forced cancellation or a Pi error.
+    if (outcome.status === "failure") {
+      process.exitCode = 1;
+      console.error(`Braid: run reported failure: ${outcome.summary}`);
+    }
+    // A custom entry is not model context and leaves the final assistant message last,
+    // so text output is unchanged; JSON mode streams it as an entry_appended event.
+    return {
+      entries: [...event.entries, {
+        type: "custom",
+        customType: "braid-finish",
+        data: { ...outcome, forcedFailures: [...failures] },
+      }],
+    };
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    if (isSingleShot(ctx) && !pi.getActiveTools().includes("braid_finish"))
+      pi.setActiveTools([...pi.getActiveTools(), "braid_finish"]);
+  });
+
   pi.on("before_agent_start", (_event, ctx) => {
     const budget = pi.getFlag("braid-ci-timeout");
     if (timer || timedOut || !isSingleShot(ctx) || typeof budget !== "string") return;
@@ -88,7 +152,7 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
       if (hasPendingReminders()) return;
       if (timedOut) cancelOutstanding("--braid-ci-timeout expired; cancelled outstanding Braid jobs");
       const outstanding = jobs.outstanding();
-      if (!outstanding.length) return;
+      if (!outstanding.length) return settle(event);
       if (outstanding.every(job => job.stalled)) {
         const key = JSON.stringify(outstanding.map(job => [job.jobId, job.revision, job.pausedExecutionIds]));
         if (key !== warnedStall) {

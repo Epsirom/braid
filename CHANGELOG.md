@@ -10,6 +10,11 @@
   executions remaining when the parent ends its turn get one warning, then
   cancellation and exit status 1. `--braid-ci-timeout <duration>` bounds the run
   the same way ([#80](https://github.com/Epsirom/braid/issues/80)).
+- In Pi print and JSON modes, the parent can call `braid_finish` with
+  `status` (`success` or `failure`) and a `summary` to report the run outcome.
+  A final `failure` exits 1; `success` never masks a forced cancellation. JSON
+  mode records the outcome as a `braid-finish` custom entry
+  ([#80](https://github.com/Epsirom/braid/issues/80)).
 
 ### Behavior changes
 
