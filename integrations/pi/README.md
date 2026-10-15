@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/%40chrok%2Fpi-braid?label=%40chrok%2Fpi-braid)](https://www.npmjs.com/package/@chrok/pi-braid)
 
-This optional Pi extension runs Braid agent graphs as background jobs with
+This optional Pi extension runs Braid agent graphs as background jobs by default, with
 bounded loops, live updates, pause/resume, and a live flow panel.
 
 **0.3 API:** The npm badge shows the published version; see
@@ -25,6 +25,8 @@ It registers:
 - `braid_update` / `braid_resume` — edit live definitions or release paused executions.
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
+- `/braid:blocking [on|off]` — experimental: enable or disable blocking for new `braid` tool calls;
+  omit the argument to show the current mode.
 - `/braid:review [target or focus]` — run a bounded parallel review/fix loop.
 - `/braid:clear` — clear the progress widget above the editor; run it again while
   the widget is empty to restore what was cleared.
@@ -49,6 +51,38 @@ system prompt, and the submission receipt tell the agent to continue independent
 work, or end its turn if it needs the result, and not to sleep, use a timer, or
 poll in a loop to wait for the job.
 Stopping the foreground response does not stop background jobs.
+
+> **Experimental:** blocking mode is a stopgap for single-shot runs. Its flag,
+> command, and behavior may change or be replaced by an async-preserving CI mode
+> that keeps reminders, `pauseAfter`, and live updates
+> ([#80](https://github.com/Epsirom/braid/issues/80)).
+
+For CI or other single-shot runs, enable blocking manually when starting Pi:
+
+```sh
+pi --braid-blocking -p "Use Braid to review the changes and summarize the results."
+```
+
+With `@chrok/pi-braid` installed, `--braid-blocking` makes every `braid` tool call
+wait for the entire graph and workspace cleanup, then return final status, outputs,
+and usage directly. The parent can summarize those results before `pi -p` exits.
+It also works with `--mode json` for structured tool results. The CLI flag sets the
+initial mode; within a session, use `/braid:blocking on` to enable it,
+`/braid:blocking off` to disable it, or `/braid:blocking` to check the current mode.
+Switching affects only new `braid` tool calls; running jobs keep their original
+mode. The session override is not persisted. These are user controls, not model
+tool parameters; the default remains background execution.
+For CI pass/fail decisions, inspect the returned job status: a failed graph does
+not by itself set Pi's process exit code.
+Blocking calls emit an initial progress update with the job handle while waiting.
+They suppress node/job completion reminders except for cancellation: stopping the
+foreground response cancels their work, waits for cleanup, and sends a reminder
+so the next turn can retrieve partial outputs and recovery checkpoints.
+Wait/result retrieval errors include the existing job handle and any terminal
+usage; retrieve that job with `braid_status` instead of submitting the graph again.
+`pauseAfter: true` is rejected before starting a blocking job because it requires
+a later resume call. The interactive
+`/braid:review` command continues to use its background review workflow.
 
 Jobs live in memory for the current Pi session. Quitting, reloading extensions,
 or switching/forking sessions aborts outstanding work and suppresses its
@@ -602,9 +636,11 @@ fails that node cleanly and does not invoke another provider.
 
 The Pi extension has no node or graph time limit by default. Use `braid_cancel`
 or press `c` in the flow panel to abort running nodes and mark queued nodes
-`cancelled`. Escape stops the foreground response or closes the panel without
-cancelling jobs. To set a node or graph timeout, supply milliseconds in the
-submission tool input under `options`; each omitted timeout remains unlimited:
+`cancelled`. In the default background mode, Escape stops the foreground response
+or closes the panel without cancelling jobs. In blocking mode, stopping the
+foreground response also cancels its Braid job. To set a node or graph timeout,
+supply milliseconds in the submission tool input under `options`; each omitted
+timeout remains unlimited:
 
 ```json
 {

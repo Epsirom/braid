@@ -47,8 +47,8 @@ const toolBudget = (unit: string) =>
 const commonNodeParameters = {
   id: text("Unique node definition ID; edges refer to this exact ID. This is not an executionId."),
   model: Type.Optional(text("Model override as provider/model-id; omit to use the parent model.")),
-  notifyOnCompletion: Type.Optional(Type.Boolean({ description: "Send an execution completion reminder; default false. Does not pause scheduling." })),
-  pauseAfter: Type.Optional(Type.Boolean({ description: "Hold this execution's outgoing dependencies until braid_resume or an atomic braid_update with resume. Sends a pause reminder." })),
+  notifyOnCompletion: Type.Optional(Type.Boolean({ description: "In background mode, send an execution completion reminder; default false. Does not pause scheduling." })),
+  pauseAfter: Type.Optional(Type.Boolean({ description: "Background mode only: hold this execution's outgoing dependencies until braid_resume or an atomic braid_update with resume. Sends a pause reminder." })),
   requireSuccess: Type.Optional(Type.Boolean({ description: "If true, failure aborts the entire job and cancels running siblings. Default false: unconditional successors can recover." })),
 };
 const workspace = Type.Optional(StringEnum(["read-only", "worktree"], {
@@ -108,25 +108,29 @@ const BRAID_FILESYSTEM_GUIDANCE =
 
 /** Lifecycle guidance shared by the system prompt and tool descriptions. */
 export const BRAID_ASYNC_GUIDANCE =
-  "Braid is asynchronous: braid returns a jobId immediately and the job keeps running independently of the foreground response; ending your turn does not cancel it. " +
+  "By default, Braid is asynchronous: braid returns a jobId immediately and the job keeps running independently of the foreground response; ending your turn does not cancel it. " +
   "Completion, failure, or cancellation sends a reminder: an idle agent is resumed automatically, and a running agent receives it at the next model step. " +
   "After submitting, continue useful independent work. If nothing else can proceed until the result arrives, end your turn and let the reminder resume the task. " +
   "Do not call sleep, run a shell sleep, use a timer, or enter a sleep/poll loop solely to wait for a Braid job; delays required by the user's actual task remain allowed. " +
-  "On the reminder, retrieve results with braid_status and continue the original task. Between reminders, use braid_status only for deliberate progress checks or diagnosis.";
+  "On the reminder, retrieve terminal outputs with braid_status before relying on them and continue the original task. Between reminders, use braid_status only for deliberate progress checks or diagnosis. " +
+  "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Use braid_status({jobId, executionId}) to retrieve the exact execution; nodeId selects the latest instance. Use pauseAfter=true to hold outgoing scheduling. Definitions can always be changed with braid_update using expectedRevision; existing executions retain their captured inputs. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes.";
 
 /** Short reminder repeated in every submission receipt. */
 export const BRAID_WAIT_REMINDER =
   "Braid runs asynchronously and notifies you when the job finishes. Continue independent work, or end your turn if you need the result before proceeding; the completion reminder will resume you. " +
   "Do not sleep or poll in a loop to wait for this job. Retrieve its results with braid_status after the reminder.";
 
+const BRAID_BLOCKING_GUIDANCE =
+  "In blocking mode (enabled by --braid-blocking or /braid:blocking on), braid waits for the entire graph and workspace cleanup, then returns final status, outputs, and usage directly. " +
+  "Foreground cancellation cancels the submitted job and waits for cleanup. Completion reminders are suppressed unless the job is cancelled; cancellation reminders preserve its handle and access to partial results. " +
+  "Do not set pauseAfter=true in blocking mode: it requires a later resume call and is rejected. Use braid_status for focused reads, diagnosis, or retrieving an existing job after cancellation or a wait/result error.";
+
 const BRAID_USAGE_GUIDANCE = [
   "Braid is a proactive execution primitive, not only a user-requested command.",
   "Selection rule: for a code review, bug investigation, design comparison, test-planning request, or change spanning multiple files, call braid FIRST when two or more concerns can be handled independently. Nodes can analyze the project and implement changes in isolated Git worktrees. Do this without waiting for the user to say Braid; do not read everything in the parent and then decide whether to delegate.",
   BRAID_FILESYSTEM_GUIDANCE,
   "For repeated instructions, define promptTemplates once and use prompt={template: name, variables: {name: value}} on nodes. Values are strings inserted literally into {{name}} placeholders; plain-string prompts remain supported.",
-  "When Braid fits, submit a graph: use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. Use braid_status with the jobId to retrieve terminal outputs before relying on them.",
-  BRAID_ASYNC_GUIDANCE,
-  "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Use braid_status({jobId, executionId}) to retrieve the exact execution; nodeId selects the latest instance. Use pauseAfter=true to hold outgoing scheduling. Definitions can always be changed with braid_update using expectedRevision; existing executions retain their captured inputs. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes.",
+  "When Braid fits, submit a graph: use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. Read terminal outputs before relying on them.",
   "Make the delegation choice once per user request. Reminders and definition errors are not new tasks. If the same definition problem recurs, stop resubmitting and report the concrete mismatch; do not launch repeated probe/replacement jobs. In braid_update, add new nodes together with their dependencies and loops: a node added without incoming edges can start immediately, even while another execution is paused.",
   "Do not use braid for a simple one-step answer, a trivial direct edit, a single shell command, or when decomposition adds no value. Writable nodes can implement and test their work. The parent reviews results and performs any remaining validation after Braid completes.",
 ].join("\n");
@@ -155,14 +159,14 @@ async function boundedText(text: string, name: string): Promise<{ text: string; 
   return { text: `${preview.content}\n[Truncated. Full text: ${path}]`, path };
 }
 
-export function createBraidTools(jobs: BraidJobs) {
-  const braidTool = defineTool<typeof braidParameters, JobSnapshot | undefined>(
+export function createBraidTools(jobs: BraidJobs, blocking: () => boolean = () => false) {
+  const braidTool = defineTool<typeof braidParameters, BraidStatusDetails | undefined>(
     {
       name: "braid",
       label: "Braid",
       description:
         "Use this tool FIRST for nontrivial engineering work: code reviews, bug investigations, design comparisons, test planning, and changes spanning multiple files. " +
-        "It starts a background job and immediately returns jobId for a mutable graph of isolated LLM invocations with parallel branches and joins; the user does not need to mention Braid. " +
+        "Run a mutable graph of isolated LLM invocations with parallel branches and joins; the user does not need to mention Braid. " +
         "Use execute, decision, merge, or integrate nodes. Execute/decision nodes require prompt. Only decision nodes declare choices and call decide; matching choice edges activate together. Merge/integrate nodes accept multiple predecessors and an optional prompt, with no workspace or choices field. " +
         "Structured loops declare id, entry, maxIterations, and one back edge from a decision to entry with both choice and feedback=loopId. The decision also needs an exit choice. External edges enter only at entry and leave only through that decision; the body must be acyclic and loops cannot overlap or nest. Each round uses new executions and worktrees. " +
         'Example retry loop: nodes work (execute with prompt) and check (decision with prompt and choices ["retry","done"]); edges [{"from":"work","to":"check"},{"from":"check","to":"work","choice":"retry","feedback":"retryLoop"}]; loops [{"id":"retryLoop","entry":"work","maxIterations":3}]. An optional done edge leaves check to a downstream node. ' +
@@ -173,8 +177,7 @@ export function createBraidTools(jobs: BraidJobs) {
         BRAID_FILESYSTEM_GUIDANCE + " " +
         "Do not use it for a simple one-step answer or trivial direct edit. " +
         "Use braid_cancel(jobId) to stop it. Humans can open /braid for the live flow panel. " +
-        BRAID_ASYNC_GUIDANCE + " " +
-        "Set notifyOnCompletion=true on selected nodes for intermediate success/failure reminders; retrieve their output/error with braid_status({jobId, nodeId}). Notifications do not pause scheduling; use pauseAfter for a hold, and braid_update to edit definitions. " +
+        "Follow the current session's Braid execution policy in the system prompt for waiting, result retrieval, and pause/notification controls. " +
         "Read result.status: failed graphs can still return successful terminal outputs.",
       promptSnippet:
         "Use FIRST for nontrivial code review/debug/design/implementation work; set workspace=read-only for analysis/synthesis, use worktrees for edits, merge to combine snapshots, and integrate to apply changes",
@@ -202,19 +205,23 @@ export function createBraidTools(jobs: BraidJobs) {
             pending ? fallback || "Braid submission pending…" : `✗ ${fallback || "Braid submission failed without error details"}`,
           ), 0, 0);
         }
+        if (job.status !== "running")
+          return statusTool.renderResult!(result, options, theme, { ...ctx, args: { jobId: job.jobId } });
         return new Text(
           theme.fg(
-            job.status === "failed" ? "error" : "accent",
-            `Braid background job ${job.handle ?? job.jobId} · ${job.status} · /braid to view${job.error ? `\n${job.error}` : ""}`,
+            "accent",
+            `Braid ${options.isPartial ? "job" : "background job"} ${job.handle ?? job.jobId} · ${job.status} · /braid to view${job.error ? `\n${job.error}` : ""}`,
           ),
           0,
           0,
         );
       },
-      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      async execute(_toolCallId, params, signal, onUpdate, ctx) {
         signal?.throwIfAborted();
+        const waitForCompletion = blocking();
+        let job: JobSnapshot;
         try {
-          const job = jobs.start(
+          job = jobs.start(
             {
               goal: params.goal,
               nodes: params.nodes,
@@ -224,21 +231,42 @@ export function createBraidTools(jobs: BraidJobs) {
             } as BraidInput,
             params.options ?? {},
             ctx,
+            waitForCompletion,
           );
-          return {
-            content: [
-              {
-                type: "text",
-                text: formatReceipt(job,
-                  `${BRAID_WAIT_REMINDER} Humans can follow it live in /braid.`),
-              },
-            ],
-            details: job,
-          };
         } catch (error) {
           throw new Error(
             `Braid submission failed: ${error instanceof Error ? error.message : String(error)}`,
           );
+        }
+        if (!waitForCompletion) return {
+          content: [{ type: "text", text: formatReceipt(job,
+            `${BRAID_WAIT_REMINDER} Humans can follow it live in /braid.`) }],
+          details: job,
+        };
+        const cancel = () => { jobs.cancel(job.jobId); };
+        signal?.addEventListener("abort", cancel, { once: true });
+        try {
+          try {
+            onUpdate?.({
+              content: [{ type: "text", text: formatReceipt(job,
+                "Waiting for the graph and workspace cleanup. Humans can follow it live in /braid.") }],
+              details: job,
+            });
+          } catch { /* Progress observers must not stop the foreground wait. */ }
+          await jobs.wait(job.jobId);
+          return await statusTool.execute(_toolCallId, { jobId: job.jobId }, signal, undefined, ctx);
+        } catch (error) {
+          const current = jobs.get(job.jobId)!;
+          const usage = current.status === "running" || signal?.aborted ? undefined : jobs.claimUsage(job.jobId);
+          return {
+            content: [{ type: "text", text:
+              `Braid job ${job.handle} was started and is ${current.status}. Could not wait for or retrieve its results: ${error instanceof Error ? error.message : String(error)}. Do not resubmit this graph: it may already have changed the checkout. Retrieve the existing job with braid_status(${JSON.stringify({ jobId: job.handle })}).` }],
+            details: current,
+            isError: true,
+            ...(usage ? { usage } : {}),
+          };
+        } finally {
+          signal?.removeEventListener("abort", cancel);
         }
       },
     },
@@ -260,7 +288,7 @@ export function createBraidTools(jobs: BraidJobs) {
     name: "braid_status",
     label: "Braid status",
     description:
-      "Retrieve a background Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Add executionId for an exact execution, or nodeId for the latest instance, including intermediate results while the job runs. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and recent history. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the current graph revision and paused execution IDs for live control. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. Usage is Pi's provider accounting, including rounds from failed nodes. Prefer the short handle from submission/reminders. Omit all IDs to list jobs in this session. Completion reminders arrive automatically: read results after the reminder, or deliberately for a progress check or diagnosis; do not sleep, use a timer, or poll in a loop to wait for a job.",
+      "Retrieve a Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Add executionId for an exact execution, or nodeId for the latest instance, including intermediate results while the job runs. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and recent history. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the current graph revision and paused execution IDs for live control. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. Usage is Pi's provider accounting, including rounds from failed nodes. Prefer the short handle from submission/reminders. Omit all IDs to list jobs in this session. Follow the current session's Braid execution policy for result retrieval; do not sleep, use a timer, or poll in a loop to wait for a job.",
     parameters: statusParameters,
     renderResult(result, options, theme, ctx) {
       const job = result.details;
@@ -300,7 +328,7 @@ export function createBraidTools(jobs: BraidJobs) {
         fallback,
       );
     },
-    async execute(_id, params) {
+    async execute(_id, params, signal) {
       if ((params.nodeId !== undefined || params.executionId !== undefined) && !params.jobId)
         throw new Error("nodeId/executionId requires jobId");
       if (params.activityBefore !== undefined && params.nodeId === undefined && params.executionId === undefined)
@@ -327,7 +355,7 @@ export function createBraidTools(jobs: BraidJobs) {
       const details: BraidStatusDetails = result.path ? { ...job, fullOutputPath: result.path } : job;
       // Saving a running snapshot can race job completion; claim usage only
       // when this response actually contains a terminal snapshot.
-      const usage = job.status === "running" ? undefined : jobs.claimUsage(job.jobId);
+      const usage = job.status === "running" || signal?.aborted ? undefined : jobs.claimUsage(job.jobId);
       return {
         content: [{ type: "text", text: result.text }],
         details,
@@ -405,6 +433,22 @@ export function createBraidTools(jobs: BraidJobs) {
 }
 
 export default function braidExtension(pi: ExtensionAPI) {
+  pi.registerFlag("braid-blocking", {
+    description: "Experimental: wait for braid tool calls to finish in the foreground (for CI/print mode)",
+    type: "boolean",
+    default: false,
+  });
+  let sessionBlocking: boolean | undefined;
+  const blocking = () => sessionBlocking ?? (pi.getFlag("braid-blocking") === true);
+  pi.registerCommand("braid:blocking", {
+    description: "Experimental: set blocking mode for new braid tool calls: /braid:blocking [on|off]; omit to show the current mode",
+    handler: async (args, ctx) => {
+      const setting = args.trim().toLowerCase();
+      if (setting === "on" || setting === "off") sessionBlocking = setting === "on";
+      else if (setting) throw new Error("Usage: /braid:blocking [on|off]");
+      ctx.ui.notify(`Braid blocking mode: ${blocking() ? "on" : "off"}. Applies to new braid tool calls.`, "info");
+    },
+  });
   const pending = new Map<string, Parameters<ExtensionAPI["sendMessage"]>[0]>();
   const remind = (message: Parameters<ExtensionAPI["sendMessage"]>[0]): void => {
     try {
@@ -454,7 +498,7 @@ export default function braidExtension(pi: ExtensionAPI) {
       for (const message of pending.values()) remind(message);
     }
   });
-  const { braidTool, statusTool, cancelTool, updateTool, resumeTool } = createBraidTools(jobs);
+  const { braidTool, statusTool, cancelTool, updateTool, resumeTool } = createBraidTools(jobs, blocking);
   registerBraidCommand(pi, jobs);
   registerReviewCommand(pi, jobs);
   const disposeWidget = registerBraidWidget(pi, jobs);
@@ -469,6 +513,6 @@ export default function braidExtension(pi: ExtensionAPI) {
     disposeWidget();
   });
   pi.on("before_agent_start", (event) => ({
-    systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
+    systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${blocking() ? "Blocking mode is enabled for this session. " + BRAID_BLOCKING_GUIDANCE : BRAID_ASYNC_GUIDANCE}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
   }));
 }
