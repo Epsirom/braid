@@ -67,8 +67,9 @@ export default function (pi) {
     ...(viaCommand ? ["/braid:blocking on"] : []), "Run Braid and summarize its result.",
   ], { cwd, env: { ...process.env, PI_CODING_AGENT_DIR: join(cwd, "agent") }, timeout: 12_000, maxBuffer: 1_000_000 });
   invocation.child.stdin?.end();
-  const { stdout } = await invocation;
+  const { stdout, stderr } = await invocation;
   assert.match(stdout, /CLI observed completed Braid result/);
+  assert.equal(stderr.match(/Braid: Blocking mode \(--braid-blocking, \/braid:blocking\) is deprecated and will be removed in 0\.5\.0/g)?.length, 1, stderr);
   if (mode === "json") {
     const events = stdout.trim().split("\n").map(line => JSON.parse(line));
     const progress = events.findIndex(event => event.type === "tool_execution_update" && event.toolName === "braid");
