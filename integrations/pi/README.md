@@ -18,7 +18,8 @@ For the previous release, use the
 It registers:
 
 - `braid` — submit a graph with optional bounded loops; receive a `jobId`
-  immediately in background mode, or final results in experimental blocking mode.
+  immediately in background mode (print/JSON runs wait for it before exiting), or
+  final results in experimental blocking mode.
 - `braid_status` — retrieve progress and results with `{ "jobId": "..." }`, or
   add `"executionId": "..."` for an exact invocation's full output/error.
   `"nodeId": "..."` selects that definition's latest invocation. Omit all IDs
@@ -53,12 +54,42 @@ work, or end its turn if it needs the result, and not to sleep, use a timer, or
 poll in a loop to wait for the job.
 Stopping the foreground response does not stop background jobs.
 
-> **Experimental:** blocking mode is a stopgap for single-shot runs. Its flag,
-> command, and behavior may change or be replaced by an async-preserving CI mode
-> that keeps reminders, `pauseAfter`, and live updates
+### Single-shot and CI runs
+
+In print mode (`pi -p`) and `--mode json`, background execution works unchanged:
+the run stays open until every Braid job reaches a terminal status and its
+reminder has been delivered, then exits after the parent's final response.
+
+```sh
+pi -p "Use Braid to review the changes and summarize the results."
+```
+
+The parent submits, ends its turn, and is resumed by the reminder as in
+interactive Pi, so `pauseAfter`, `notifyOnCompletion`, `braid_update`, and
+`braid_resume` keep working. Paused executions are never resumed automatically.
+If the parent ends its turn while only paused executions remain, it receives one
+warning naming them; ending the next turn without resuming them cancels their
+jobs, gives the parent a final turn on the cancellation reminder, and exits 1.
+
+`--braid-ci-timeout <duration>` bounds the whole run, starting at its first
+prompt. It accepts milliseconds or an `s`, `m`, or `h` suffix (for example
+`--braid-ci-timeout 30m`). On expiry, outstanding jobs are cancelled, the parent
+gets a final turn on the cancellation reminders, and the run exits 1. Either
+forced cancellation prints a `Braid:` line on stderr. Otherwise the exit status
+is Pi's own: a failed graph does not by itself fail the run, so inspect job
+status in the parent's response for CI pass/fail decisions.
+
+Pi SDK sessions default to print mode too, so `session.prompt()` returns only
+after outstanding Braid jobs drain. Hosts that stay running and want reminders
+to start new runs after settling should bind with another mode, for example
+`session.bindExtensions({ mode: "rpc" })`.
+
+### Blocking mode
+
+> **Experimental:** blocking mode predates the drain above and may be deprecated
 > ([#80](https://github.com/Epsirom/braid/issues/80)).
 
-For CI or other single-shot runs, enable blocking manually when starting Pi:
+To make each `braid` call wait in the foreground instead, enable blocking when starting Pi:
 
 ```sh
 pi --braid-blocking -p "Use Braid to review the changes and summarize the results."

@@ -79,6 +79,14 @@ export interface NodeCompletion {
   errorCode?: ExecutionError["code"];
 }
 
+export interface OutstandingJob {
+  jobId: string;
+  handle: string;
+  stalled: boolean;
+  revision?: number;
+  pausedExecutionIds: string[];
+}
+
 /** Jobs belong to one extension/session lifetime, independently of foreground turns. */
 export class BraidJobs {
   private jobs = new Map<string, Job>();
@@ -404,6 +412,24 @@ export class BraidJobs {
         createdAt,
       }))
       .reverse();
+  }
+
+  /**
+   * Jobs that have not reached a terminal status. A job is stalled when only
+   * paused executions remain, so it cannot progress without resume or cancel.
+   */
+  outstanding(): OutstandingJob[] {
+    return [...this.jobs.values()].filter(job => job.status === "running").map(job => {
+      // Skip the snapshot copy while executions are visibly running.
+      const state = job.runningExecutions.size ? undefined : job.run?.snapshot();
+      return {
+        jobId: job.jobId,
+        handle: job.handle,
+        stalled: state?.status === "waiting",
+        ...(state ? { revision: state.revision } : {}),
+        pausedExecutionIds: state?.pausedExecutionIds ?? [],
+      };
+    });
   }
 
   /** Editor progress without copying outputs, transcripts, or execution snapshots. */
