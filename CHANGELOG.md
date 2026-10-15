@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.3.6 — 2026-10-15
+
+### Features
+
 - Pi supports experimental opt-in blocking execution with `--braid-blocking` and the session
   command `/braid:blocking [on|off]`. Blocking tool calls wait for the graph and
   workspace cleanup before returning final results, emit an initial progress
@@ -10,7 +14,20 @@
   Wait/result retrieval failures preserve the existing job handle and usage so
   the graph does not need to be resubmitted. Background execution remains the
   default; session switches affect only new tool calls. Blocking mode may change
-  or be replaced by an async-preserving CI mode ([#80](https://github.com/Epsirom/braid/issues/80)).
+  or be replaced by an async-preserving CI mode ([#80](https://github.com/Epsirom/braid/issues/80))
+  ([#79](https://github.com/Epsirom/braid/pull/79)) — @powerfooI.
+
+No breaking API changes or migration from 0.3.5 are required. Blocking mode
+rejects `pauseAfter: true`, which requires a later resume call, and a failed
+graph does not by itself set Pi's process exit code; inspect the returned job
+status for CI pass/fail decisions. Pi 1.2.0 and DSH 0.2.0-rc.2 remain the tested
+host versions; integrations require Node.js 22.19+.
+
+### New Contributors
+
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.3.5...v0.3.6).
 
 ## 0.3.5 — 2026-10-14
 
