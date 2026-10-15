@@ -6,6 +6,7 @@ import {
   defineTool,
   truncateHead,
   type ExtensionAPI,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { BraidInput, ExecutionActivity, GraphUpdate, NodeResult } from "@chrok/braid";
 import { Text } from "@earendil-works/pi-tui";
@@ -115,6 +116,10 @@ export const BRAID_ASYNC_GUIDANCE =
   "Do not call sleep, run a shell sleep, use a timer, or enter a sleep/poll loop solely to wait for a Braid job; delays required by the user's actual task remain allowed. " +
   "On the reminder, retrieve terminal outputs with braid_status before relying on them and continue the original task. Between reminders, use braid_status only for deliberate progress checks or diagnosis. " +
   "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Use braid_status({jobId, executionId}) to retrieve the exact execution; nodeId selects the latest instance. Use pauseAfter=true to hold outgoing scheduling. Definitions can always be changed with braid_update using expectedRevision; existing executions retain their captured inputs. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes.";
+
+export const BRAID_BLOCKING_DEPRECATION =
+  "Blocking mode (--braid-blocking, /braid:blocking) is deprecated and will be removed in 0.5.0. " +
+  "Print and JSON runs (pi -p) now wait for background Braid jobs; call braid_finish to report the outcome.";
 
 /** Short reminder repeated in every submission receipt. */
 export const BRAID_WAIT_REMINDER =
@@ -435,18 +440,27 @@ export function createBraidTools(jobs: BraidJobs, blocking: () => boolean = () =
 
 export default function braidExtension(pi: ExtensionAPI) {
   pi.registerFlag("braid-blocking", {
-    description: "Experimental: wait for braid tool calls to finish in the foreground (for CI/print mode)",
+    description: "Deprecated, removed in 0.5.0: wait for braid tool calls to finish in the foreground. pi -p now waits for background jobs",
     type: "boolean",
     default: false,
   });
   let sessionBlocking: boolean | undefined;
   const blocking = () => sessionBlocking ?? (pi.getFlag("braid-blocking") === true);
+  let warnedBlocking = false;
+  const warnBlocking = (ctx: ExtensionContext): void => {
+    if (warnedBlocking) return;
+    warnedBlocking = true;
+    // Print and JSON runs have no UI; stderr keeps JSON stdout parseable.
+    if (ctx.hasUI) ctx.ui.notify(BRAID_BLOCKING_DEPRECATION, "warning");
+    else console.error(`Braid: ${BRAID_BLOCKING_DEPRECATION}`);
+  };
   pi.registerCommand("braid:blocking", {
-    description: "Experimental: set blocking mode for new braid tool calls: /braid:blocking [on|off]; omit to show the current mode",
+    description: "Deprecated, removed in 0.5.0: set blocking mode for new braid tool calls: /braid:blocking [on|off]; omit to show the current mode",
     handler: async (args, ctx) => {
       const setting = args.trim().toLowerCase();
       if (setting === "on" || setting === "off") sessionBlocking = setting === "on";
       else if (setting) throw new Error("Usage: /braid:blocking [on|off]");
+      if (setting === "on") warnBlocking(ctx);
       ctx.ui.notify(`Braid blocking mode: ${blocking() ? "on" : "off"}. Applies to new braid tool calls.`, "info");
     },
   });
@@ -514,7 +528,10 @@ export default function braidExtension(pi: ExtensionAPI) {
     jobs.dispose();
     disposeWidget();
   });
-  pi.on("before_agent_start", (event, ctx) => ({
-    systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${blocking() ? "Blocking mode is enabled for this session. " + BRAID_BLOCKING_GUIDANCE : BRAID_ASYNC_GUIDANCE}${isSingleShot(ctx) ? `\n${BRAID_DRAIN_GUIDANCE}\n${BRAID_FINISH_GUIDANCE}` : ""}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
-  }));
+  pi.on("before_agent_start", (event, ctx) => {
+    if (pi.getFlag("braid-blocking") === true) warnBlocking(ctx);
+    return {
+      systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${blocking() ? "Blocking mode is enabled for this session. " + BRAID_BLOCKING_GUIDANCE : BRAID_ASYNC_GUIDANCE}${isSingleShot(ctx) ? `\n${BRAID_DRAIN_GUIDANCE}\n${BRAID_FINISH_GUIDANCE}` : ""}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
+    };
+  });
 }

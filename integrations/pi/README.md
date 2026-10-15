@@ -19,7 +19,7 @@ It registers:
 
 - `braid` — submit a graph with optional bounded loops; receive a `jobId`
   immediately in background mode (print/JSON runs wait for it before exiting), or
-  final results in experimental blocking mode.
+  final results in deprecated blocking mode.
 - `braid_status` — retrieve progress and results with `{ "jobId": "..." }`, or
   add `"executionId": "..."` for an exact invocation's full output/error.
   `"nodeId": "..."` selects that definition's latest invocation. Omit all IDs
@@ -29,8 +29,8 @@ It registers:
 - `braid_finish` — print/JSON runs only: record the run outcome with
   `{ "status": "success" | "failure", "summary": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
-- `/braid:blocking [on|off]` — experimental: enable or disable blocking for new `braid` tool calls;
-  omit the argument to show the current mode.
+- `/braid:blocking [on|off]` — deprecated, removed in 0.5.0: enable or disable
+  blocking for new `braid` tool calls; omit the argument to show the current mode.
 - `/braid:review [target or focus]` — run a bounded parallel review/fix loop.
 - `/braid:clear` — clear the progress widget above the editor; run it again while
   the widget is empty to restore what was cleared.
@@ -105,12 +105,16 @@ after outstanding Braid jobs drain. Hosts that stay running and want reminders
 to start new runs after settling should bind with another mode, for example
 `session.bindExtensions({ mode: "rpc" })`.
 
-### Blocking mode
+### Blocking mode (deprecated)
 
-> **Experimental:** blocking mode predates the drain above and may be deprecated
-> ([#80](https://github.com/Epsirom/braid/issues/80)).
+> **Deprecated:** `--braid-blocking` and `/braid:blocking` will be removed in
+> 0.5.0. Print and JSON runs now wait for background jobs (see above), which keeps
+> `pauseAfter`, reminders, and live updates, and `braid_finish` sets the exit
+> status. To migrate, drop `--braid-blocking` (or `/braid:blocking on`) from the
+> command line ([#80](https://github.com/Epsirom/braid/issues/80)). Using either
+> prints a one-time warning: on stderr in print/JSON mode, or as a UI notice.
 
-To make each `braid` call wait in the foreground instead, enable blocking when starting Pi:
+Until then, to make each `braid` call wait in the foreground, enable blocking when starting Pi:
 
 ```sh
 pi --braid-blocking -p "Use Braid to review the changes and summarize the results."

@@ -16,6 +16,15 @@
   mode records the outcome as a `braid-finish` custom entry
   ([#80](https://github.com/Epsirom/braid/issues/80)).
 
+### Deprecations
+
+- Pi blocking mode (`--braid-blocking`, `/braid:blocking`) is deprecated and
+  will be removed in 0.5.0. Print and JSON runs now wait for background jobs
+  and keep `pauseAfter`, reminders, and live updates, and `braid_finish` sets
+  the exit status; drop the flag or command to migrate. Using either prints a
+  one-time warning, on stderr in print/JSON mode or as a UI notice
+  ([#80](https://github.com/Epsirom/braid/issues/80)).
+
 ### Behavior changes
 
 - Pi SDK sessions default to print mode, so `session.prompt()` now returns only
