@@ -7,7 +7,7 @@
 | DSH package | Node.js 22.19+, DeepSeek Harness 0.2.0-rc.2 is the pinned developer-preview host target; native Web panel |
 | CI | Core minimum Node 22.0; all three packages on Node 22.19 and 24 on Linux, macOS, Windows |
 | OpenAI-compatible runner | Chat Completions text and function-tool calls; decisions and merge/integrate nodes require tool calling |
-| Browsers / CommonJS | No standalone core browser build or CommonJS entry point in 0.3; the DSH `./client` export is loaded by DSH's Web host |
+| Browsers / CommonJS | No standalone core browser build or CommonJS entry point in 0.4; the DSH `./client` export is loaded by DSH's Web host |
 
 The CI matrix describes configured checks; see actual workflow results for each
 commit. Offline HTTP fixtures validate the adapter contract. They do not prove
@@ -107,6 +107,31 @@ delivers completion/pause reminders after the current assistant response and
 tool batch, before the next model step, rather than waiting for the entire
 foreground task to finish. Fetch current status before updating or resuming a
 paused execution because the reminder describes the state when it was queued.
+
+## Migrating from 0.3 to 0.4
+
+Version 0.4 changes how the Pi extension behaves in print and JSON modes:
+
+- Pi print mode (`pi -p`) and `--mode json` now stay open until every Braid job
+  reaches a terminal status and its reminder is delivered. No change is needed for
+  CLI use; runs that previously exited early now finish their graphs.
+- Pi SDK sessions created with `createAgentSession` default to extension mode
+  `"print"`, which the extension cannot tell apart from the CLI. In such sessions,
+  `session.prompt()` now returns only after outstanding Braid jobs drain. Hosts
+  that stay running and rely on reminders starting new runs after the agent
+  settles should bind with another mode, for example
+  `session.bindExtensions({ mode: "rpc" })`.
+- In print and JSON modes, ending a turn while only paused executions remain
+  produces one warning; ending the next turn without resuming them cancels those
+  jobs and sets exit status 1. Resume or cancel paused executions before the
+  parent finishes. `--braid-ci-timeout` and a final `braid_finish` failure also
+  exit 1.
+- Blocking mode (`--braid-blocking`, `/braid:blocking`) still works but is
+  deprecated and will be removed in 0.5.0. Drop it: print and JSON runs now wait
+  for background jobs without blocking each tool call.
+
+No graph field, result shape, or event schema migration is required, and DSH
+behavior is unchanged.
 
 ## Versioning
 

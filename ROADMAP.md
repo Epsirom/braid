@@ -13,13 +13,25 @@ node details, and a bounded parallel review command. The 0.3.3 release adds live
 per-execution activity and read-only Pi node sessions. The 0.3.4 release adds a Pi
 panel assistant that can message running executions, and `/braid:clear`. The 0.3.5
 release returns plain-text Braid tool results and runs DSH workers on DSH's own
-file and shell tools. The 0.3.6 source adds experimental opt-in Pi blocking
-execution for single-shot runs, with CLI and session controls. Source availability
+file and shell tools. The 0.3.6 release adds experimental opt-in Pi blocking
+execution for single-shot runs, with CLI and session controls. The 0.4.0 source
+makes Pi print and JSON runs wait for background jobs, adds `braid_finish` for
+run outcomes, and deprecates blocking mode. Source availability
 and npm availability are separate milestones. Check
 [GitHub releases](https://github.com/Epsirom/braid/releases),
 [@chrok/braid](https://www.npmjs.com/package/@chrok/braid),
 [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid), and
 [@chrok/dsh-braid](https://www.npmjs.com/package/@chrok/dsh-braid) for published versions.
+
+## 0.4 implemented changes
+
+- [x] Pi print and JSON runs drain background jobs before exiting, with a
+  paused-execution warning, cancellation, and `--braid-ci-timeout`.
+- [x] `braid_finish` for explicit single-shot run outcomes and exit status.
+- [x] Deprecate Pi blocking mode for removal in 0.5.0.
+
+Read the [0.3 → 0.4 migration guide](docs/compatibility.md#migrating-from-03-to-04)
+if you embed Pi through its SDK or use blocking mode.
 
 ## 0.3 implemented changes
 

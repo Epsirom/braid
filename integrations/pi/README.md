@@ -5,15 +5,17 @@
 This optional Pi extension runs Braid agent graphs as background jobs by default, with
 bounded loops, live updates, pause/resume, and a live flow panel.
 
-**0.3 API:** The npm badge shows the published version; see
+**0.4 API:** The npm badge shows the published version; see
 [GitHub releases](https://github.com/Epsirom/braid/releases) for release notes.
-Review the [0.2 → 0.3 migration guide](https://github.com/Epsirom/braid/blob/v0.3.0/docs/compatibility.md#migrating-from-02-to-03)
-before upgrading: writable nodes now have shell tools, checkpoints exclude
-untracked ignored outputs, and reminders can interrupt work between model steps.
-Users coming from 0.1 also need the
-[0.1 → 0.2 guide](https://github.com/Epsirom/braid/blob/v0.3.0/docs/compatibility.md#migrating-from-01-to-02).
+Review the [0.3 → 0.4 migration guide](https://github.com/Epsirom/braid/blob/v0.4.0/docs/compatibility.md#migrating-from-03-to-04)
+before upgrading: print and JSON runs wait for background jobs, Pi SDK sessions
+in the default print mode drain jobs before `session.prompt()` returns, and
+blocking mode is deprecated. Users coming from 0.2 also need the
+[0.2 → 0.3 guide](https://github.com/Epsirom/braid/blob/v0.4.0/docs/compatibility.md#migrating-from-02-to-03),
+and users coming from 0.1 the
+[0.1 → 0.2 guide](https://github.com/Epsirom/braid/blob/v0.4.0/docs/compatibility.md#migrating-from-01-to-02).
 For the previous release, use the
-[0.2.1 guide](https://github.com/Epsirom/braid/blob/v0.2.1/integrations/pi/README.md).
+[0.3.6 guide](https://github.com/Epsirom/braid/blob/v0.3.6/integrations/pi/README.md).
 
 It registers:
 

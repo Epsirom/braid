@@ -2,19 +2,36 @@
 
 ## Unreleased
 
-### Features
+## 0.4.0 — 2026-10-15
+
+### Features and breaking changes
 
 - Pi print and JSON modes (`pi -p`, `--mode json`) keep background execution
   and stay open until every Braid job finishes and its reminder is delivered, so
-  single-shot runs no longer exit before their graphs complete. Only paused
-  executions remaining when the parent ends its turn get one warning, then
-  cancellation and exit status 1. `--braid-ci-timeout <duration>` bounds the run
-  the same way ([#80](https://github.com/Epsirom/braid/issues/80)).
+  single-shot runs no longer exit before their graphs complete. The parent
+  submits, ends its turn, and continues from the reminder; `pauseAfter`,
+  reminders, `braid_update`, and `braid_resume` keep working. If only paused
+  executions remain when the parent ends its turn, it gets one warning; ending
+  the next turn without resuming them cancels their jobs and exits 1.
+  `--braid-ci-timeout <duration>` bounds the whole run the same way
+  ([#82](https://github.com/Epsirom/braid/pull/82)) — @Epsirom.
+- **Breaking for Pi SDK hosts:** Pi SDK sessions default to print mode, so
+  `session.prompt()` now returns only after outstanding Braid jobs drain. Hosts
+  that stay running and want reminders to start new runs after settling should
+  bind with another mode, such as `session.bindExtensions({ mode: "rpc" })`
+  ([#82](https://github.com/Epsirom/braid/pull/82)) — @Epsirom.
 - In Pi print and JSON modes, the parent can call `braid_finish` with
   `status` (`success` or `failure`) and a `summary` to report the run outcome.
   A final `failure` exits 1; `success` never masks a forced cancellation. JSON
   mode records the outcome as a `braid-finish` custom entry
-  ([#80](https://github.com/Epsirom/braid/issues/80)).
+  ([#83](https://github.com/Epsirom/braid/pull/83)) — @Epsirom.
+
+See the [0.3 → 0.4 migration guide](docs/compatibility.md#migrating-from-03-to-04)
+before upgrading if you embed Pi through its SDK or use blocking mode. CLI users
+of `pi -p` need no changes. Pi 1.2.0 and DSH 0.2.0-rc.2 remain the tested host
+versions; integrations require Node.js 22.19+. DSH behavior is unchanged; whether
+DSH has the same single-shot problem is tracked in
+[#85](https://github.com/Epsirom/braid/issues/85).
 
 ### Deprecations
 
@@ -23,13 +40,13 @@
   and keep `pauseAfter`, reminders, and live updates, and `braid_finish` sets
   the exit status; drop the flag or command to migrate. Using either prints a
   one-time warning, on stderr in print/JSON mode or as a UI notice
-  ([#80](https://github.com/Epsirom/braid/issues/80)).
+  ([#84](https://github.com/Epsirom/braid/pull/84)) — @Epsirom.
 
-### Behavior changes
+### New Contributors
 
-- Pi SDK sessions default to print mode, so `session.prompt()` now returns only
-  after outstanding Braid jobs drain. Bind with another mode, such as
-  `session.bindExtensions({ mode: "rpc" })`, to keep settle-driven reminders.
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.3.6...v0.4.0).
 
 ## 0.3.6 — 2026-10-15
 
