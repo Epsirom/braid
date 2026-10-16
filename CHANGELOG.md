@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.4.0 — 2026-10-15
+## 0.4.0 — 2026-10-16
 
 ### Features and breaking changes
 
