@@ -14,7 +14,7 @@ per-execution activity and read-only Pi node sessions. The 0.3.4 release adds a 
 panel assistant that can message running executions, and `/braid:clear`. The 0.3.5
 release returns plain-text Braid tool results and runs DSH workers on DSH's own
 file and shell tools. The 0.3.6 release adds experimental opt-in Pi blocking
-execution for single-shot runs, with CLI and session controls. The 0.4.0 source
+execution for single-shot runs, with CLI and session controls. The 0.4.0 release
 makes Pi print and JSON runs wait for background jobs, adds `braid_finish` for
 run outcomes, and deprecates blocking mode. Source availability
 and npm availability are separate milestones. Check

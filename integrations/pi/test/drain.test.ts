@@ -23,6 +23,11 @@ import braidExtension from "../index.js";
 import { input, response } from "./helpers.js";
 import { parseDuration } from "../drain.js";
 
+// Each run cold-starts the Pi CLI. Test files run in parallel, and a loaded
+// Windows runner can take well over 10s per run, so keep generous headroom.
+const CLI_TIMEOUT_MS = 60_000;
+const CLI_TEST_TIMEOUT_MS = 90_000;
+
 const paused = {
   goal: "Hold a draft for review",
   nodes: [
@@ -192,7 +197,7 @@ export default function (pi) {
     "--offline", "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
     "-e", extension, "-e", provider, "--provider", "braid-offline", "--model", "fixture",
     ...flags, "--mode", mode, "-p", "Run Braid and summarize its result.",
-  ], { cwd, env: { ...process.env, PI_CODING_AGENT_DIR: join(cwd, "agent") }, timeout: 12_000, maxBuffer: 1_000_000 });
+  ], { cwd, env: { ...process.env, PI_CODING_AGENT_DIR: join(cwd, "agent") }, timeout: CLI_TIMEOUT_MS, maxBuffer: 1_000_000 });
   invocation.child.stdin?.end();
   try {
     const result = await invocation.then(({ stdout, stderr }) => ({ code: 0, stdout, stderr }), (error: { code: unknown; stdout: string; stderr: string }) => {
@@ -208,7 +213,7 @@ export default function (pi) {
 }
 
 for (const mode of ["text", "json"] as const) {
-  test(`Pi CLI ${mode} print mode stays open for background Braid jobs and their reminders`, { timeout: 15_000 }, async () => {
+  test(`Pi CLI ${mode} print mode stays open for background Braid jobs and their reminders`, { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
     const { code, stdout, stderr } = await runPi("async", mode);
     assert.equal(code, 0, stderr);
     assert.match(stdout, /DRAIN DONE/);
@@ -219,27 +224,27 @@ for (const mode of ["text", "json"] as const) {
   });
 }
 
-test("Pi CLI print mode warns once about paused executions, then cancels them and exits 1", { timeout: 15_000 }, async () => {
+test("Pi CLI print mode warns once about paused executions, then cancels them and exits 1", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
   const { code, stdout, stderr } = await runPi("stall", "text");
   assert.equal(code, 1, stderr);
   assert.match(stdout, /GAVE UP/);
   assert.match(stderr, /Braid: paused executions were never resumed; cancelled job-1/);
 });
 
-test("Pi CLI print mode continues normally when the parent resumes after the stall warning", { timeout: 15_000 }, async () => {
+test("Pi CLI print mode continues normally when the parent resumes after the stall warning", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
   const { code, stdout, stderr } = await runPi("resume", "text");
   assert.equal(code, 0, stderr);
   assert.match(stdout, /RESUMED DONE/);
 });
 
-test("--braid-ci-timeout cancels outstanding jobs, lets the parent report, and exits 1", { timeout: 15_000 }, async () => {
+test("--braid-ci-timeout cancels outstanding jobs, lets the parent report, and exits 1", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
   const { code, stdout, stderr } = await runPi("timeout", "text", ["--braid-ci-timeout", "300ms"]);
   assert.equal(code, 1, stderr);
   assert.match(stdout, /TIMED OUT/);
   assert.match(stderr, /Braid: --braid-ci-timeout expired; cancelled outstanding Braid jobs/);
 });
 
-test("braid_finish with failure exits 1 and reports the summary in JSON output", { timeout: 15_000 }, async () => {
+test("braid_finish with failure exits 1 and reports the summary in JSON output", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
   const { code, stdout, stderr } = await runPi("finishFailure", "json");
   assert.equal(code, 1, stderr);
   assert.match(stderr, /Braid: run reported failure: Review found 2 blocking issues\./);
@@ -252,14 +257,14 @@ test("braid_finish with failure exits 1 and reports the summary in JSON output",
     event.result.details.status === "failure"));
 });
 
-test("braid_finish with success keeps the run open for outstanding jobs and exits 0", { timeout: 15_000 }, async () => {
+test("braid_finish with success keeps the run open for outstanding jobs and exits 0", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
   const { code, stdout, stderr } = await runPi("finishSuccess", "text");
   assert.equal(code, 0, stderr);
   assert.equal(stdout, "REPORTED SUCCESS\n");
   assert.doesNotMatch(stderr, /Braid:/);
 });
 
-test("braid_finish success does not mask a --braid-ci-timeout cancellation", { timeout: 15_000 }, async () => {
+test("braid_finish success does not mask a --braid-ci-timeout cancellation", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
   const { code, stdout, stderr } = await runPi("finishAfterTimeout", "json", ["--braid-ci-timeout", "300ms"]);
   assert.equal(code, 1, stderr);
   assert.match(stdout, /CLAIMED SUCCESS/);
