@@ -47,6 +47,7 @@ agent's model captured at submission.
 | Page earlier activity of an invocation | `braid_status({ jobId, executionId, activityBefore })` |
 | Atomically edit/resume | `braid_update({ jobId, expectedRevision, ...patch })` |
 | Resume without edits | `braid_resume({ jobId, expectedRevision, executionIds })` |
+| Pause running executions or the whole job | `braid_pause({ jobId, executionIds? })`; resume a paused job with `braid_resume({ jobId })` |
 | Cancel | `braid_cancel({ jobId })` or `/braid cancel <jobId>` |
 | Human progress snapshot | `/braid [jobId]`, `/braid list` |
 | Graph, execution details and controls | **Braid** in the session header or right-sidebar guide |
@@ -63,14 +64,15 @@ prompts.
 ## Braid Web panel
 
 Click **Braid** in a session's header, or choose **Braid** from the right-sidebar
-guide. Braid's five tool calls also render as clickable transcript cards:
+guide. Braid's six tool calls also render as clickable transcript cards:
 
 | Tool card | Recorded summary and navigation |
 | --- | --- |
 | `braid` | Submission receipt and node count; opens the submitted graph once the receipt arrives |
 | `braid_status` | Recorded status, revision and execution progress; focuses a requested node/execution; list results provide a link for each job |
 | `braid_update` | Before/after revision, upserted/removed nodes, edge counts and resumed executions; rejected updates are marked as not applied |
-| `braid_resume` | Requested execution IDs and remaining pauses; a single execution links directly to its history |
+| `braid_resume` | Requested execution IDs (or the job) and remaining pauses; a single execution links directly to its history |
+| `braid_pause` | Requested execution IDs (or the job) and suspended executions; a single execution links directly to its history |
 | `braid_cancel` | Cancellation requested or job already finished; opens the original job |
 
 The main card opens the right-sidebar Braid tab in the call's owning session.
@@ -232,6 +234,18 @@ templates use `{{name}}` placeholders and node prompts such as
 Variable names must match exactly; values are inserted literally.
 See the [execution-control guide](https://github.com/Epsirom/braid/blob/main/docs/execution-control.md)
 for the shared graph semantics.
+
+`braid_pause` stops running work without losing it: each execution finishes its
+running tool, then stops before its next model request, keeping its conversation,
+workspace, and tool budgets and releasing its concurrency slot. Resume it with
+`braid_resume` or `braid_update` with `resume`; it continues the same
+conversation. Without `executionIds`, the whole job pauses: no new executions
+start and running ones pause, until `braid_resume({ jobId })`. The node timeout
+stops while suspended; the graph timeout keeps running. The panel's **Pause job**
+and **Pause this execution** buttons do the same for the user. The parent is not
+woken for those: one notice per execution or job, with the latest state, is
+injected as context once the agent next runs, and asks it not to resume work the
+user paused unless the user asks.
 
 Completion and pause messages use DSH `agent.steer`: a running agent consumes
 them at the next step, and an idle agent wakes. Acknowledged messages are removed;

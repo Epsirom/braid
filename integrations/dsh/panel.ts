@@ -26,12 +26,16 @@ export function panelJob(job: JobSnapshot, activity: (executionId: string) => Ex
       ...(e.loopId === undefined ? {} : { loopId: e.loopId }),
       ...(e.latencyMs === undefined ? {} : { latencyMs: e.latencyMs }),
       ...(job.progress[e.executionId] ? { progress: job.progress[e.executionId]! } : {}),
+      ...(e.suspension ? { suspension: { state: e.suspension.state, source: clip(e.suspension.source, 100),
+        ...(e.suspension.suspendedAt === undefined ? {} : { suspendedAt: e.suspension.suspendedAt }) } } : {}),
       ...(() => {
         const live = e.status === "running" ? activity(e.executionId) : undefined;
         return live ? { activity: panelActivity(live) } : {};
       })(),
     })),
     pausedExecutionIds: [...state.pausedExecutionIds],
+    suspendedExecutionIds: [...state.suspendedExecutionIds],
+    ...(state.pause ? { pause: { source: clip(state.pause.source, 100), pausedAt: state.pause.pausedAt } } : {}),
     usage: { inputTokens: job.usage.inputTokens ?? 0, outputTokens: job.usage.outputTokens ?? 0,
       cacheReadTokens: job.usage.cacheReadTokens ?? 0, cacheWriteTokens: job.usage.cacheWriteTokens ?? 0 },
     events: job.events.map(e => ({ sequence: e.sequence, timestamp: e.timestamp, type: e.type,
@@ -88,8 +92,13 @@ export class BraidPanel extends TypertRemoteService {
     try {
       this.snapshot(request);
       const jobs = this.find(request.sessionId)!;
-      if (request.action === "resume") jobs.resume(request.jobId, request.executionIds, request.revision);
-      else jobs.cancel(request.jobId);
+      // Panel actions are the user's; the parent agent gets a notice instead of being woken.
+      const executionIds = request.executionIds.length ? request.executionIds : undefined;
+      if (request.action === "pause") jobs.pause(request.jobId, executionIds, "user");
+      else if (request.action === "resume") {
+        if (executionIds) jobs.resume(request.jobId, executionIds, request.revision, "user");
+        else jobs.resumeJob(request.jobId, "user");
+      } else jobs.cancel(request.jobId);
       return this.snapshot(request);
     } catch (error) { throw this.failure(request, error); }
   }

@@ -35,6 +35,9 @@ export interface BraidLiveState {
   observedAt: number;
   revision?: number;
   pausedExecutionIds?: string[];
+  suspendedExecutionIds?: string[];
+  /** Present while the whole job is paused. */
+  pause?: { source: string; pausedAt: number };
   iterations?: Record<string, number>;
 }
 export type BraidToolDetails =
@@ -216,8 +219,11 @@ function mermaidLabelLines(
   const progress = "progress" in result ? result.progress?.[id] : undefined;
   const node = result.nodes[id];
   if (!node) return [compact(id, 24), "pending"];
+  const suspended = node.suspension && node.suspension.state !== "pausing";
   const icon =
-    node.status === "running"
+    suspended
+      ? "‖ PAUSED"
+      : node.status === "running"
       ? "▶ ACTIVE"
       : {
           completed: "✓",
@@ -226,7 +232,7 @@ function mermaidLabelLines(
           runnable: "◇",
           pending: "○",
         }[node.status];
-  const status = node.status === "completed" ? "done" : node.status;
+  const status = node.suspension ? node.suspension.state : node.status === "completed" ? "done" : node.status;
   const decision =
     node.decision === undefined ? "" : ` → ${compact(node.decision, 16)}`;
   const now = "observedAt" in result ? result.observedAt : Date.now();
@@ -377,6 +383,10 @@ function eventText(event: ExecutionEvent): string {
     case "graph_updated": return `graph updated · revision ${event.revision}`;
     case "execution_paused": return `paused · ${compact(event.nodeId, 40)} · ${event.executionId}`;
     case "execution_resumed": return `resumed · ${compact(event.nodeId, 40)} · ${event.executionId}`;
+    case "execution_suspending": return `pausing · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
+    case "execution_suspended": return `suspended · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
+    case "graph_paused": return `job paused · by ${compact(event.source, 20)}`;
+    case "graph_resumed": return "job resumed";
     case "loop_started": return `loop ${compact(event.loopId, 40)} · iteration ${event.iteration}`;
     case "loop_completed": return `loop ${compact(event.loopId, 40)} completed · iteration ${event.iteration}`;
     case "graph_created":
@@ -454,7 +464,7 @@ export function createLiveState(): BraidLiveState {
     progress: Object.create(null),
     events: [],
     latencyMs: 0,
-    observedAt: Date.now(), revision: 0, pausedExecutionIds: [], iterations: Object.create(null),
+    observedAt: Date.now(), revision: 0, pausedExecutionIds: [], suspendedExecutionIds: [], iterations: Object.create(null),
   };
 }
 
@@ -486,6 +496,8 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
   if (event.type === "graph_completed" || event.type === "graph_failed") {
     state.status = event.type === "graph_completed" ? "completed" : "failed";
     state.pausedExecutionIds = [];
+    state.suspendedExecutionIds = [];
+    delete state.pause;
     if (event.type === "graph_failed") state.error = { ...event.error };
     return;
   }
@@ -516,7 +528,12 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
     }
   }
   if (event.type === "execution_paused") state.pausedExecutionIds = [...(state.pausedExecutionIds ?? []), event.executionId!];
+  if (event.type === "graph_paused") state.pause = { source: event.source, pausedAt: event.timestamp };
+  if (event.type === "graph_resumed") delete state.pause;
+  if (event.type === "execution_suspended") state.suspendedExecutionIds = [...(state.suspendedExecutionIds ?? []), event.executionId!];
   if (event.type === "execution_resumed") state.pausedExecutionIds = state.pausedExecutionIds?.filter(id => id !== event.executionId) ?? [];
+  if (event.type === "execution_resumed" || event.type === "node_completed" || event.type === "node_failed")
+    state.suspendedExecutionIds = state.suspendedExecutionIds?.filter(id => id !== event.executionId) ?? [];
   const node =
     "nodeId" in event && Object.hasOwn(state.nodes, event.nodeId)
       ? state.nodes[event.nodeId]
@@ -539,8 +556,18 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
       node.status = "running";
       node.startedAt = event.timestamp;
       break;
+    case "execution_suspending":
+      node.suspension = { state: "pausing", source: event.source, requestedAt: event.timestamp };
+      break;
+    case "execution_suspended":
+      node.suspension = { state: "suspended", source: event.source, requestedAt: node.suspension?.requestedAt ?? event.timestamp, suspendedAt: event.timestamp };
+      break;
+    case "execution_resumed":
+      delete node.suspension;
+      break;
     case "node_completed":
     case "node_failed":
+      delete node.suspension;
       node.status = event.type === "node_completed" ? "completed" : "failed";
       node.finishedAt = event.timestamp;
       node.latencyMs = event.latencyMs;
@@ -767,7 +794,9 @@ export function renderGraphResult(
       );
   }
   if (result.error) lines.push(theme.fg("error", `${result.error.code}: ${compact(result.error.message, 120)}`));
+  if ("pause" in result && result.pause) lines.push(theme.fg("warning", `job paused by ${compact(result.pause.source, 20)} · no new executions start`));
   if ("pausedExecutionIds" in result && result.pausedExecutionIds?.length) lines.push(theme.fg("warning", `${result.pausedExecutionIds.length} paused executions · revision ${result.revision ?? 0}`));
+  if ("suspendedExecutionIds" in result && result.suspendedExecutionIds?.length) lines.push(theme.fg("warning", `${result.suspendedExecutionIds.length} suspended executions · revision ${result.revision ?? 0}`));
   if ("executions" in result) lines.push(theme.fg("dim", `${Object.keys(result.executions).length} executions · revision ${result.revision}`));
   const chartStart = lines.length;
   const chart = mermaidLines(result, theme, selectedNodeId);

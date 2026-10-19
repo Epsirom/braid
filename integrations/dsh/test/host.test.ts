@@ -34,12 +34,14 @@ async function harness(respond: (options: GenerateOptions) => Promise<StreamChun
     const owner = ctx.plugin(() => {});
     const session = ctx.sessions.create(SessionId(name), { meta: { cwd: directory() } });
     const messages: UserMessage[] = [];
+    const injected: UserMessage[] = [];
     const agent = { id: session.id, session, ctx: owner.ctx, options: { provider: "fake", model: "model" },
       status: "idle", steer: (message: UserMessage) => { messages.push(message); },
+      inject: (message: UserMessage) => { injected.push(message); },
       whenIdle: async () => {}, cancel: () => {},
     } as unknown as Agent;
     await ctx.agents.register(agent);
-    return { agent, messages, owner };
+    return { agent, messages, injected, owner };
   }
   let count = 0;
   const invoke = (agent: Agent | undefined, name: string, args: object, signal = new AbortController().signal) => ctx.tools.execute({
@@ -52,7 +54,7 @@ test("loads in actual Cordis/DSH services, produces valid canonical results, nat
   const { ctx, fiber, agent, invoke } = await harness();
   try {
     const a = await agent("owner-a"), b = await agent("owner-b");
-    assert.deepEqual(ctx.tools.schemas().map(tool => tool.name).sort(), ["braid", "braid_cancel", "braid_resume", "braid_status", "braid_update"]);
+    assert.deepEqual(ctx.tools.schemas().map(tool => tool.name).sort(), ["braid", "braid_cancel", "braid_pause", "braid_resume", "braid_status", "braid_update"]);
     const assembly = await ctx.systemPrompt.assemble();
     assert.match(JSON.stringify(assembly), /Braid is a proactive/);
     assert.match(JSON.stringify(assembly), /Do not call sleep, run a shell sleep, use a timer, or enter a sleep\/poll loop/);
@@ -127,6 +129,33 @@ test("dropped reminders retry at idle once and claimed reminders are acknowledge
     ctx.emit("agent/status", { agent: a.agent, status: "idle" });
     assert.equal(a.messages.length, 2);
   } finally { await ctx.fiber.dispose(); }
+});
+
+test("a pause from the panel never wakes the parent; it is injected as context once the parent runs", async () => {
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const { ctx, agent, invoke } = await harness(async () => { await held; return answer(); });
+  try {
+    const a = await agent("notice-owner");
+    const receipt = (await invoke(a.agent, "braid", input)).value as { canonicalJobId: string; jobId: string };
+    const control = (action: string) => ctx.typertGateway.invoke({ namespace: "braidPanel", method: "control",
+      args: { request: { sessionId: "notice-owner", jobId: receipt.canonicalJobId, action, revision: 0, executionIds: [] } } });
+    await control("pause");
+    await control("resume");
+    await control("pause");
+    assert.deepEqual(a.messages, [], "no waking reminder");
+    assert.equal(a.injected.length, 0, "held while the parent is idle");
+    (a.agent as { status: string }).status = "running";
+    ctx.emit("agent/status", { agent: a.agent, status: "running" });
+    assert.equal(a.injected.length, 1, "coalesced to the latest change");
+    assert.match(JSON.stringify(a.injected[0]), new RegExp(`The user paused the whole job of Braid job ${receipt.jobId}\\. .*Do not resume it unless the user asks`));
+    ctx.emit("agent/status", { agent: a.agent, status: "running" });
+    assert.equal(a.injected.length, 1, "each notice is delivered once");
+    await control("resume");
+    assert.equal(a.injected.length, 2, "a running parent receives a notice at its next step");
+    release();
+    await until(() => a.messages.length === 1);
+  } finally { release(); await ctx.fiber.dispose(); }
 });
 
 test("unloading the plugin aborts work and suppresses reminders after cleanup", async () => {

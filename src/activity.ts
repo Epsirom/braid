@@ -3,13 +3,14 @@ import type { ExecutionEvent, ModelRequest } from "./types.js";
 /**
  * What a running execution is observed doing. `workspace` and `finalizing` are
  * core work before and after the runner; `worker` is runner work between model
- * and tool steps.
+ * and tool steps; `suspended` is a paused execution stopped at a checkpoint.
  */
 export type ExecutionActivityPhase =
   | "workspace"
   | "worker"
   | "model"
   | "tool"
+  | "suspended"
   | "finalizing"
   | "completed"
   | "failed";
@@ -197,6 +198,21 @@ export class ExecutionActivityTracker {
         const record = this.ensure(event.executionId, event.nodeId, event.timestamp);
         if (record.phase === "workspace") this.phase(record, "worker", event.timestamp);
         this.add(record, { kind: "lifecycle", summary: `Worker started${event.model ? ` · ${event.model}` : ""}` }, event.timestamp);
+      } else if (event.type === "execution_suspending" || event.type === "execution_suspended") {
+        const record = this.ensure(event.executionId, event.nodeId, event.timestamp);
+        if (record.finishedAt !== undefined) return;
+        const suspended = event.type === "execution_suspended";
+        if (suspended) this.phase(record, "suspended", event.timestamp);
+        this.add(record, {
+          kind: "lifecycle",
+          summary: suspended ? `Suspended · paused by ${event.source}` : `Pause requested by ${event.source} · stops before the next model request`,
+        }, event.timestamp);
+      } else if (event.type === "execution_resumed") {
+        // Also emitted when a pauseAfter hold is released, after the execution finished.
+        const record = this.records.get(event.executionId);
+        if (!record || record.finishedAt !== undefined) return;
+        if (record.phase === "suspended") this.phase(record, "worker", event.timestamp);
+        this.add(record, { kind: "lifecycle", summary: "Resumed" }, event.timestamp);
       } else if (event.type === "human_input") {
         const record = this.ensure(event.executionId, event.nodeId, event.timestamp);
         if (record.finishedAt !== undefined) return;

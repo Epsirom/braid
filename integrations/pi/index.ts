@@ -10,12 +10,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { BraidInput, ExecutionActivity, GraphUpdate, NodeResult } from "@chrok/braid";
 import { Text } from "@earendil-works/pi-tui";
-import { BraidJobs, type JobSnapshot } from "./jobs.js";
+import { BraidJobs, type ControlNotice, type JobSnapshot } from "./jobs.js";
 import { registerBraidCommand, registerBraidWidget } from "./command.js";
 import { registerReviewCommand } from "./review.js";
 import { BRAID_DRAIN_GUIDANCE, BRAID_FINISH_GUIDANCE, isSingleShot, registerDrain } from "./drain.js";
 import { renderGraphCall, renderGraphResult, renderNodeResult } from "./display.js";
-import { formatJobList, formatJobStatus, formatNodeStatus, formatReceipt, formatResume, formatUpdate } from "./status-text.js";
+import { formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatReceipt, formatResume, formatUpdate } from "./status-text.js";
 
 const text = (description?: string) => Type.String({ minLength: 1, pattern: "\\S", ...(description ? { description } : {}) });
 const prompt = () => Type.Union([
@@ -116,7 +116,9 @@ export const BRAID_ASYNC_GUIDANCE =
   "After submitting, continue useful independent work. If nothing else can proceed until the result arrives, end your turn and let the reminder resume the task. " +
   "Do not call sleep, run a shell sleep, use a timer, or enter a sleep/poll loop solely to wait for a Braid job; delays required by the user's actual task remain allowed. " +
   "On the reminder, retrieve terminal outputs with braid_status before relying on them and continue the original task. Between reminders, use braid_status only for deliberate progress checks or diagnosis. " +
-  "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Use braid_status({jobId, executionId}) to retrieve the exact execution; nodeId selects the latest instance. Use pauseAfter=true to hold outgoing scheduling. Definitions can always be changed with braid_update using expectedRevision; existing executions retain their captured inputs. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes.";
+  "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Use braid_status({jobId, executionId}) to retrieve the exact execution; nodeId selects the latest instance. Use pauseAfter=true to hold outgoing scheduling. Definitions can always be changed with braid_update using expectedRevision; existing executions retain their captured inputs. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes. " +
+  "Use braid_pause to stop running executions temporarily (each stops before its next model request and keeps its conversation and workspace), or the whole job; send them a message or adjust the graph, then resume. " +
+  "The user can also pause and resume from /braid; you get a notice with your next turn. Do not resume work the user paused unless the user asks.";
 
 export const BRAID_BLOCKING_DEPRECATION =
   "Blocking mode (--braid-blocking) is deprecated and will be removed in 0.5.0. " +
@@ -405,7 +407,7 @@ export function createBraidTools(jobs: BraidJobs, blocking: () => boolean = () =
     removeEdges: Type.Optional(Type.Array(updateEdgeParameters, { description: "Exact edge identities to remove: copy from, to, and every present choice/feedback/executionId from the current graph edges in braid_status. Omitted optional fields do not act as wildcards." })),
     promptTemplates: Type.Optional(Type.Record(Type.String(), text(), { description: `${templateDescription} Replaces the entire template map; omit to preserve it. Include every template still referenced by nodes.` })),
     loops: Type.Optional(Type.Array(loopParameters, { description: "Replaces all loop definitions; omit to preserve them, or use [] to remove all (also remove their feedback edges)." })),
-    resume: Type.Optional(Type.Array(text(), { uniqueItems: true, description: "Paused execution IDs from braid_status, not node IDs. Releases them atomically with the graph edit." })),
+    resume: Type.Optional(Type.Array(text(), { uniqueItems: true, description: "Paused or suspended execution IDs from braid_status, not node IDs. Releases them atomically with the graph edit." })),
   }, { additionalProperties: false });
   const updateTool = defineTool<typeof updateParameters, JobSnapshot>({
     name: "braid_update", label: "Update Braid",
@@ -424,19 +426,46 @@ export function createBraidTools(jobs: BraidJobs, blocking: () => boolean = () =
   });
   const resumeParameters = Type.Object({
     jobId: text("Exact session handle (e.g. job-1) or UUID."),
-    expectedRevision: Type.Integer({ minimum: 0, description: "Current graph revision from braid_status." }),
-    executionIds: Type.Array(text(), { minItems: 1, uniqueItems: true, description: "Paused execution IDs from braid_status, not node IDs. Only these completed, paused executions are released." }),
+    expectedRevision: Type.Optional(Type.Integer({ minimum: 0, description: "Current graph revision from braid_status. Required with executionIds." })),
+    executionIds: Type.Optional(Type.Array(text(), { minItems: 1, uniqueItems: true, description: "Paused (pauseAfter) or suspended execution IDs from braid_status, not node IDs. Omit to resume a paused job." })),
   }, { additionalProperties: false });
   const resumeTool = defineTool<typeof resumeParameters, JobSnapshot>({
     name: "braid_resume", label: "Resume Braid",
-    description: "Release specific paused execution IDs using expectedRevision from braid_status. Independent branches keep running during a pause; this does not reset deadlines or execution limits.",
+    description: "Release paused (pauseAfter) executions, or resume suspended ones in the same conversation, by execution ID with expectedRevision from braid_status. Omit executionIds to resume a job paused with braid_pause; executions you paused separately stay suspended. Independent branches keep running during a pause; this does not reset the graph deadline or execution limits. Do not resume work the user paused unless the user asks.",
     parameters: resumeParameters,
     async execute(_id, params) {
+      if (!params.executionIds) return { content: [{ type: "text", text: formatResume(jobs.resumeJob(params.jobId)) }], details: jobs.get(params.jobId)! };
+      if (params.expectedRevision === undefined) throw new Error("expectedRevision is required with executionIds; read it from braid_status");
       const job = jobs.resume(params.jobId, params.executionIds, params.expectedRevision);
       return { content: [{ type: "text", text: formatResume(job) }], details: job };
     },
   });
-  return { braidTool, statusTool, cancelTool, updateTool, resumeTool };
+  const pauseParameters = Type.Object({
+    jobId: text("Exact session handle (e.g. job-1) or UUID."),
+    executionIds: Type.Optional(Type.Array(text(), { minItems: 1, uniqueItems: true, description: "Running execution IDs from braid_status, not node IDs. Omit to pause the whole job." })),
+  }, { additionalProperties: false });
+  const pauseTool = defineTool<typeof pauseParameters, JobSnapshot>({
+    name: "braid_pause", label: "Pause Braid",
+    description: "Temporarily stop running executions without losing their work: each finishes its running tool, then stops before its next model request, keeping its conversation, workspace, and tool budgets, and releasing its concurrency slot. Omit executionIds to pause the whole job: no new executions start and running ones pause. Use it to inspect a node, correct it with a message, or stop spending while you adjust the graph. Resume with braid_resume. The node timeout stops while suspended; the graph timeout keeps running, so resume or cancel paused work.",
+    parameters: pauseParameters,
+    async execute(_id, params) {
+      const job = jobs.pause(params.jobId, params.executionIds, "agent");
+      return { content: [{ type: "text", text: formatPause(job, params.executionIds) }], details: job };
+    },
+  });
+  return { braidTool, statusTool, cancelTool, updateTool, resumeTool, pauseTool };
+}
+
+/** One sentence for a pause or resume the parent did not make. */
+export function formatControlNotice(notice: ControlNotice): string {
+  const who = notice.source === "user" ? "The user" : `A ${notice.source} control`;
+  const target = notice.executions
+    ? notice.executions.map(execution => `node ${JSON.stringify(execution.nodeId)} execution ${execution.executionId}`).join(", ")
+    : "the whole job";
+  const lookup = JSON.stringify({ jobId: notice.handle, ...(notice.executions?.length === 1 ? { executionId: notice.executions[0]!.executionId } : {}) });
+  return notice.action === "paused"
+    ? `${who} paused ${target} of Braid job ${notice.handle}. Paused work keeps its conversation and workspace. Do not resume it unless the user asks; check the current state with braid_status(${lookup}).`
+    : `${who} resumed ${target} of Braid job ${notice.handle}; it continues where it stopped.`;
 }
 
 export default function braidExtension(pi: ExtensionAPI) {
@@ -464,6 +493,21 @@ export default function braidExtension(pi: ExtensionAPI) {
       // Keep failed deliveries pending for the next settled retry.
     }
   };
+  // Pauses and resumes made by someone else wait for the parent's next turn instead of
+  // waking it: a woken parent could resume work the user deliberately paused.
+  const notices = new Map<string, ControlNotice>();
+  const noteControl = (notice: ControlNotice): void => {
+    for (const execution of notice.executions ?? [undefined]) {
+      // The latest change per execution or job wins.
+      notices.set(JSON.stringify([notice.jobId, execution?.executionId ?? "job"]), { ...notice, ...(execution ? { executions: [execution] } : {}) });
+    }
+  };
+  pi.on("before_agent_start", () => {
+    if (!notices.size) return;
+    const lines = [...notices.values()].map(formatControlNotice);
+    notices.clear();
+    return { message: { customType: "braid-control", display: true, content: `[system-reminder] ${lines.join(" ")} [/system-reminder]`, details: { notices: lines } } };
+  });
   const jobs = new BraidJobs((job) => {
     const { jobId, handle, status } = job;
     const reminderId = JSON.stringify([jobId, "job"]);
@@ -487,7 +531,7 @@ export default function braidExtension(pi: ExtensionAPI) {
     };
     pending.set(reminderId, message);
     remind(message);
-  });
+  }, noteControl);
   // Foreground cancellation can discard queued steering. Retry only reminders
   // that never entered context, once Pi has settled and emptied its queues.
   pi.on("message_start", (event) => {
@@ -503,7 +547,7 @@ export default function braidExtension(pi: ExtensionAPI) {
       for (const message of pending.values()) remind(message);
     }
   });
-  const { braidTool, statusTool, cancelTool, updateTool, resumeTool } = createBraidTools(jobs, blocking);
+  const { braidTool, statusTool, cancelTool, updateTool, resumeTool, pauseTool } = createBraidTools(jobs, blocking);
   registerDrain(pi, jobs, () => pending.size > 0);
   registerBraidCommand(pi, jobs);
   registerReviewCommand(pi, jobs);
@@ -513,8 +557,10 @@ export default function braidExtension(pi: ExtensionAPI) {
   pi.registerTool(cancelTool);
   pi.registerTool(updateTool);
   pi.registerTool(resumeTool);
+  pi.registerTool(pauseTool);
   pi.on("session_shutdown", () => {
     pending.clear();
+    notices.clear();
     jobs.dispose();
     disposeWidget();
   });

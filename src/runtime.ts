@@ -14,6 +14,7 @@ import type {
   NodeOutput,
   NodeResult,
   NodeWorkspace,
+  PauseOptions,
   PredecessorOutput,
 } from "./types.js";
 import { compileGraph, type Graph } from "./validate.js";
@@ -178,6 +179,14 @@ function checkResponse(response: ModelResponse): void {
   }
 }
 
+/** Scheduler hooks for one execution's suspension. */
+interface SuspensionControl {
+  /** At a checkpoint: undefined to continue, or a promise that resolves once resumed with a slot. */
+  suspend(): Promise<void> | undefined;
+  /** The runner has returned or thrown; drop any suspension state. */
+  finished(): void;
+}
+
 async function runNode(
   request: Omit<ModelRequest, "signal" | "decide">,
   result: NodeResult,
@@ -188,19 +197,23 @@ async function runNode(
   log: EventLog,
   workspaces: GitWorkspaces,
   fail: (error: ExecutionError, infrastructure?: boolean) => void,
+  suspension: SuspensionControl,
 ): Promise<void> {
   result.status = "running";
   result.startedAt = Date.now();
   const started = performance.now();
+  // Time spent suspended does not count toward the node timeout.
+  let suspendedMs = 0;
   const controller = new AbortController();
   const signal = AbortSignal.any([graphSignal, controller.signal]);
   const nodeTimeout = new RunError(
     "NODE_TIMEOUT",
     `Node '${result.id}' exceeded ${timeoutMs}ms`,
   );
-  const timer = Number.isFinite(timeoutMs)
-    ? setTimeout(() => controller.abort(nodeTimeout), timeoutMs)
+  const startTimer = (ms: number) => Number.isFinite(timeoutMs)
+    ? setTimeout(() => controller.abort(nodeTimeout), Math.max(0, ms))
     : undefined;
+  let timer = startTimer(timeoutMs);
   let onAbort: () => void;
   const aborted = new Promise<never>((_, reject) => {
     onAbort = () => reject(signal.reason);
@@ -245,6 +258,22 @@ async function runNode(
       ...(Number.isFinite(graphDeadline) ? { graph: graphDeadline } : {}),
     };
   }
+  let acceptingCheckpoints = true;
+  invocation.checkpoint = async () => {
+    checkDeadline();
+    const resumed = acceptingCheckpoints ? suspension.suspend() : undefined;
+    if (!resumed) return;
+    clearTimeout(timer);
+    const since = performance.now();
+    try { await Promise.race([aborted, resumed]); }
+    finally {
+      suspendedMs += performance.now() - since;
+      // Mutate in place: runners may hold a reference to the request's deadlines.
+      if (invocation.deadlines?.node !== undefined) invocation.deadlines.node = started + suspendedMs + timeoutMs;
+      if (!signal.aborted) timer = startTimer(timeoutMs - (performance.now() - started - suspendedMs));
+    }
+    checkDeadline();
+  };
   if (choices) {
     invocation.decide = (...values: string[]) => {
       if (!acceptingDecisions || signal.aborted) {
@@ -276,7 +305,7 @@ async function runNode(
     const error =
       now >= graphDeadline
         ? new RunError("GRAPH_TIMEOUT", "Graph deadline exceeded")
-        : now - started >= timeoutMs
+        : now - started - suspendedMs >= timeoutMs
           ? nodeTimeout
           : undefined;
     if (error) {
@@ -351,6 +380,8 @@ async function runNode(
     acceptingDecisions = false;
     acceptingHumanInput = false;
     acceptingWrites = false;
+    acceptingCheckpoints = false;
+    suspension.finished();
     await Promise.allSettled(writes);
     if (result.status === "completed") {
       try { checkDeadline(); }
@@ -428,6 +459,14 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   const loops = new Map<string, LoopState>();
   const paused = new Set<string>();
   const running = new Map<string, Promise<void>>();
+  // Suspended and resuming executions stay in `running` but release their slot.
+  const suspended = new Set<string>();
+  const resumeQueue: string[] = [];
+  const resumers = new Map<string, () => void>();
+  // Executions that pauseRun paused; resumeRun resumes only these.
+  const pausedByRun = new Set<string>();
+  let runPause: BraidSnapshot["pause"];
+  const active = () => running.size - suspended.size;
   const controller = new AbortController();
   let revision = 0;
   let status: BraidSnapshot["status"] = "running";
@@ -456,26 +495,147 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     const nodes: Record<string, NodeResult> = Object.fromEntries(graph.nodes.map(node => [node.id, latest.get(node.id) ?? { id: node.id, status: "pending" }]));
     for (const [id, record] of latest) Object.defineProperty(nodes, id, { value: record, enumerable: true, writable: true, configurable: true });
     return structuredClone({ runId, status, revision, graph: definition, nodes: finalNodes ?? nodes,
-      executions: Object.fromEntries(executions), pausedExecutionIds: [...paused],
+      executions: Object.fromEntries(executions), pausedExecutionIds: [...paused], suspendedExecutionIds: [...suspended],
+      ...(runPause ? { pause: runPause } : {}),
       ...(controller.signal.aborted ? { error: describeError(controller.signal.reason) } : {}) });
   }
 
-  function assertMutable(expectedRevision: number) {
+  function assertActive() {
     if (status === "finalizing" || status === "completed" || status === "failed" || controller.signal.aborted)
       throw new Error("This run is no longer accepting updates");
+  }
+  function assertMutable(expectedRevision: number) {
+    assertActive();
     if (expectedRevision !== revision) throw new Error(`Revision conflict: expected ${expectedRevision}, current ${revision}`);
   }
-  function validateResume(ids: readonly string[]) {
-    if (!Array.isArray(ids) || new Set(ids).size !== ids.length || ids.some(id => !paused.has(id)))
-      throw new Error("resume must contain unique paused execution IDs");
+  function resumable(id: string) {
+    const state = executions.get(id)?.suspension?.state;
+    return paused.has(id) || state === "pausing" || state === "suspended";
   }
-  function release(ids: readonly string[]) {
-    for (const id of ids) paused.delete(id);
-    status = "running";
+  function validateResume(ids: readonly string[]) {
+    if (!Array.isArray(ids) || new Set(ids).size !== ids.length || ids.some(id => !resumable(id)))
+      throw new Error("resume must contain unique held or paused execution IDs");
+  }
+  /** Commit resume state without events; returns the executions that continue immediately. */
+  function stageResume(ids: readonly string[]): string[] {
+    const continued: string[] = [];
+    for (const id of ids) {
+      const record = executions.get(id)!;
+      pausedByRun.delete(id);
+      if (paused.delete(id)) continued.push(id);
+      else if (record.suspension?.state === "pausing") { delete record.suspension; continued.push(id); }
+      else if (record.suspension?.state === "suspended") { record.suspension.state = "resuming"; resumeQueue.push(id); }
+    }
+    return continued;
+  }
+  function announceResumed(ids: readonly string[]) {
     for (const id of ids) {
       const record = executions.get(id)!;
       log.emit({ type: "execution_resumed", nodeId: record.id, ...context(record) });
     }
+  }
+  /** Give free slots to resumed executions, in resume order, before any new admission. */
+  function grantSlots() {
+    if (controller.signal.aborted) return;
+    while (resumeQueue.length && active() < maxConcurrency) {
+      const id = resumeQueue.shift()!;
+      const record = executions.get(id)!;
+      suspended.delete(id);
+      delete record.suspension;
+      announceResumed([id]);
+      resumers.get(id)?.();
+      resumers.delete(id);
+    }
+  }
+  function release(ids: readonly string[]) {
+    const continued = stageResume(ids);
+    status = "running";
+    announceResumed(continued);
+    grantSlots();
+  }
+  function requestPause(record: NodeExecution, source: string, byRun: boolean) {
+    const suspension = record.suspension;
+    // An execution that is already paused keeps its own pause; resumeRun leaves it alone.
+    if (suspension && suspension.state !== "resuming") return;
+    if (byRun) pausedByRun.add(record.executionId);
+    if (suspension) {
+      // Not yet continued: return it to the suspended set without a slot.
+      resumeQueue.splice(resumeQueue.indexOf(record.executionId), 1);
+      suspension.state = "suspended";
+      suspension.source = source;
+      log.emit({ type: "execution_suspended", nodeId: record.id, source, ...context(record) });
+      return;
+    }
+    record.suspension = { state: "pausing", source, requestedAt: Date.now() };
+    log.emit({ type: "execution_suspending", nodeId: record.id, source, ...context(record) });
+  }
+  function pauseSource(options: PauseOptions | undefined): string {
+    const source = options?.source ?? "caller";
+    if (typeof source !== "string" || !source.trim()) throw new TypeError("pause source must be a non-empty string");
+    return source;
+  }
+  function pause(ids: readonly string[], options?: PauseOptions): BraidSnapshot {
+    assertActive();
+    const source = pauseSource(options);
+    if (!runner.pausable) throw new Error("This run's model runner does not support pausing running executions");
+    if (!Array.isArray(ids) || !ids.length || new Set(ids).size !== ids.length ||
+        ids.some(id => !running.has(id) || settled(executions.get(id)!)))
+      throw new Error("pause must contain unique running execution IDs");
+    for (const id of ids) requestPause(executions.get(id)!, source, false);
+    return snapshot();
+  }
+  function pauseRun(options?: PauseOptions): BraidSnapshot {
+    assertActive();
+    const source = pauseSource(options);
+    if (runPause) return snapshot();
+    runPause = { source, pausedAt: Date.now() };
+    log.emit({ type: "graph_paused", source, revision });
+    // Suspending releases slots, so admission must stop too or freed slots would admit other nodes.
+    if (runner.pausable) for (const id of running.keys()) {
+      const record = executions.get(id)!;
+      if (!settled(record)) requestPause(record, source, true);
+    }
+    wake();
+    return snapshot();
+  }
+  function resumeRun(): BraidSnapshot {
+    assertActive();
+    if (!runPause) return snapshot();
+    runPause = undefined;
+    const continued = stageResume([...pausedByRun].filter(resumable));
+    pausedByRun.clear();
+    status = "running";
+    log.emit({ type: "graph_resumed", revision });
+    announceResumed(continued);
+    grantSlots();
+    wake();
+    return snapshot();
+  }
+  function suspensionControl(record: NodeExecution): SuspensionControl {
+    const id = record.executionId;
+    return {
+      suspend() {
+        const suspension = record.suspension;
+        if (suspension?.state !== "pausing" || controller.signal.aborted) return undefined;
+        suspension.state = "suspended";
+        suspension.suspendedAt = Date.now();
+        suspended.add(id);
+        log.emit({ type: "execution_suspended", nodeId: record.id, source: suspension.source, ...context(record) });
+        const resumed = new Promise<void>(resolve => resumers.set(id, resolve));
+        // The released slot can go to a waiting resume or a new admission.
+        grantSlots();
+        wake();
+        return resumed;
+      },
+      finished() {
+        const queued = resumeQueue.indexOf(id);
+        if (queued >= 0) resumeQueue.splice(queued, 1);
+        suspended.delete(id);
+        resumers.delete(id);
+        pausedByRun.delete(id);
+        delete record.suspension;
+      },
+    };
   }
   function reconcileLoops(previousGraph?: Graph) {
     // Preserve the already admitted activation when an edit moves a definition
@@ -544,15 +704,13 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     revision++;
     reconcileLoops(previousGraph);
     // Commit all state before publishing callbacks, which may themselves submit an update.
-    for (const id of patch.resume ?? []) paused.delete(id);
+    const continued = stageResume(patch.resume ?? []);
     status = "running";
     log.emit({ type: "graph_updated", graph: definition, revision });
     for (const [id, loop] of graph.loops) if (!previousGraph.loops.has(id))
       log.emit({ type: "loop_started", loopId: id, entry: loop.entry, iteration: loops.get(id)!.iteration, revision });
-    for (const id of patch.resume ?? []) {
-      const record = executions.get(id)!;
-      log.emit({ type: "execution_resumed", nodeId: record.id, ...context(record) });
-    }
+    announceResumed(continued);
+    grantSlots();
     wake();
     return snapshot();
   }
@@ -615,14 +773,14 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       await runNode(request, record, runner, nodeTimeoutMs, controller.signal, graphDeadline, scopedLog, workspaces, (error, infrastructure) => {
         if (infrastructure) controller.abort(new RunError(error.code, error.message));
         else if (record.node.requireSuccess) controller.abort(new RunError("REQUIRED_NODE_FAILED", `Required node '${record.id}' (${record.executionId}) failed: ${error.message}`));
-      });
+      }, suspensionControl(record));
       if (record.node.pauseAfter && !controller.signal.aborted) {
         paused.add(record.executionId);
         scopedLog.emit({ type: "execution_paused", nodeId: record.id });
       }
     }).catch(error => {
       controller.abort(new RunError("SCHEDULING_ERROR", error instanceof Error ? error.message : String(error)));
-    }).finally(() => { running.delete(record.executionId); wake(); });
+    }).finally(() => { running.delete(record.executionId); grantSlots(); wake(); });
     running.set(record.executionId, task);
   }
 
@@ -664,20 +822,23 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
         resetWake();
         let progressed = advanceLoops();
         const schedulingRevision = revision;
+        grantSlots();
         for (const node of graph.topologicalOrder) {
-          if (controller.signal.aborted || revision !== schedulingRevision) break;
+          // A paused run admits nothing, not even skipped records.
+          if (controller.signal.aborted || revision !== schedulingRevision || runPause) break;
           const loopId = graph.membership.get(node.id);
           if (loopId && loops.get(loopId)!.done || frame(node.id).has(node.id)) continue;
           const { states, predecessors } = dependencies(node.id);
           if (states.includes("unresolved")) continue;
           const reason = states.includes("blocked") ? "upstream_failed" : states.length && !states.includes("active") ? "inactive" : undefined;
-          if (!reason && running.size >= maxConcurrency) continue;
+          // Resumed executions waiting for a slot take priority over new admissions.
+          if (!reason && (active() >= maxConcurrency || resumeQueue.length)) continue;
           admit(node.id, predecessors, reason);
           progressed = true;
         }
         if (controller.signal.aborted || progressed || schedulingRevision !== revision) continue;
-        if (running.size || paused.size) {
-          status = running.size ? "running" : "waiting";
+        if (running.size || paused.size || runPause) {
+          status = active() ? "running" : "waiting";
           await changed;
           continue;
         }
@@ -692,6 +853,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       status = "finalizing";
       // Terminal holds are no longer resumable; the event log retains pause history.
       paused.clear();
+      runPause = undefined;
       try { await workspaces.archivePending("Execution checkpoint retained for inspection and future recovery"); }
       catch (error) { cleanupError = { code: "CLEANUP_FAILED", message: error instanceof Error ? error.message : String(error) }; }
       try { await workspaces.close(); }
@@ -729,6 +891,6 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     result.events = Object.freeze(log.events);
     return result;
   }
-  return { runId, result: Promise.resolve().then(execute), snapshot, update, cancel,
+  return { runId, result: Promise.resolve().then(execute), snapshot, update, cancel, pause, pauseRun, resumeRun,
     resume(ids, expectedRevision) { assertMutable(expectedRevision); validateResume(ids); release(ids); wake(); return snapshot(); } };
 }

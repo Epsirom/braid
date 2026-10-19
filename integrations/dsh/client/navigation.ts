@@ -1,7 +1,7 @@
 import type { ToolCallPhaseProps } from "@deepseek-ai/dsh-client-ui-tool/client";
 
 export interface BraidNavigation { jobId?: string; nodeId?: string; executionId?: string; createdBefore?: number }
-export const braidToolNames = ["braid", "braid_status", "braid_update", "braid_resume", "braid_cancel"] as const;
+export const braidToolNames = ["braid", "braid_status", "braid_update", "braid_resume", "braid_pause", "braid_cancel"] as const;
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -48,7 +48,7 @@ export function toolNavigation(toolName: string, props: ToolCallPhaseProps): Bra
   const target: BraidNavigation = { jobId };
   const node = record(result.node);
   const executionId = id(args.executionId) ?? id(node.executionId)
-    ?? (toolName === "braid_resume" && Array.isArray(args.executionIds) && args.executionIds.length === 1 ? id(args.executionIds[0]) : undefined);
+    ?? ((toolName === "braid_resume" || toolName === "braid_pause") && Array.isArray(args.executionIds) && args.executionIds.length === 1 ? id(args.executionIds[0]) : undefined);
   const nodeId = id(args.nodeId) ?? id(node.id);
   if (executionId) target.executionId = executionId;
   if (nodeId) target.nodeId = nodeId;
@@ -88,10 +88,16 @@ export function toolPresentation(toolName: string, props: ToolCallPhaseProps): T
     }
     if ("loops" in args) model.changes.push(`Replace loops: ${array(args.loops).length}`);
     if ("promptTemplates" in args) model.changes.push(`Prompt templates: ${Object.keys(record(args.promptTemplates)).length}`);
-  } else if (toolName === "braid_resume") {
-    model.summary = failed ? "Resume rejected" : `${settled ? "Resumed" : "Resuming"} ${array(args.executionIds).length} execution(s)`;
+  } else if (toolName === "braid_resume" || toolName === "braid_pause") {
+    // Without execution IDs, both act on the whole job.
+    const target = "executionIds" in args ? `${array(args.executionIds).length} execution(s)` : "job";
+    model.summary = toolName === "braid_pause"
+      ? failed ? "Pause rejected" : `${settled ? "Pause requested for" : "Pausing"} ${target}`
+      : failed ? "Resume rejected" : `${settled ? "Resumed" : "Resuming"} ${target}`;
     const ids = names(array(args.executionIds)); if (ids) model.changes.push(ids);
-    if (Array.isArray(result.pausedExecutionIds)) model.changes.push(`${result.pausedExecutionIds.length} still paused · ${revision(result.revision)}`);
+    const execution = toolName === "braid_pause" ? record(result.execution) : result;
+    if (Array.isArray(execution.pausedExecutionIds)) model.changes.push(`${execution.pausedExecutionIds.length} still paused · ${revision(execution.revision)}`);
+    if (Array.isArray(execution.suspendedExecutionIds) && execution.suspendedExecutionIds.length) model.changes.push(`${execution.suspendedExecutionIds.length} suspended`);
   } else if (toolName === "braid_cancel") {
     model.summary = failed ? "Cancellation failed" : !settled ? "Requesting cancellation" : result.cancelled === false ? "Job already finished" : "Cancellation requested";
   } else if (toolName === "braid_status" && Array.isArray(result.jobs)) {
@@ -110,6 +116,8 @@ export function toolPresentation(toolName: string, props: ToolCallPhaseProps): T
       : [id(execution.status) ?? id(result.status), revision(execution.revision)];
     if (total && !id(node.status)) details.push(`${completed}/${total} executions complete`);
     if (Array.isArray(execution.pausedExecutionIds) && execution.pausedExecutionIds.length) details.push(`${execution.pausedExecutionIds.length} paused`);
+    if (Array.isArray(execution.suspendedExecutionIds) && execution.suspendedExecutionIds.length) details.push(`${execution.suspendedExecutionIds.length} suspended`);
+    if (record(execution.pause).source) details.push("job paused");
     model.summary = failed ? "Status query failed" : details.filter(Boolean).join(" · ") || (settled ? "Recorded status" : "Reading status");
   } else {
     const graph = record(result.graph);

@@ -55,7 +55,7 @@ export type DshLlm = Pick<LlmRuntime, "stream"> & Partial<Pick<LlmRuntime, "reso
 
 export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunner {
   validateBudgets({ maxToolRounds: options.maxToolRounds, maxToolCalls: options.maxToolCalls });
-  return async request => {
+  const runner = async (request: Parameters<ModelRunner>[0]) => {
     const route = request.model;
     const slash = route?.indexOf("/") ?? -1;
     if (!route || slash < 1 || slash === route.length - 1)
@@ -106,6 +106,8 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
       };
       while (true) {
         request.signal.throwIfAborted();
+        // A pause takes effect here, between model requests; running tools are not interrupted.
+        await request.checkpoint?.();
         const budgets = [
           ...(options.maxToolRounds === undefined ? [] : [`Tool round budget: ${toolRounds}/${options.maxToolRounds} used.`]),
           ...(options.maxToolCalls === undefined ? [] : [`Tool call budget: ${toolCalls}/${options.maxToolCalls} used; rejected requests count.`]),
@@ -215,6 +217,7 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
       } };
     } finally { await files.dispose(); }
   };
+  return Object.assign(runner, { pausable: true });
 }
 
 export function sumUsage(reports: readonly TokenUsage[]): TokenUsage {

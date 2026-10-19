@@ -61,6 +61,7 @@ interface Job extends JobSnapshot {
   usageClaimed: boolean;
   nodeResults: Map<string, NodeResult>;
   runningExecutions: Map<string, string>;
+  suspendedExecutions: Map<string, string>;
   /** Kept outside snapshots: histories are read one execution at a time. */
   activity: ExecutionActivityTracker;
   transcripts: PiTranscripts;
@@ -80,12 +81,25 @@ export interface NodeCompletion {
   errorCode?: ExecutionError["code"];
 }
 
+/** A pause or resume someone other than the parent agent made, such as the user in /braid. */
+export interface ControlNotice {
+  jobId: string;
+  handle: string;
+  action: "paused" | "resumed";
+  /** Omitted for the whole job. */
+  executions?: { executionId: string; nodeId: string }[];
+  source: string;
+}
+
 export interface OutstandingJob {
   jobId: string;
   handle: string;
   stalled: boolean;
   revision?: number;
   pausedExecutionIds: string[];
+  suspendedExecutionIds: string[];
+  /** The whole job is paused and admits no new executions. */
+  paused?: boolean;
 }
 
 /** Jobs belong to one extension/session lifetime, independently of foreground turns. */
@@ -101,7 +115,20 @@ export class BraidJobs {
   constructor(
     private readonly onFinished: (job: JobSnapshot) => void = () => {},
     private readonly onNodeFinished: (completion: NodeCompletion) => void = () => {},
+    private readonly onControl: (notice: ControlNotice) => void = () => {},
   ) {}
+
+  /** The parent made the change itself; anyone else's change becomes a notice for it. */
+  private notify(job: Job, action: ControlNotice["action"], source: string, executionIds?: readonly string[]): void {
+    if (source === "agent" || this.disposed) return;
+    const state = job.run?.snapshot();
+    try {
+      this.onControl({
+        jobId: job.jobId, handle: job.handle, action, source,
+        ...(executionIds ? { executions: executionIds.map(executionId => ({ executionId, nodeId: state?.executions[executionId]?.id ?? "?" })) } : {}),
+      });
+    } catch { /* Notices are advisory. */ }
+  }
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -150,6 +177,7 @@ export class BraidJobs {
       done: Promise.resolve(),
       usageClaimed: false,
       runningExecutions: new Map(),
+      suspendedExecutions: new Map(),
       activity: new ExecutionActivityTracker({ onChange: () => this.changed() }),
       transcripts: new PiTranscripts(() => this.changed()),
       humanInputs: new PiHumanInputs(() => this.changed()),
@@ -200,7 +228,7 @@ export class BraidJobs {
               this.changed();
             },
           });
-          return async request => {
+          return Object.assign(async (request: Parameters<typeof invoke>[0]) => {
             try {
               await nextTurn();
               return await invoke(request);
@@ -213,7 +241,7 @@ export class BraidJobs {
               job.transcripts.finish(request.execution.executionId,
                 request.signal.aborted ? "Execution was stopped before this step finished" : undefined);
             }
-          };
+          }, { pausable: invoke.pausable === true });
         })(),
         onEvent: (event) => {
           job.activity.observe(event);
@@ -224,12 +252,21 @@ export class BraidJobs {
             });
           }
           // Definition edits can remove nodes whose executions are still running.
+          // A suspended execution is not running: drain can then see a stalled job.
           if (event.type === "node_started" && event.executionId) {
             job.runningExecutions.set(event.executionId, event.nodeId);
+          } else if (event.type === "execution_suspended" && event.executionId) {
+            job.runningExecutions.delete(event.executionId);
+            job.suspendedExecutions.set(event.executionId, event.nodeId);
+          } else if (event.type === "execution_resumed" && event.executionId && job.suspendedExecutions.has(event.executionId)) {
+            job.runningExecutions.set(event.executionId, event.nodeId);
+            job.suspendedExecutions.delete(event.executionId);
           } else if ((event.type === "node_completed" || event.type === "node_failed") && event.executionId) {
             job.runningExecutions.delete(event.executionId);
+            job.suspendedExecutions.delete(event.executionId);
           } else if (event.type === "graph_completed" || event.type === "graph_failed") {
             job.runningExecutions.clear();
+            job.suspendedExecutions.clear();
           }
           applyEvent(job.live, event);
           if ("nodeId" in event && Object.hasOwn(job.live.nodes, event.nodeId)) {
@@ -281,6 +318,7 @@ export class BraidJobs {
       job.live.status = "failed";
       job.live.pausedExecutionIds = [];
       job.runningExecutions.clear();
+      job.suspendedExecutions.clear();
       job.error = error instanceof Error ? error.message : String(error);
       if (reports.length) job.usage = sumPiUsage(reports);
     }
@@ -314,6 +352,7 @@ export class BraidJobs {
       usageClaimed: _claimed,
       nodeResults: _nodeResults,
       runningExecutions: _runningExecutions,
+      suspendedExecutions: _suspendedExecutions,
       activity: _activity,
       transcripts: _transcripts,
       humanInputs: _humanInputs,
@@ -395,11 +434,39 @@ export class BraidJobs {
     return this.get(jobId)!;
   }
 
-  resume(jobId: string, executionIds: readonly string[], expectedRevision: number): JobSnapshot {
+  /** Release held executions or resume paused ones. */
+  resume(jobId: string, executionIds: readonly string[], expectedRevision: number, source = "agent"): JobSnapshot {
     const job = this.lookup(jobId);
     if (!job) throw this.unknownJob(jobId);
     if (!job.run) throw new Error("Job is not accepting updates");
     job.run.resume(executionIds, expectedRevision);
+    this.notify(job, "resumed", source, executionIds);
+    this.changed();
+    return this.get(jobId)!;
+  }
+
+  /**
+   * Pause running executions at their next model request, or the whole job
+   * when executionIds is omitted. source records who asked, e.g. "agent" or "user".
+   */
+  pause(jobId: string, executionIds: readonly string[] | undefined, source: string): JobSnapshot {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    if (!job.run || job.status !== "running") throw new Error("Job is not accepting updates");
+    if (executionIds) job.run.pause(executionIds, { source });
+    else job.run.pauseRun({ source });
+    this.notify(job, "paused", source, executionIds);
+    this.changed();
+    return this.get(jobId)!;
+  }
+
+  /** Admit work again and resume the executions the job pause paused. */
+  resumeJob(jobId: string, source = "agent"): JobSnapshot {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    if (!job.run || job.status !== "running") throw new Error("Job is not accepting updates");
+    job.run.resumeRun();
+    this.notify(job, "resumed", source);
     this.changed();
     return this.get(jobId)!;
   }
@@ -418,7 +485,8 @@ export class BraidJobs {
 
   /**
    * Jobs that have not reached a terminal status. A job is stalled when only
-   * paused executions remain, so it cannot progress without resume or cancel.
+   * held, suspended, or job-paused work remains, so it cannot progress without
+   * resume or cancel.
    */
   outstanding(): OutstandingJob[] {
     return [...this.jobs.values()].filter(job => job.status === "running").map(job => {
@@ -430,6 +498,8 @@ export class BraidJobs {
         stalled: state?.status === "waiting",
         ...(state ? { revision: state.revision } : {}),
         pausedExecutionIds: state?.pausedExecutionIds ?? [],
+        suspendedExecutionIds: state?.suspendedExecutionIds ?? [],
+        ...(state?.pause ? { paused: true } : {}),
       };
     });
   }
@@ -452,7 +522,7 @@ export class BraidJobs {
       ).length,
       failed: nodes.filter(node => node.status === "failed").length,
       running: [...new Set(job.runningExecutions.values())],
-      paused: job.live.pausedExecutionIds?.length ?? 0,
+      paused: (job.live.pausedExecutionIds?.length ?? 0) + job.suspendedExecutions.size,
     };
   }
 

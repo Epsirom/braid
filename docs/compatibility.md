@@ -134,6 +134,30 @@ Version 0.4 changes how the Pi extension behaves in print and JSON modes:
 No graph field, result shape, or event schema migration is required, and DSH
 behavior is unchanged.
 
+## Pausing running executions (unreleased)
+
+Pausing running executions needs no graph or result migration. Runners that do
+not opt in keep working; their executions cannot be paused, and `pauseRun` only
+stops admission. TypeScript consumers may need small changes:
+
+- `ModelRunner` is now an interface with a call signature and an optional
+  `pausable` flag. Plain async functions remain assignable.
+- `ExecutionEvent` adds `execution_suspending`, `execution_suspended`,
+  `graph_paused`, and `graph_resumed`. An exhaustive `switch` over event types
+  needs cases (or a default) for them.
+- `BraidSnapshot` adds a required `suspendedExecutionIds` array and an optional
+  `pause`; `NodeResult` adds an optional `suspension`; `BraidRun` adds `pause`,
+  `pauseRun`, and `resumeRun`; `ExecutionActivityPhase` adds `"suspended"`.
+  Code that constructs these types, such as test fakes, must supply the new
+  required members.
+- Runners that copied `request.deadlines.node` must read it again before each use:
+  core moves it later after a suspension.
+
+In Pi and DSH, `braid_resume` makes `executionIds` and `expectedRevision`
+optional (omit both to resume a paused job) and still requires the revision with
+IDs. In Pi print mode, a stalled run now also covers suspended executions and
+paused jobs, and its cancellation message reads "paused work was never resumed".
+
 ## Versioning
 
 Core, Pi, and DSH release together with matching versions. During 0.x, patch releases

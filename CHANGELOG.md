@@ -20,6 +20,22 @@
   exponential backoff. Retries stop at cancellation and node/graph deadlines.
   Set `options.maxModelRetries` (default 3, `0` disables) to change the limit
   ([#93](https://github.com/Epsirom/braid/pull/93)) — @Epsirom.
+- Running executions can be paused and resumed without losing their work
+  ([#67](https://github.com/Epsirom/braid/issues/67)). A paused execution stops
+  before its next model request, keeps its conversation, workspace, and tool
+  budgets, and releases its concurrency slot; resuming continues the same
+  conversation. A whole run can be paused too: no new executions start and
+  running ones pause. The node timeout stops while suspended; the graph timeout
+  keeps running. Core adds `BraidRun.pause`, `pauseRun`, and `resumeRun`,
+  `resume` for suspended executions, the `request.checkpoint()` runner hook with
+  the `pausable` runner flag, and new events. The Pi, DSH, and OpenAI-compatible
+  runners support it. Pi and DSH add `braid_pause`, panel controls (Pi `/braid`
+  key `p`; DSH **Pause job** and **Pause this execution**), and `braid_resume({ jobId })`
+  for a paused job. A pause by the user does not wake the parent; it gets a
+  notice with its next turn, which asks it not to resume unless the user asks.
+  In Pi print mode, a job held only by pauses is stalled: one warning, then
+  cancellation. See [compatibility](docs/compatibility.md#pausing-running-executions-unreleased)
+  for type-level changes such as new event types.
 
 ## 0.4.0 — 2026-10-16
 

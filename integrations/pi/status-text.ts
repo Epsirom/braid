@@ -58,6 +58,7 @@ function executionLine(execution: NodeResult & Partial<Pick<NodeExecution, "iter
   const parts = [execution.executionId ?? "(no execution)", `node ${execution.id}`];
   if (execution.iteration) parts.push(`iteration ${execution.iteration}`);
   parts.push(execution.skipReason ? `${execution.status} (${execution.skipReason})` : execution.status);
+  if (execution.suspension) parts.push(`${execution.suspension.state}, paused by ${execution.suspension.source}`);
   if (execution.latencyMs !== undefined) parts.push(duration(execution.latencyMs));
   if (execution.decision) parts.push(`decision ${execution.decision}`);
   if (execution.error) parts.push(failure(execution.error));
@@ -70,8 +71,22 @@ export function formatJobList(jobs: readonly Pick<JobSnapshot, "jobId" | "handle
     ...jobs.map(job => `- ${job.handle} · ${job.status} · started ${iso(job.createdAt)} · id ${job.jobId}\n  Goal: ${job.goal}`)].join("\n");
 }
 
-function control(execution: Pick<BraidSnapshot, "status" | "revision" | "pausedExecutionIds"> | undefined): string {
-  return execution ? `Graph ${execution.status} · revision ${execution.revision} · paused executions: ${ids(execution.pausedExecutionIds)}` : "Graph not started";
+type Control = Pick<BraidSnapshot, "status" | "revision" | "pausedExecutionIds"> & Partial<Pick<BraidSnapshot, "suspendedExecutionIds" | "pause">>;
+
+/** Held (pauseAfter) and suspended executions are resumed the same way; a job pause has its own resume. */
+function control(execution: Control | undefined): string {
+  if (!execution) return "Graph not started";
+  const parts = [`Graph ${execution.status}`, `revision ${execution.revision}`, `paused executions: ${ids(execution.pausedExecutionIds)}`];
+  if (execution.suspendedExecutionIds?.length) parts.push(`suspended executions: ${ids(execution.suspendedExecutionIds)}`);
+  if (execution.pause) parts.push(`job paused by ${execution.pause.source} at ${iso(execution.pause.pausedAt)}`);
+  return parts.join(" · ");
+}
+
+/** Paused-by-user work is the user's call: say so wherever the parent sees it. */
+const USER_PAUSE_NOTE = "The user paused this; do not resume it unless the user asks.";
+
+function userPaused(execution: Control | undefined, executions: readonly NodeResult[]): boolean {
+  return execution?.pause?.source === "user" || executions.some(item => item.suspension?.source === "user");
 }
 
 /** The submission receipt. The caller already has the graph it submitted. */
@@ -81,11 +96,29 @@ export function formatReceipt(job: JobSnapshot, message: string): string {
 
 export function formatUpdate(job: JobSnapshot): string {
   return [`Braid job ${job.handle} updated to revision ${job.execution!.revision}.`,
-    `Paused executions: ${ids(job.execution!.pausedExecutionIds)}`, "Current graph:", formatGraph(job.execution!.graph)].join("\n");
+    `Paused executions: ${ids(job.execution!.pausedExecutionIds)}`,
+    ...job.execution!.suspendedExecutionIds?.length ? [`Suspended executions: ${ids(job.execution!.suspendedExecutionIds)}`] : [],
+    "Current graph:", formatGraph(job.execution!.graph)].join("\n");
 }
 
 export function formatResume(job: JobSnapshot): string {
-  return `Braid job ${job.handle} resumed at revision ${job.execution!.revision}. Still paused: ${ids(job.execution!.pausedExecutionIds)}.`;
+  const execution = job.execution!;
+  return `Braid job ${job.handle} resumed at revision ${execution.revision}. Still paused: ${ids(execution.pausedExecutionIds)}. ` +
+    `Still suspended: ${ids(execution.suspendedExecutionIds)}.${execution.pause ? ` The job itself is still paused by ${execution.pause.source}.` : ""}`;
+}
+
+/** The result of braid_pause: what is pausing now and how to continue. */
+export function formatPause(job: JobSnapshot, executionIds?: readonly string[]): string {
+  const execution = job.execution!;
+  const pausing = Object.values(execution.executions).filter(item => item.suspension?.state === "pausing").map(item => item.executionId);
+  return [
+    executionIds ? `Braid job ${job.handle}: pause requested for ${ids(executionIds)}.` : `Braid job ${job.handle} paused: no new executions start, and running ones pause.`,
+    control(execution),
+    `Pausing (each stops before its next model request; a running tool finishes first): ${ids(pausing)}.`,
+    "Suspended executions keep their conversation and workspace and release their concurrency slot. The node timeout stops while suspended; the graph timeout keeps running. " +
+      (executionIds ? `Continue with braid_resume({"jobId":"${job.handle}","expectedRevision":${execution.revision},"executionIds":[...]}).`
+        : `Continue with braid_resume({"jobId":"${job.handle}"}).`),
+  ].join("\n");
 }
 
 export function formatActivity(activity: ExecutionActivity, now: number, jobId: string): string {
@@ -125,6 +158,7 @@ export interface NodeStatus {
 /** A focused read: the current control state, then one execution in full. */
 export function formatNodeStatus({ job, node, activity, now }: NodeStatus): string {
   const lines = [`Braid job ${job.handle} · ${job.status} · ${control(job.execution)}`,
+    ...node.suspension ? [`Execution is ${node.suspension.state}, paused by ${node.suspension.source}${node.suspension.suspendedAt !== undefined ? ` since ${iso(node.suspension.suspendedAt)}` : ""}.${node.suspension.source === "user" ? ` ${USER_PAUSE_NOTE}` : ""}`] : [],
     `Execution ${node.executionId ?? "(none yet)"} · node ${node.id}${node.node ? ` (${node.node.type})` : ""}${node.iteration ? ` · iteration ${node.iteration}` : ""} · ${node.skipReason ? `${node.status} (${node.skipReason})` : node.status}`];
   const timing = [node.startedAt !== undefined && `started ${iso(node.startedAt)}`, node.latencyMs !== undefined && `took ${duration(node.latencyMs)}`,
     node.model && `model ${node.model}`, node.usage && `usage input ${node.usage.inputTokens}, output ${node.usage.outputTokens}`].filter(Boolean);
@@ -145,6 +179,7 @@ export function formatJobStatus(job: JobSnapshot, now: number): string {
   const state = job.result ?? job.execution;
   // Control fields lead: a long goal or output must not push them out of a truncated preview.
   const header = [`Braid job ${job.handle} · ${job.status}`, `ID: ${job.jobId}`, control(job.execution)];
+  if (job.status === "running" && userPaused(job.execution, Object.values(job.execution?.executions ?? {}))) header.push(USER_PAUSE_NOTE);
   const error = job.error ?? (job.result?.error ? failure(job.result.error) : job.execution?.error ? failure(job.execution.error) : undefined);
   if (error) header.push(`Error: ${error}`);
   const usage = formatUsage(job.usage);

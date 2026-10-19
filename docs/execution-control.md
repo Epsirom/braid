@@ -104,10 +104,62 @@ even at a leaf. Independent branches continue. Pi sends a pause reminder;
 either on its own or in the same transaction as a graph update. Removing a paused
 node definition does not discard its gate: explicitly resume or cancel it.
 
-A job accepts updates while running or waiting. Once no work or gates remain,
-it enters finalization and rejects further updates. Completed jobs cannot be
-reopened. These are in-memory controls; there is no restart or crash recovery of
-the scheduler itself.
+## Pausing running executions
+
+`pauseAfter` holds an execution after it finishes. To stop an execution while it
+is still running, without losing its work, suspend it:
+
+```ts
+const run = startBraid(graph, { runner }); // runner.pausable must be true
+const state = run.pause([executionId], { source: "user" });
+// state.executions[executionId].suspension.state === "pausing"
+// ...later, once it is suspended:
+run.resume([executionId], run.snapshot().revision);
+```
+
+| State (`execution.suspension.state`) | Meaning |
+| --- | --- |
+| `pausing` | Requested; the execution keeps running until its runner's next checkpoint and still holds its concurrency slot |
+| `suspended` | Stopped at a checkpoint; its slot is released for other work |
+| `resuming` | Resumed and waiting for a free slot; it gets one before any new admission |
+
+A pausable runner sets `pausable: true` on the runner function and awaits
+`request.checkpoint()` before each model request. The Pi, DSH, and
+OpenAI-compatible adapters do this. The checkpoint resolves at once unless a pause
+was requested; then the execution suspends there and the call resolves after
+resume, so the worker continues the same conversation with its tool budgets,
+workspace, and decision or merge state. A running tool is never interrupted, and
+an execution whose final model request is already in flight completes normally.
+`pause` rejects unknown, settled, or not-yet-admitted executions, and throws for a
+runner without checkpoints. Pausing a `pausing` or `suspended` execution changes
+nothing; resuming a `pausing` execution withdraws the request.
+
+`resume` and `update({ resume })` accept both held and suspended execution IDs.
+`suspendedExecutionIds` lists suspended and resuming executions; each execution's
+`suspension` records the caller-supplied `source` label (default `"caller"`).
+Events: `execution_suspending` when requested, `execution_suspended` at the
+checkpoint, and `execution_resumed` when the execution continues (immediately for
+a withdrawn request, otherwise once it has a slot).
+
+`pauseRun({ source })` pauses the whole run: no new executions are admitted, not
+even skipped records, and every running execution is paused. Suspension releases
+slots, so stopping admission is what keeps freed slots from starting other nodes.
+`resumeRun()` admits again and resumes only the executions `pauseRun` paused;
+an execution paused separately stays suspended. With a runner that cannot pause,
+`pauseRun` still stops admission. Events: `graph_paused` and `graph_resumed`; the
+snapshot carries `pause: { source, pausedAt }`.
+
+The node timeout stops while an execution is suspended or waiting for a slot.
+Core moves `request.deadlines.node` later in place, so runners must read it each
+time. The graph timeout keeps running, so a pause that is never resumed ends the
+run with `GRAPH_TIMEOUT`; with an unlimited graph timeout it waits until resumed
+or cancelled. Cancellation and run failure end suspended executions as failed.
+A paused run with nothing running reports `status: "waiting"` and does not finish.
+
+A job accepts updates while running or waiting. Once no work, gates, suspended
+executions, or run pause remain, it enters finalization and rejects further
+updates. Completed jobs cannot be reopened. These are in-memory controls,
+including suspensions; there is no restart or crash recovery of the scheduler itself.
 
 ## Workspaces and merge operations
 

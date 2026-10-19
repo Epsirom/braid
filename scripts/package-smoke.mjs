@@ -135,7 +135,7 @@ try {
     assert.equal(flags.get('braid-blocking'), false);
     assert.ok(flags.has('braid-ci-timeout'));
     assert.equal(commands.has('braid:blocking'), false);
-    assert.deepEqual([...tools.keys()].sort(), ['braid', 'braid_cancel', 'braid_finish', 'braid_resume', 'braid_status', 'braid_update']);
+    assert.deepEqual([...tools.keys()].sort(), ['braid', 'braid_cancel', 'braid_finish', 'braid_pause', 'braid_resume', 'braid_status', 'braid_update']);
     const result = await braid({ goal: 'smoke', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] }, { runner: async () => ({ output: 'PASS' }) });
     assert.equal(result.terminalOutputs.a.output, 'PASS');
     assert.equal(result.status, 'completed');
@@ -225,7 +225,7 @@ try {
     } });
     try {
       for (const tool of createBraidTools(() => jobs, () => ({}))) ctx.tools.register(tool);
-      assert.equal(ctx.tools.schemas().length, 5);
+      assert.equal(ctx.tools.schemas().length, 6);
       const job = jobs.start({ goal: 'packed', nodes: [{ type: 'execute', id: 'a', prompt: 'test' }], edges: [] }, {}, { cwd: process.cwd(), model: 'fake/model' });
       await jobs.wait(job.handle);
       assert.equal(jobs.getNode(job.handle, 'a').output, 'packed DSH worker');
