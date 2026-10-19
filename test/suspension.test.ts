@@ -19,8 +19,11 @@ import { deferred } from "./helpers.js";
 const node = (id: string) => ({ type: "execute" as const, id, prompt: id });
 const input = (ids: string[], edges: BraidInput["edges"] = []): BraidInput => ({ goal: "pause", nodes: ids.map(node), edges });
 const pausable = (run: (request: ModelRequest) => Promise<ModelResponse>): ModelRunner => Object.assign(run, { pausable: true });
-const until = async (condition: () => boolean) => {
-  for (let i = 0; i < 1000 && !condition(); i++) await new Promise(resolve => setImmediate(resolve));
+// Bound the wait by time, not ticks: workspace setup awaits file-system calls,
+// which can take many event-loop turns on slow runners (notably Windows).
+const until = async (condition: () => boolean, timeoutMs = 5_000) => {
+  const deadline = performance.now() + timeoutMs;
+  while (!condition() && performance.now() < deadline) await new Promise(resolve => setImmediate(resolve));
   assert.ok(condition(), "condition not reached");
 };
 async function cwd(t: TestContext) {
