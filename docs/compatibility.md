@@ -126,9 +126,10 @@ Version 0.4 changes how the Pi extension behaves in print and JSON modes:
   jobs and sets exit status 1. Resume or cancel paused executions before the
   parent finishes. `--braid-ci-timeout` and a final `braid_finish` failure also
   exit 1.
-- Blocking mode (`--braid-blocking`, `/braid:blocking`) still works but is
-  deprecated and will be removed in 0.5.0. Drop it: print and JSON runs now wait
-  for background jobs without blocking each tool call.
+- Blocking mode (`--braid-blocking`) still works but is deprecated and will be
+  removed in 0.5.0. Drop it: print and JSON runs now wait for background jobs
+  without blocking each tool call. The `/braid:blocking` session command was
+  removed after 0.4.0.
 
 No graph field, result shape, or event schema migration is required, and DSH
 behavior is unchanged.
