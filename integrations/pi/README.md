@@ -354,6 +354,11 @@ A flowchart wider than the terminal is cropped to the terminal width around the
 first running node, or from its left edge; a `[chart 1–76 of 245 cols]` line
 shows the visible columns.
 
+For loops, a forward edge opposite a feedback edge is drawn dotted, while the
+retry feedback edge stays solid. For example, `/braid:review` shows the direct
+`scope → check` handoff dotted and `check → scope` (`retry`) solid. All edges and
+choice labels remain visible; runtime dependencies and handoffs are unchanged.
+
 Press `v` to select a node: the arrow keys move a `◆` marker through the
 flowchart (starting at a running node), and the view pans horizontally and
 scrolls vertically to keep the selected node in sight. If the flowchart cannot be

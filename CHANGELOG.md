@@ -37,6 +37,13 @@
   cancellation. See [compatibility](docs/compatibility.md#pausing-running-executions-unreleased)
   for type-level changes such as new event types.
 
+### Fixes
+
+- Pi loop charts draw forward handoffs opposite a retry edge dotted and keep
+  the feedback edge solid, distinguishing the two directions in `/braid:review`
+  and user-defined graphs with the same shape. All dependencies remain visible,
+  and runtime handoffs are unchanged.
+
 ## 0.4.0 — 2026-10-16
 
 ### Features and breaking changes

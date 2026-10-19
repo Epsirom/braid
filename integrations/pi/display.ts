@@ -11,6 +11,7 @@ import {
 import {
   formatActivityStatus,
   type BraidResult,
+  type Edge,
   type ExecutionActivity,
   type ExecutionError,
   type ExecutionEvent,
@@ -28,7 +29,7 @@ export interface BraidLiveState {
   error?: ExecutionError;
   nodes: Record<string, NodeResult>;
   nodeTypes: Record<string, "execute" | "decision" | "merge" | "integrate">;
-  edges: Array<{ from: string; to: string; choice?: string }>;
+  edges: Edge[];
   progress: Record<string, PiNodeProgress>;
   events: ExecutionEvent[];
   latencyMs: number;
@@ -138,7 +139,7 @@ function compact(value: unknown, max = 90): string {
 function graphParts(result: BraidResult | BraidLiveState): {
   nodes: Record<string, NodeResult>;
   nodeTypes: Record<string, "execute" | "decision" | "merge" | "integrate">;
-  edges: Array<{ from: string; to: string; choice?: string }>;
+  edges: Edge[];
   progress: Record<string, PiNodeProgress>;
 } {
   if ("nodeTypes" in result) return result;
@@ -147,7 +148,7 @@ function graphParts(result: BraidResult | BraidLiveState): {
     result.nodes,
   );
   const nodeTypes: Record<string, "execute" | "decision" | "merge" | "integrate"> = Object.create(null);
-  const edges: Array<{ from: string; to: string; choice?: string }> = [];
+  const edges: Edge[] = [];
   for (const event of result.events) {
     if (event.type === "graph_updated") {
       edges.splice(0, edges.length, ...event.graph.edges);
@@ -174,6 +175,8 @@ function graphParts(result: BraidResult | BraidLiveState): {
         from: event.from,
         to: event.to,
         ...(event.choice ? { choice: event.choice } : {}),
+        ...(event.feedback ? { feedback: event.feedback } : {}),
+        ...(event.executionId ? { executionId: event.executionId } : {}),
       });
     }
   }
@@ -256,6 +259,7 @@ function mermaidLabelLines(
 
 function mermaidSource(result: BraidResult | BraidLiveState, selected?: string): string {
   const parts = graphParts(result);
+  const feedbackSources = new Map(parts.edges.filter(edge => edge.feedback !== undefined).map(edge => [edge.to, edge.from]));
   const ids = Object.keys(parts.nodes);
   const names = new Map(ids.map((id, index) => [id, `n${index}`]));
   const escapeMermaidText = (value: string) =>
@@ -285,8 +289,10 @@ function mermaidSource(result: BraidResult | BraidLiveState, selected?: string):
     );
   }
   for (const edge of parts.edges) {
+    // Distinguish the direct data handoff from its reverse retry edge.
+    const arrow = edge.feedback === undefined && feedbackSources.get(edge.from) === edge.to ? "-.->" : "-->";
     lines.push(
-      `  ${names.get(edge.from)} -->${edge.choice ? `|${escapeMermaidText(edge.choice)}|` : ""} ${names.get(edge.to)}`,
+      `  ${names.get(edge.from)} ${arrow}${edge.choice ? `|${escapeMermaidText(edge.choice)}|` : ""} ${names.get(edge.to)}`,
     );
   }
   return lines.join("\n");
@@ -491,6 +497,8 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
       from: event.from,
       to: event.to,
       ...(event.choice ? { choice: event.choice } : {}),
+      ...(event.feedback ? { feedback: event.feedback } : {}),
+      ...(event.executionId ? { executionId: event.executionId } : {}),
     });
   if (state.events.length > MAX_VISIBLE_EVENTS) state.events.shift();
   if (event.type === "graph_completed" || event.type === "graph_failed") {
