@@ -161,11 +161,6 @@ fixes only evidenced, in-scope P0/P1 problems in an isolated worktree, then runs
 focused validation. Optional P2 polish is reported. A product, scope, or
 architecture decision stops the loop for user input.
 
-The flow is scope → three parallel reviews → check, with retry returning from
-check to scope. The runtime forwards scope's original handoff with review-1's
-report, including the pinned review scope, cumulative fixes, and validation
-records. Reviewers do not rewrite this handoff; a missing source fails the node.
-
 The graph enforces a fixed maximum of **three review rounds**, including the
 first, and **two fix passes**. The final round reports remaining issues without
 making further edits; reaching the cap does not mean the review is clean.
@@ -330,6 +325,12 @@ leaves jobs running. In RPC or noninteractive modes, use `braid_status`.
 A flowchart wider than the terminal is cropped to the terminal width around the
 first running node, or from its left edge; a `[chart 1–76 of 245 cols]` line
 shows the visible columns.
+
+For loops, the chart omits an unconditional entry-to-decision shortcut when an
+alternate unconditional path already connects those nodes. This leaves one retry
+return lane in graphs such as `/braid:review`. The runtime still delivers all
+direct handoffs. Labelled edges, historical dependencies, and required forward
+edges remain visible.
 
 Press `v` to select a node: the arrow keys move a `◆` marker through the
 flowchart (starting at a running node), and the view pans horizontally and

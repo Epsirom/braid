@@ -71,7 +71,6 @@ for (const mode of ["historical range", "latest commit"] as const) {
     assert.match(reviewer, /pinned original baseline and target endpoint/);
     assert.match(reviewer, /initial job snapshot to YOUR workspace.snapshotCommit/);
     assert.match(reviewer, /attribute findings only to the original target diff or cumulative fix diff/);
-    assert.match(check.prompt as string, /scope's original handoff forwarded by the runtime/);
     assert.match(check.prompt as string, /original baseline, original target endpoint, initial job snapshot, and target\/file scope unchanged/);
   });
 }

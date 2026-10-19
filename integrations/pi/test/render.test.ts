@@ -29,7 +29,7 @@ function renderResult(
     theme,
   );
 }
-import type { BraidResult, ExecutionEvent } from "@chrok/braid";
+import type { BraidInput, BraidResult, Edge, ExecutionEvent } from "@chrok/braid";
 
 const theme = {
   fg: (color: string, value: string) => `<${color}>${value}</${color}>`,
@@ -297,6 +297,64 @@ test("the built-in review chart renders one retry return lane", async t => {
   const chart = lines(renderGraphResult(live, false, false, plainTheme), 1_000);
   assert.equal(chart.match(/◄/g)?.length, 1, chart);
   assert.match(chart, /retry/);
+});
+
+test("loop charts simplify redundant forward shortcuts without changing dependencies", () => {
+  const graph: BraidInput = {
+    goal: "loop",
+    nodes: [
+      { type: "decision", id: "start", prompt: "start", choices: ["inspect", "direct"] },
+      { type: "execute", id: "inspect", prompt: "inspect" },
+      { type: "decision", id: "route", prompt: "route", choices: ["again", "done"] },
+      { type: "execute", id: "end", prompt: "end" },
+    ],
+    edges: [
+      { from: "start", to: "inspect" }, { from: "inspect", to: "route" },
+      { from: "start", to: "route" },
+      { from: "route", to: "start", choice: "again", feedback: "loop" },
+      { from: "route", to: "end", choice: "done" },
+    ],
+    loops: [{ id: "loop", entry: "start", maxIterations: 3 }],
+  };
+  const events: ExecutionEvent[] = [
+    ...graph.nodes.map((node, index) => ({ type: "node_created" as const, nodeId: node.id, nodeType: node.type, sequence: index, timestamp: 0 })),
+    ...graph.edges.map((edge, index) => ({ type: "edge_created" as const, ...edge, sequence: graph.nodes.length + index, timestamp: 0 })),
+  ];
+  const live = createLiveState();
+  for (const event of events) applyEvent(live, event);
+  const updated: ExecutionEvent = { type: "graph_updated", graph, sequence: 10, timestamp: 0, revision: 1 };
+  const updatedLive = createLiveState();
+  applyEvent(updatedLive, updated);
+  const plainTheme = { fg: (_color: string, value: string) => value, bg: (_color: string, value: string) => value, bold: (value: string) => value };
+  const chart = (details: BraidToolDetails) => {
+    const rendered = renderGraphResult(details, false, false, plainTheme).render(1_000);
+    return rendered.slice(rendered.findIndex(line => /[┌╭]/.test(line))).join("\n");
+  };
+  const withoutShortcut = (edges: readonly Edge[]) => edges.filter(edge => edge.from !== "start" || edge.to !== "route");
+  const expected = chart({ ...live, edges: withoutShortcut(graph.edges) });
+  for (const details of [live, updatedLive, { ...result, nodes: live.nodes, events }, { ...result, nodes: live.nodes, events: [updated] }]) {
+    const rendered = chart(details);
+    assert.equal(rendered, expected);
+    for (const node of graph.nodes) assert.ok(rendered.includes(node.id));
+  }
+  assert.deepEqual(live.edges, graph.edges, "rendering retains every dependency and its metadata");
+  assert.deepEqual(updatedLive.edges, graph.edges);
+
+  const cases: Array<{ name: string; edges: Edge[] }> = [
+    { name: "labelled shortcut", edges: graph.edges.map(edge => edge.from === "start" && edge.to === "route" ? { ...edge, choice: "direct" } : edge) },
+    { name: "historical shortcut", edges: graph.edges.map(edge => edge.from === "start" && edge.to === "route" ? { ...edge, executionId: "old-start" } : edge) },
+    { name: "conditional alternative", edges: graph.edges.map(edge => edge.to === "inspect" ? { ...edge, choice: "inspect" } : edge) },
+    { name: "historical alternative", edges: graph.edges.map(edge => edge.to === "inspect" ? { ...edge, executionId: "old-start" } : edge) },
+    { name: "required forward edge", edges: graph.edges.filter(edge => edge.from !== "inspect" && edge.to !== "inspect") },
+    { name: "ordinary DAG shortcut", edges: graph.edges.filter(edge => !edge.feedback) },
+  ];
+  for (const { name, edges } of cases) {
+    assert.notEqual(chart({ ...live, edges }), chart({ ...live, edges: withoutShortcut(edges) }), name);
+    const fromEvents = createLiveState();
+    for (const node of events.filter(event => event.type === "node_created")) applyEvent(fromEvents, node);
+    for (const edge of edges) applyEvent(fromEvents, { type: "edge_created", ...edge, sequence: 20, timestamp: 0 });
+    assert.deepEqual(fromEvents.edges, edges, name);
+  }
 });
 
 test("a too-wide flowchart is cropped to the terminal width around a running node", () => {

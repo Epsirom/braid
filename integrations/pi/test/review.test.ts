@@ -84,9 +84,9 @@ test("/braid:review registers a bounded background graph and trims its target", 
   assert.match(input.goal, /HEAD~2\.\.HEAD/);
   assert.doesNotMatch(input.goal, /  HEAD/);
   assert.deepEqual(input.loops, [{ id: "review-loop", entry: "scope", maxIterations: 3 }]);
-  assert.deepEqual(input.edges.filter(edge => edge.to === "check").map(edge => edge.from).sort(), ["review-1", "review-2", "review-3"]);
+  assert.deepEqual(input.edges.filter(edge => edge.to === "check").map(edge => edge.from).sort(), ["review-1", "review-2", "review-3", "scope"]);
   assert.ok(input.nodes.every(node => node.requireSuccess));
-  assert.deepEqual(options, { maxConcurrency: 3, maxExecutions: 16, forwardPredecessor: { from: "scope", through: "review-1" } });
+  assert.deepEqual(options, { maxConcurrency: 3, maxExecutions: 16 });
   assert.equal(submittedContext, ctx);
   assert.equal(messages.length, 1);
   assert.equal(messages[0]![0].customType, "braid-review-started");
@@ -139,8 +139,8 @@ test("/braid:review fixes one checkpoint, re-reviews it, and preserves staged an
     if (data.nodeId === "check") {
       assert.equal(data.workspace.mode, "read-only");
       assert.ok(!worker.tools!.some(tool => ["write", "edit", "bash", "powershell"].includes(tool.name)));
-      assert.deepEqual(data.predecessors.map(predecessor => predecessor.nodeId).sort(), ["review-1", "review-2", "review-3"]);
-      const handoff = data.predecessors.find(predecessor => predecessor.nodeId === "review-1")!.output;
+      assert.deepEqual(data.predecessors.map(predecessor => predecessor.nodeId).sort(), ["review-1", "review-2", "review-3", "scope"]);
+      const handoff = data.predecessors.find(predecessor => predecessor.nodeId === "scope")!.output;
       assert.ok(handoff.includes(`Scope round ${round};`), handoff);
       if (round === 2) assert.match(handoff, /Fixed code\.txt; validation passed/);
       assert.equal(new Set(data.predecessors.map(predecessor => predecessor.workspace!.checkpointCommit)).size, 1);
@@ -207,7 +207,7 @@ test("/braid:review preserves scope's validation record when reviewers omit or a
   const result = jobs.get(job.handle)!.result!;
   assert.equal(result.status, "completed", JSON.stringify(result));
   assert.ok(checkInput);
-  assert.ok(checkInput.predecessors.some(predecessor => predecessor.output.includes(handoff)),
+  assert.equal(checkInput.predecessors.find(predecessor => predecessor.nodeId === "scope")!.output, handoff,
     "check must receive the original scope handoff even when no reviewer repeats it correctly");
 });
 

@@ -23,10 +23,10 @@
 
 ### Fixes
 
-- Pi `/braid:review` removes the direct scope-to-check dependency, leaving a
-  single retry return edge in the loop chart. The runtime forwards scope's
-  original handoff with review-1's report without model rewriting; a missing
-  source stops the review before integration.
+- Pi loop charts omit redundant unconditional forward shortcuts opposite a
+  retry edge, leaving a single return lane in `/braid:review` and user-defined
+  graphs with the same shape. Runtime dependencies and original handoffs are
+  preserved.
 
 ## 0.4.0 — 2026-10-16
 

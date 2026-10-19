@@ -35,8 +35,6 @@ export interface JobOptions {
   maxToolRounds?: number;
   maxToolCalls?: number;
   maxModelRetries?: number;
-  /** Copy an upstream output through one node without asking its model to repeat it. */
-  forwardPredecessor?: { from: string; through: string };
 }
 
 export interface JobSnapshot {
@@ -205,14 +203,7 @@ export class BraidJobs {
           return async request => {
             try {
               await nextTurn();
-              const forward = options.forwardPredecessor?.through === request.node.id ? options.forwardPredecessor : undefined;
-              const predecessor = forward && request.predecessors.find(value => value.nodeId === forward.from);
-              if (forward && !predecessor) throw new Error(`Cannot forward missing predecessor '${forward.from}' through '${forward.through}'`);
-              const response = await invoke(request);
-              return predecessor ? {
-                ...response,
-                output: `Forwarded handoff from ${predecessor.nodeId}:\n${predecessor.output}\n\nReport from ${request.node.id}:\n${response.output}`,
-              } : response;
+              return await invoke(request);
             } finally {
               job.activity.workerFinished(request.execution.executionId);
               const executionId = request.execution.executionId;

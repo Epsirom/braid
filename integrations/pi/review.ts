@@ -33,7 +33,7 @@ Choose three distinct, concrete review angles for this change (usually correctne
           })),
           {
             type: "decision", id: "check", workspace: "read-only", requireSuccess: true, choices: ["retry", "done"],
-            prompt: `Read scope's original handoff forwarded by the runtime before review-1's report, and synthesize all three reviews. Reviewers' summaries cannot replace the original scope and validation records. Verify and deduplicate findings against actual files in YOUR workspace.snapshotCommit, which includes scope's completed fixes; separate valid P0/P1 fixes worth doing now, P2 report-only notes, and feedback to ignore/defer with reasons. Do not blindly apply suggestions or add optional polish.
+            prompt: `Synthesize scope and all three reviews. Verify and deduplicate findings against actual files in YOUR workspace.snapshotCommit, which includes scope's completed fixes; separate valid P0/P1 fixes worth doing now, P2 report-only notes, and feedback to ignore/defer with reasons. Do not blindly apply suggestions or add optional polish.
 You are read-only and cannot edit files or run tests. If the target is unavailable, review-only was requested, nothing actionable remains, fixes are unavailable outside Git, or a fix requires an unapproved product/scope/architecture decision, call decide with done. Report the exact stop reason and unresolved findings.
 If the previous fix pass failed validation or made no material progress, stop with done and prohibit integration of unvalidated or unreviewed fixes; do not repeatedly retry the same findings.
 There are at most ${maxRounds} review rounds, including the first. If execution.iteration >= ${maxRounds}, call decide with done; distinguish round-limit exhaustion from a clean review. Never choose retry in the final round.
@@ -52,15 +52,13 @@ Inspect the final diff and run or confirm focused validation without changing co
             { from: "scope", to: `review-${slot}` },
             { from: `review-${slot}`, to: "check" },
           ]),
+          { from: "scope", to: "check" },
           { from: "check", to: "scope", choice: "retry", feedback: "review-loop" },
           { from: "check", to: "apply", choice: "done" },
         ],
         loops: [{ id: "review-loop", entry: "scope", maxIterations: maxRounds }],
       };
-      const job = jobs.start(input, {
-        maxConcurrency: 3, maxExecutions: maxRounds * 5 + 1,
-        forwardPredecessor: { from: "scope", through: "review-1" },
-      }, ctx);
+      const job = jobs.start(input, { maxConcurrency: 3, maxExecutions: maxRounds * 5 + 1 }, ctx);
       pi.sendMessage({
         customType: "braid-review-started", display: true,
         content: `Review started as Braid ${job.handle}: ${target}\nUp to ${maxRounds} parallel review rounds and ${maxRounds - 1} fix passes. Only reviewed fixes are integrated. Open /braid ${job.handle} for progress, or braid_cancel to stop. Wait for the completion reminder, then retrieve braid_status({"jobId":"${job.handle}"}) and summarize; do not start a replacement review loop.`,
