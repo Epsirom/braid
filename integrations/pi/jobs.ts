@@ -128,7 +128,7 @@ export class BraidJobs {
     if (this.disposed) throw new Error("Braid session has closed");
     validateGraph(input);
     if (blocking && input.nodes.some(node => node.pauseAfter))
-      throw new Error("Blocking Braid jobs cannot use pauseAfter; remove it or disable blocking with /braid:blocking off.");
+      throw new Error("Blocking Braid jobs cannot use pauseAfter; remove it or start Pi without --braid-blocking.");
     const snapshot = structuredClone(input);
     const settings = { ...options };
     const model = ctx.model

@@ -118,7 +118,7 @@ export const BRAID_ASYNC_GUIDANCE =
   "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Use braid_status({jobId, executionId}) to retrieve the exact execution; nodeId selects the latest instance. Use pauseAfter=true to hold outgoing scheduling. Definitions can always be changed with braid_update using expectedRevision; existing executions retain their captured inputs. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes.";
 
 export const BRAID_BLOCKING_DEPRECATION =
-  "Blocking mode (--braid-blocking, /braid:blocking) is deprecated and will be removed in 0.5.0. " +
+  "Blocking mode (--braid-blocking) is deprecated and will be removed in 0.5.0. " +
   "Print and JSON runs (pi -p) now wait for background Braid jobs; call braid_finish to report the outcome.";
 
 /** Short reminder repeated in every submission receipt. */
@@ -127,7 +127,7 @@ export const BRAID_WAIT_REMINDER =
   "Do not sleep or poll in a loop to wait for this job. Retrieve its results with braid_status after the reminder.";
 
 const BRAID_BLOCKING_GUIDANCE =
-  "In blocking mode (enabled by --braid-blocking or /braid:blocking on), braid waits for the entire graph and workspace cleanup, then returns final status, outputs, and usage directly. " +
+  "In blocking mode (enabled by --braid-blocking), braid waits for the entire graph and workspace cleanup, then returns final status, outputs, and usage directly. " +
   "Foreground cancellation cancels the submitted job and waits for cleanup. Completion reminders are suppressed unless the job is cancelled; cancellation reminders preserve its handle and access to partial results. " +
   "Do not set pauseAfter=true in blocking mode: it requires a later resume call and is rejected. Use braid_status for focused reads, diagnosis, or retrieving an existing job after cancellation or a wait/result error.";
 
@@ -444,8 +444,7 @@ export default function braidExtension(pi: ExtensionAPI) {
     type: "boolean",
     default: false,
   });
-  let sessionBlocking: boolean | undefined;
-  const blocking = () => sessionBlocking ?? (pi.getFlag("braid-blocking") === true);
+  const blocking = () => pi.getFlag("braid-blocking") === true;
   let warnedBlocking = false;
   const warnBlocking = (ctx: ExtensionContext): void => {
     if (warnedBlocking) return;
@@ -454,16 +453,6 @@ export default function braidExtension(pi: ExtensionAPI) {
     if (ctx.hasUI) ctx.ui.notify(BRAID_BLOCKING_DEPRECATION, "warning");
     else console.error(`Braid: ${BRAID_BLOCKING_DEPRECATION}`);
   };
-  pi.registerCommand("braid:blocking", {
-    description: "Deprecated, removed in 0.5.0: set blocking mode for new braid tool calls: /braid:blocking [on|off]; omit to show the current mode",
-    handler: async (args, ctx) => {
-      const setting = args.trim().toLowerCase();
-      if (setting === "on" || setting === "off") sessionBlocking = setting === "on";
-      else if (setting) throw new Error("Usage: /braid:blocking [on|off]");
-      if (setting === "on") warnBlocking(ctx);
-      ctx.ui.notify(`Braid blocking mode: ${blocking() ? "on" : "off"}. Applies to new braid tool calls.`, "info");
-    },
-  });
   const pending = new Map<string, Parameters<ExtensionAPI["sendMessage"]>[0]>();
   const remind = (message: Parameters<ExtensionAPI["sendMessage"]>[0]): void => {
     try {
@@ -529,7 +518,7 @@ export default function braidExtension(pi: ExtensionAPI) {
     disposeWidget();
   });
   pi.on("before_agent_start", (event, ctx) => {
-    if (pi.getFlag("braid-blocking") === true) warnBlocking(ctx);
+    if (blocking()) warnBlocking(ctx);
     return {
       systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${blocking() ? "Blocking mode is enabled for this session. " + BRAID_BLOCKING_GUIDANCE : BRAID_ASYNC_GUIDANCE}${isSingleShot(ctx) ? `\n${BRAID_DRAIN_GUIDANCE}\n${BRAID_FINISH_GUIDANCE}` : ""}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
     };
