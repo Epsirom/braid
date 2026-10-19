@@ -134,6 +134,7 @@ try {
     });
     assert.equal(flags.get('braid-blocking'), false);
     assert.ok(flags.has('braid-ci-timeout'));
+    assert.equal(commands.has('braid:blocking'), false);
     assert.deepEqual([...tools.keys()].sort(), ['braid', 'braid_cancel', 'braid_finish', 'braid_resume', 'braid_status', 'braid_update']);
     const result = await braid({ goal: 'smoke', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] }, { runner: async () => ({ output: 'PASS' }) });
     assert.equal(result.terminalOutputs.a.output, 'PASS');
@@ -156,7 +157,7 @@ try {
       const final = await tools.get('braid_status').execute('status', { jobId: submitted.details.jobId });
       assert.equal(final.details.result.status, 'completed');
       assert.equal(final.details.result.terminalOutputs.a.output, 'PI PASS');
-      await commands.get('braid:blocking').handler('on', { ui: { notify() {} } });
+      flags.set('braid-blocking', true);
       const blocking = await tools.get('braid').execute('blocking', { goal: 'packed blocking', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] }, undefined, undefined, context);
       assert.equal(blocking.details.status, 'completed');
       assert.equal(blocking.details.result.terminalOutputs.a.output, 'PI PASS');

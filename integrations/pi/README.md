@@ -31,8 +31,6 @@ It registers:
 - `braid_finish` — print/JSON runs only: record the run outcome with
   `{ "status": "success" | "failure", "summary": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
-- `/braid:blocking [on|off]` — deprecated, removed in 0.5.0: enable or disable
-  blocking for new `braid` tool calls; omit the argument to show the current mode.
 - `/braid:review [target or focus]` — run a bounded parallel review/fix loop.
 - `/braid:clear` — clear the progress widget above the editor; run it again while
   the widget is empty to restore what was cleared.
@@ -109,12 +107,13 @@ to start new runs after settling should bind with another mode, for example
 
 ### Blocking mode (deprecated)
 
-> **Deprecated:** `--braid-blocking` and `/braid:blocking` will be removed in
-> 0.5.0. Print and JSON runs now wait for background jobs (see above), which keeps
-> `pauseAfter`, reminders, and live updates, and `braid_finish` sets the exit
-> status. To migrate, drop `--braid-blocking` (or `/braid:blocking on`) from the
-> command line ([#80](https://github.com/Epsirom/braid/issues/80)). Using either
-> prints a one-time warning: on stderr in print/JSON mode, or as a UI notice.
+> **Deprecated:** `--braid-blocking` will be removed in 0.5.0. Print and JSON
+> runs now wait for background jobs (see above), which keeps `pauseAfter`,
+> reminders, and live updates, and `braid_finish` sets the exit status. To
+> migrate, drop `--braid-blocking` from the command line
+> ([#80](https://github.com/Epsirom/braid/issues/80)). Using it prints a one-time
+> warning: on stderr in print/JSON mode, or as a UI notice. The
+> `/braid:blocking` session command has already been removed.
 
 Until then, to make each `braid` call wait in the foreground, enable blocking when starting Pi:
 
@@ -125,12 +124,9 @@ pi --braid-blocking -p "Use Braid to review the changes and summarize the result
 With `@chrok/pi-braid` installed, `--braid-blocking` makes every `braid` tool call
 wait for the entire graph and workspace cleanup, then return final status, outputs,
 and usage directly. The parent can summarize those results before `pi -p` exits.
-It also works with `--mode json` for structured tool results. The CLI flag sets the
-initial mode; within a session, use `/braid:blocking on` to enable it,
-`/braid:blocking off` to disable it, or `/braid:blocking` to check the current mode.
-Switching affects only new `braid` tool calls; running jobs keep their original
-mode. The session override is not persisted. These are user controls, not model
-tool parameters; the default remains background execution.
+It also works with `--mode json` for structured tool results. The flag applies
+for the whole session; it is a user control, not a model tool parameter, and the
+default remains background execution.
 For CI pass/fail decisions, inspect the returned job status: a failed graph does
 not by itself set Pi's process exit code.
 Blocking calls emit an initial progress update with the job handle while waiting.

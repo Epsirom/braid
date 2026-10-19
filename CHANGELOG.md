@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- The deprecated Pi session command `/braid:blocking` is removed. Blocking mode
+  is still available through the deprecated `--braid-blocking` flag until 0.5.0;
+  print and JSON runs already wait for background jobs, so drop the command to
+  migrate.
+
 ### Features
 
 - Pi nodes retry transient model errors, such as HTTP 429 rate limits, overload,
@@ -12,7 +19,7 @@
   `Retry-After`; streams that fail after starting are restarted by Braid with
   exponential backoff. Retries stop at cancellation and node/graph deadlines.
   Set `options.maxModelRetries` (default 3, `0` disables) to change the limit
-  ([#90](https://github.com/Epsirom/braid/issues/90)) — @Epsirom.
+  ([#93](https://github.com/Epsirom/braid/pull/93)) — @Epsirom.
 
 ## 0.4.0 — 2026-10-16
 

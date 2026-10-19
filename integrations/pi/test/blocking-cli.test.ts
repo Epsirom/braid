@@ -13,7 +13,7 @@ import { input, response } from "./helpers.js";
 const CLI_TIMEOUT_MS = 60_000;
 const CLI_TEST_TIMEOUT_MS = 90_000;
 
-for (const mode of ["text", "json"]) for (const viaCommand of [false, true]) test(`Pi CLI ${viaCommand ? "/braid:blocking on" : "--braid-blocking"} waits and returns results in ${mode} print mode`, { timeout: CLI_TEST_TIMEOUT_MS }, async t => {
+for (const mode of ["text", "json"]) test(`Pi CLI --braid-blocking waits and returns results in ${mode} print mode`, { timeout: CLI_TEST_TIMEOUT_MS }, async t => {
   const cwd = await mkdtemp(join(tmpdir(), "braid-blocking-cli-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   const provider = join(cwd, "provider.mjs");
@@ -68,13 +68,12 @@ export default function (pi) {
   const invocation = promisify(execFile)(process.execPath, [cli,
     "--offline", "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
     "-e", extension, "-e", provider, "--provider", "braid-offline", "--model", "fixture",
-    ...(viaCommand ? [] : ["--braid-blocking"]), "--mode", mode, "-p",
-    ...(viaCommand ? ["/braid:blocking on"] : []), "Run Braid and summarize its result.",
+    "--braid-blocking", "--mode", mode, "-p", "Run Braid and summarize its result.",
   ], { cwd, env: { ...process.env, PI_CODING_AGENT_DIR: join(cwd, "agent") }, timeout: CLI_TIMEOUT_MS, maxBuffer: 1_000_000 });
   invocation.child.stdin?.end();
   const { stdout, stderr } = await invocation;
   assert.match(stdout, /CLI observed completed Braid result/);
-  assert.equal(stderr.match(/Braid: Blocking mode \(--braid-blocking, \/braid:blocking\) is deprecated and will be removed in 0\.5\.0/g)?.length, 1, stderr);
+  assert.equal(stderr.match(/Braid: Blocking mode \(--braid-blocking\) is deprecated and will be removed in 0\.5\.0/g)?.length, 1, stderr);
   if (mode === "json") {
     const events = stdout.trim().split("\n").map(line => JSON.parse(line));
     const progress = events.findIndex(event => event.type === "tool_execution_update" && event.toolName === "braid");
