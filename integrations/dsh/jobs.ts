@@ -44,6 +44,16 @@ interface Job {
   activity: ExecutionActivityTracker;
 }
 
+/** A pause or resume someone other than the parent agent made, such as the user in the panel. */
+export interface ControlNotice {
+  jobId: string;
+  handle: string;
+  action: "paused" | "resumed";
+  /** Omitted for the whole job. */
+  executions?: { executionId: string; nodeId: string }[];
+  source: string;
+}
+
 export interface Completion {
   jobId: string;
   handle: string;
@@ -63,7 +73,21 @@ export class BraidJobs {
   private disposed = false;
   private nextHandle = 1;
 
-  constructor(private llm: DshLlm, private notify: (completion: Completion) => void = () => {}) {}
+  constructor(
+    private llm: DshLlm,
+    private notify: (completion: Completion) => void = () => {},
+    private onControl: (notice: ControlNotice) => void = () => {},
+  ) {}
+
+  /** The parent made the change itself; anyone else's change becomes a notice for it. */
+  private control(job: Job, action: ControlNotice["action"], source: string, executionIds?: readonly string[]): void {
+    if (source === "agent" || this.disposed) return;
+    const state = job.run.snapshot();
+    try {
+      this.onControl({ jobId: job.jobId, handle: job.handle, action, source,
+        ...(executionIds ? { executions: executionIds.map(executionId => ({ executionId, nodeId: state.executions[executionId]?.id ?? "?" })) } : {}) });
+    } catch { /* Notices are advisory. */ }
+  }
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -94,10 +118,10 @@ export class BraidJobs {
       cwd: context.cwd, ...options,
       nodeTimeoutMs: options.nodeTimeoutMs ?? Infinity, graphTimeoutMs: options.graphTimeoutMs ?? Infinity,
       ...(context.model ? { defaultModel: context.model } : {}),
-      runner: async request => {
+      runner: Object.assign(async (request: Parameters<typeof invoke>[0]) => {
         try { await nextTurn(); return await invoke(request); }
         finally { activity.workerFinished(request.execution.executionId); }
-      },
+      }, { pausable: invoke.pausable === true }),
       onEvent: event => {
         activity.observe(event);
         events.push(structuredClone(event));
@@ -173,8 +197,30 @@ export class BraidJobs {
     this.lookup(id).run.update(patch); this.changed(); return this.get(id);
   }
 
-  resume(id: string, executionIds: readonly string[], expectedRevision: number): JobSnapshot {
-    this.lookup(id).run.resume(executionIds, expectedRevision); this.changed(); return this.get(id);
+  /** Release held executions or resume paused ones. */
+  resume(id: string, executionIds: readonly string[], expectedRevision: number, source = "agent"): JobSnapshot {
+    const job = this.lookup(id);
+    job.run.resume(executionIds, expectedRevision);
+    this.control(job, "resumed", source, executionIds);
+    this.changed(); return this.get(id);
+  }
+
+  /** Pause running executions at their next model request, or the whole job when executionIds is omitted. */
+  pause(id: string, executionIds: readonly string[] | undefined, source: string): JobSnapshot {
+    const job = this.lookup(id);
+    if (job.status !== "running") throw new Error("This run is no longer accepting updates");
+    if (executionIds) job.run.pause(executionIds, { source });
+    else job.run.pauseRun({ source });
+    this.control(job, "paused", source, executionIds);
+    this.changed(); return this.get(id);
+  }
+
+  /** Admit work again and resume the executions the job pause paused. */
+  resumeJob(id: string, source = "agent"): JobSnapshot {
+    const job = this.lookup(id);
+    job.run.resumeRun();
+    this.control(job, "resumed", source);
+    this.changed(); return this.get(id);
   }
 
   cancel(id: string): boolean {

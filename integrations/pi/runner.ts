@@ -141,7 +141,7 @@ export function createPiRunner(
         tools: context.tools,
       }).length / 4,
     );
-  return async (request) => {
+  const runner = async (request: Parameters<ModelRunner>[0]) => {
     const name = request.model;
     const slash = name?.indexOf("/") ?? -1;
     if (!name || slash < 1 || slash === name.length - 1) {
@@ -287,8 +287,10 @@ export function createPiRunner(
     let actualModel = name;
     let reportedContextTokens: number | undefined;
 
-    const complete = async (): Promise<AssistantMessage> => {
+    const prepareRequest = async (): Promise<void> => {
       request.signal.throwIfAborted();
+      // A pause takes effect here; messages sent while suspended are delivered after resume.
+      await request.checkpoint?.();
       deliverHumanInputs();
       const budgets: string[] = [];
       if (Number.isFinite(maxToolRounds)) {
@@ -306,6 +308,7 @@ export function createPiRunner(
           "When a tool budget reaches zero, make no further tool calls and return your final answer. Reserve budget for decide or finish_merge if required.",
         );
       }
+      // Rebuilt per attempt: a suspension moves the node deadline.
       context.systemPrompt = systemPrompt + formatBudgetReminder(request, budgets);
       reportProgress({
         nodeId: request.node.id,
@@ -317,6 +320,9 @@ export function createPiRunner(
         toolRounds,
         phase: "model",
       });
+    };
+
+    const complete = async (): Promise<AssistantMessage> => {
       // The registry resolves stored API keys, OAuth, custom headers and endpoints.
       // complete() is stream().result(); streaming only adds observation.
       // pi-ai retries rejected requests before a response starts, honoring Retry-After.
@@ -330,6 +336,8 @@ export function createPiRunner(
       };
       let retries = 0;
       while (true) {
+        // Retries pass the checkpoint too, so a pause during backoff stops before the resend.
+        await prepareRequest();
         activity?.modelRequest();
         let response: AssistantMessage;
         // Without a stream we cannot tell where a request failed, so Braid may retry it too.
@@ -586,6 +594,7 @@ export function createPiRunner(
       usage,
     };
   };
+  return Object.assign(runner, { pausable: true });
 }
 
 /** Includes cache/cost fields for Pi's tool-usage accounting, separate from core token totals. */

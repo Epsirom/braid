@@ -465,3 +465,19 @@ test("OpenAI rejects duplicate Git commands before invoking the runner capabilit
   assert.match(fake.calls[1]!.messages.at(-1)!.content!, /DUPLICATE_GIT_COMMAND/);
   assert.equal(fake.calls[2]!.messages.at(-1)!.content, "?? change.txt\n");
 });
+
+test("the adapter is pausable and passes the checkpoint before each request", async () => {
+  const order: string[] = [];
+  const responses = [completion(null, [toolCall()]), completion("chose left")];
+  const runner = createOpenAICompatibleRunner({
+    apiKey: "test",
+    fetch: async () => { order.push("request"); return new Response(JSON.stringify(responses.shift())); },
+  });
+  assert.equal(runner.pausable, true);
+  const result = await runner({
+    goal: "g", node: decision(), model: "m", predecessors: [], execution: { runId: "r", rootRunId: "r" },
+    signal: new AbortController().signal, decide: () => {}, checkpoint: async () => { order.push("checkpoint"); },
+  });
+  assert.equal(result.output, "chose left");
+  assert.deepEqual(order, ["checkpoint", "request", "checkpoint", "request"]);
+});

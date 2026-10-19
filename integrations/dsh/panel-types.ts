@@ -1,6 +1,7 @@
 /** Browser-safe, bounded projections. Prompts and provider messages never enter the panel stream. */
 export interface PanelRequest { sessionId: string; jobId?: string; createdBefore?: number }
-export interface ControlRequest extends PanelRequest { jobId: string; action: "cancel" | "resume"; revision: number; executionIds: string[] }
+/** pause and resume with no executionIds act on the whole job. */
+export interface ControlRequest extends PanelRequest { jobId: string; action: "cancel" | "resume" | "pause"; revision: number; executionIds: string[] }
 /** activityBefore pages earlier activity entries by sequence. */
 export interface DetailRequest extends PanelRequest { jobId: string; executionId: string; offset: number; activityBefore?: number }
 export interface PanelRow { jobId: string; handle: string; goal: string; status: string; createdAt: number }
@@ -26,6 +27,8 @@ export interface PanelExecution {
   progress?: { contextTokens: number; contextWindow?: number; contextSource: string; toolCalls: number; toolRounds: number; phase: string };
   /** Present while running; detail returns history for any execution. */
   activity?: PanelActivity;
+  /** Present while a pause of this running execution is requested or active. */
+  suspension?: { state: string; source: string; suspendedAt?: number };
 }
 export interface PanelJob extends PanelRow {
   revision: number; phase: string; error?: string;
@@ -36,6 +39,9 @@ export interface PanelJob extends PanelRow {
   loops: { id: string; entry: string; maxIterations: number }[];
   executions: PanelExecution[];
   pausedExecutionIds: string[];
+  suspendedExecutionIds: string[];
+  /** Present while the whole job is paused. */
+  pause?: { source: string; pausedAt: number };
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
   events: { sequence: number; timestamp: number; type: string; executionId?: string; nodeId?: string; message: string }[];
 }

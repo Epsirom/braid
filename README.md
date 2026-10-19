@@ -283,8 +283,8 @@ length or token cap (see [resource limits](docs/resource-limits.md)).
 | `cwd` | `process.cwd()` | Source checkout for core-managed worktrees; non-Git directories grant read-only capabilities |
 | `maxExecutions` | `1000` | Total materialized executions, including skipped branches, across all rounds and updates; positive safe integer |
 | `maxConcurrency` | `4` | Maximum simultaneous runtime-managed node invocations; positive integer |
-| `nodeTimeoutMs` | `60_000` | Separate deadline for each node, starting when it runs (not while queued) |
-| `graphTimeoutMs` | `300_000` | Whole execution deadline, including node queueing and paused gates; starts after validation |
+| `nodeTimeoutMs` | `60_000` | Separate deadline for each node, starting when it runs (not while queued or suspended) |
+| `graphTimeoutMs` | `300_000` | Whole execution deadline, including node queueing, paused gates, and suspensions; starts after validation |
 | `signal` | None | Caller cancellation signal; aborts running nodes and marks queued nodes cancelled |
 | `onEvent` | None | Live observer for graph/node creation, readiness, starts, handoffs, completions, skips, failures, and graph completion |
 
@@ -338,7 +338,8 @@ Graph deadlines and execution limits remain active while paused.
 
 Nodes are mutable definitions; execution instances retain captured prompts and
 inputs. `startBraid` exposes revision-checked `update`, `resume`, `snapshot`, and
-`cancel`. Updates can change running nodes, completed nodes, edges, templates, and
+`cancel`, plus `pause`/`pauseRun`/`resumeRun` to suspend running executions at
+their next model request without losing their work. Updates can change running nodes, completed nodes, edges, templates, and
 loop topology at any time before finalization. Completion uses the latest graph.
 See [loops and live updates](docs/execution-control.md) for schemas and examples.
 
@@ -359,7 +360,9 @@ human message to a running worker. Instance events carry `executionId`, admissio
 `fromExecutionId`.
 
 `loop_started`/`loop_completed` report rounds. `execution_paused` and
-`execution_resumed` report gates. `graph_completed` or `graph_failed` terminates
+`execution_resumed` report gates; `execution_suspending`/`execution_suspended`
+report pauses of running executions, and `graph_paused`/`graph_resumed` pauses
+of the whole run. `graph_completed` or `graph_failed` terminates
 the log. Completion/failure is published after checkpointing. Node events repeat
 with distinct execution IDs when the same definition runs again.
 
@@ -416,6 +419,11 @@ that includes it. Core records it in the execution's `humanInputs` and as a
 `human_input` event, so results show that the execution did not run from its
 graph definition and predecessor inputs alone; it throws once the invocation
 has ended.
+To support pausing, set `pausable: true` on the runner function and await
+`request.checkpoint()` before each model request; it suspends the invocation
+there while a pause is active. Read `request.deadlines` each time rather than
+copying it, because a suspension moves the node deadline later
+(see [pausing running executions](docs/execution-control.md#pausing-running-executions)).
 The included Pi adapter provides guarded `write`/`edit` and Pi shell tools alongside its read tools.
 For read-only workspaces, adapters must omit mutating tools; the core write
 barrier also rejects writes. This includes all nodes outside Git. Writable Pi nodes

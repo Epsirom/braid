@@ -111,7 +111,7 @@ export function createOpenAICompatibleRunner(
   while (end > 0 && baseURL[end - 1] === "/") end--;
   const url = `${baseURL.slice(0, end)}/chat/completions`;
 
-  return async (request) => {
+  const runner = async (request: Parameters<ModelRunner>[0]): Promise<ModelResponse> => {
     const model = request.model ?? defaultModel;
     if (!model)
       throw new Error("A model must be set on the node, run, or adapter");
@@ -168,6 +168,8 @@ export function createOpenAICompatibleRunner(
     const systemPrompt = messages[0]!.content as string;
     let usage: TokenUsage | undefined;
     const complete = async (withTool: boolean): Promise<Completion> => {
+      // A pause takes effect here, between requests.
+      await request.checkpoint?.();
       messages[0]!.content = systemPrompt + formatBudgetReminder(request);
       const response = await fetchImpl(url, {
         method: "POST",
@@ -288,4 +290,5 @@ export function createOpenAICompatibleRunner(
       ...(usage ? { usage } : {}),
     };
   };
+  return Object.assign(runner, { pausable: true });
 }

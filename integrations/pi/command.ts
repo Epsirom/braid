@@ -57,6 +57,8 @@ export class BraidPanel implements Component {
   private chatOffset = 0;
   private chatMaxOffset = 0;
   private chatScope: string | undefined;
+  /** The outcome of the last pause or resume key, until the next key. */
+  private notice: string | undefined;
   private readonly input: Input;
   private readonly session: NodeSessionView;
   private readonly chat: NodeSessionView;
@@ -196,13 +198,13 @@ export class BraidPanel implements Component {
       ? ["Enter send   Esc stop or hide   Tab hide   PgUp/PgDn or wheel scroll   ctrl+c close",
         "Enter send · Esc hide · Tab hide", "Enter send · Tab hide"]
       : this.focus
-      ? [`${tab}Esc back   ←/→ executions   ↑/↓ scroll   End follow   ctrl+o tools   c cancel   q close`,
-        "Esc back · ←/→ executions · ↑/↓ scroll · q close", "Esc back · q close"]
+      ? [`${tab}Esc back   ←/→ executions   ↑/↓ scroll   End follow   ctrl+o tools   p pause   c cancel   q close`,
+        "Esc back · ←/→ executions · p pause · q close", "Esc back · q close"]
       : this.choosing !== undefined
-      ? [`${tab}↑/↓/←/→ choose node   Enter open session   Esc back   PgUp/PgDn page   q close`,
-        "↑/↓ choose · Enter open · Esc back", "Enter open · Esc back"]
-      : [`${tab}v select node   ←/→ jobs   ↑/↓ scroll   PgUp/PgDn page   c cancel   Esc close`,
-        "v select node · ←/→ jobs · ↑/↓ scroll · Esc close", "v select · Esc close"];
+      ? [`${tab}↑/↓/←/→ choose node   Enter open session   p pause   Esc back   PgUp/PgDn page   q close`,
+        "↑/↓ choose · Enter open · p pause · Esc back", "Enter open · Esc back"]
+      : [`${tab}v select node   ←/→ jobs   ↑/↓ scroll   p pause job   c cancel   Esc close`,
+        "v select node · ←/→ jobs · p pause job · Esc close", "v select · Esc close"];
     const help = contentWidth >= 80 ? wide : contentWidth >= 42 ? medium : narrow;
     const status = graph ? graph.range : "Assistant";
     return [
@@ -212,7 +214,7 @@ export class BraidPanel implements Component {
       row(
         this.theme.fg(
           "dim",
-          `${status}${contentWidth >= 60 ? "  ·  Jobs keep running when this panel closes" : ""}`,
+          this.notice ? plain(this.notice) : `${status}${contentWidth >= 60 ? "  ·  Jobs keep running when this panel closes" : ""}`,
         ),
       ),
       row(this.theme.fg("muted", help)),
@@ -440,6 +442,12 @@ export class BraidPanel implements Component {
       jobs.findIndex((job) => job.jobId === this.selected),
     );
     const job = this.selected ? this.jobs.get(this.selected) : undefined;
+    this.notice = undefined;
+    if (data === "p" && job) {
+      this.togglePause(job);
+      this.refresh();
+      return;
+    }
     if (this.focus) this.sessionInput(data, job);
     else if (this.choosing !== undefined && job) this.chooseInput(data, job);
     else if (matchesKey(data, "escape")) {
@@ -455,6 +463,36 @@ export class BraidPanel implements Component {
     } else this.scroll(data);
     if (data === "c" && this.selected) this.jobs.cancel(this.selected);
     this.refresh();
+  }
+
+  /**
+   * p pauses or resumes what is in view: the open execution, the selected
+   * node's latest execution, or the whole job. The parent agent gets a notice.
+   */
+  private togglePause(job: JobSnapshot): void {
+    const execution = job.execution;
+    try {
+      if (!execution || job.status !== "running") throw new Error("Only a running job can be paused");
+      const executionId = this.focus
+        ? "executionId" in this.focus ? this.focus.executionId : this.executionsOf(job, this.focus.nodeId).at(-1)
+        : this.choosing !== undefined ? this.executionsOf(job, this.choosing).at(-1) : undefined;
+      if (!this.focus && this.choosing === undefined) {
+        if (execution.pause) { this.jobs.resumeJob(job.jobId, "user"); this.notice = "Job resumed"; }
+        else { this.jobs.pause(job.jobId, undefined, "user"); this.notice = "Job paused · no new executions start; running ones stop before their next model request"; }
+        return;
+      }
+      if (!executionId) throw new Error("This node has not run yet");
+      const record = execution.executions[executionId];
+      if (record?.suspension && record.suspension.state !== "resuming") {
+        this.jobs.resume(job.jobId, [executionId], execution.revision, "user");
+        this.notice = "Execution resumed";
+      } else {
+        this.jobs.pause(job.jobId, [executionId], "user");
+        this.notice = "Pausing · the execution stops before its next model request";
+      }
+    } catch (error) {
+      this.notice = `Cannot pause or resume: ${error instanceof Error ? error.message : String(error)}`;
+    }
   }
 
   private chooseInput(data: string, job: JobSnapshot): void {
