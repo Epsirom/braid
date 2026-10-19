@@ -4,7 +4,7 @@ import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { GraphUpdate } from "@chrok/braid";
 import { BRAID_ASYNC_GUIDANCE, braidParameters, nodeParameters, updateEdgeParameters, loopParameters } from "./schema.js";
 import type { BraidJobs, JobSnapshot } from "./jobs.js";
-import { boundedText, formatJobList, formatJobStatus, formatNodeStatus, formatResume, formatUpdate } from "./status-text.js";
+import { boundedText, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUpdate } from "./status-text.js";
 
 const id = Type.String({ minLength: 1, pattern: "\\S" });
 const revision = Type.Integer({ minimum: 0 });
@@ -22,6 +22,7 @@ function control(job: JobSnapshot) {
   const executions = Object.values(job.execution.executions);
   return { jobId: job.handle, canonicalJobId: job.jobId, status: job.status, execution: {
     status: job.execution.status, revision: job.execution.revision, pausedExecutionIds: job.execution.pausedExecutionIds,
+    suspendedExecutionIds: job.execution.suspendedExecutionIds, ...(job.execution.pause ? { pause: job.execution.pause } : {}),
     total: executions.length, completed: executions.filter(execution => execution.status === "completed").length,
   } };
 }
@@ -95,11 +96,20 @@ export function createBraidTools(
       catch (error) { throw new Error(`Braid update rejected; no changes or resumes applied. ${error instanceof Error ? error.message : String(error)}. Retry the complete corrected patch with dependencies, loops, and resume IDs.`); }
       return { text: formatUpdate(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision, pausedExecutionIds: job.execution.pausedExecutionIds };
     }),
-    tool("braid_resume", "Release selected paused execution IDs at expectedRevision. This does not reset budgets or deadlines.", Type.Object({
-      jobId: id, expectedRevision: revision, executionIds: Type.Array(id, { minItems: 1, uniqueItems: true }),
+    tool("braid_resume", "Release paused (pauseAfter) executions, or resume suspended ones in the same conversation, by execution ID at expectedRevision. Omit executionIds to resume a job paused with braid_pause; executions paused separately stay suspended. This does not reset budgets or the graph deadline. Do not resume work the user paused unless the user asks.", Type.Object({
+      jobId: id, expectedRevision: Type.Optional(revision), executionIds: Type.Optional(Type.Array(id, { minItems: 1, uniqueItems: true })),
     }, { additionalProperties: false }), (args, context) => {
-      const job = getJobs(context).resume(args.jobId, args.executionIds, args.expectedRevision);
-      return { text: formatResume(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision, pausedExecutionIds: job.execution.pausedExecutionIds };
+      const jobs = getJobs(context);
+      if (args.executionIds && args.expectedRevision === undefined) throw new Error("expectedRevision is required with executionIds; read it from braid_status");
+      const job = args.executionIds ? jobs.resume(args.jobId, args.executionIds, args.expectedRevision!) : jobs.resumeJob(args.jobId);
+      return { text: formatResume(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision,
+        pausedExecutionIds: job.execution.pausedExecutionIds, suspendedExecutionIds: job.execution.suspendedExecutionIds };
+    }),
+    tool("braid_pause", "Temporarily stop running executions without losing their work: each finishes its running tool, then stops before its next model request, keeping its conversation, workspace, and tool budgets, and releasing its concurrency slot. Omit executionIds to pause the whole job: no new executions start and running ones pause. Resume with braid_resume. The node timeout stops while suspended; the graph timeout keeps running, so resume or cancel paused work.", Type.Object({
+      jobId: id, executionIds: Type.Optional(Type.Array(id, { minItems: 1, uniqueItems: true })),
+    }, { additionalProperties: false }), (args, context) => {
+      const job = getJobs(context).pause(args.jobId, args.executionIds, "agent");
+      return { text: formatPause(job, args.executionIds), ...control(job) };
     }),
   ];
 }

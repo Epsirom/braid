@@ -85,6 +85,18 @@ const scenarios: Record<string, Scenario> = {
       `assert.match(last(), /Braid job job-1 finished with status completed/); return say("RESUMED DONE");`,
     ],
   },
+  // A job the parent paused and never resumed is stalled too: warn once, then cancel.
+  pausedJob: {
+    graph: { ...paused, nodes: paused.nodes.map(({ pauseAfter: _pauseAfter, ...node }) => node) },
+    workerDelayMs: 300,
+    parent: [
+      `return launch();`,
+      `assert.match(last(), /Braid runs asynchronously/); return call("braid_pause", { jobId: "job-1" });`,
+      `assert.match(last(), /paused: no new executions start/); return say("Paused for now.");`,
+      `assert.match(last(), /cannot end while Braid jobs are outstanding.*job-1 is waiting on its job pause/s); return say("Still paused.");`,
+      `assert.match(last(), /Braid job job-1 finished with status cancelled/); return say("GAVE UP PAUSED");`,
+    ],
+  },
   // The run budget cancels a job that would otherwise keep the run open.
   timeout: {
     graph: input,
@@ -228,13 +240,20 @@ test("Pi CLI print mode warns once about paused executions, then cancels them an
   const { code, stdout, stderr } = await runPi("stall", "text");
   assert.equal(code, 1, stderr);
   assert.match(stdout, /GAVE UP/);
-  assert.match(stderr, /Braid: paused executions were never resumed; cancelled job-1/);
+  assert.match(stderr, /Braid: paused work was never resumed; cancelled job-1/);
 });
 
 test("Pi CLI print mode continues normally when the parent resumes after the stall warning", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
   const { code, stdout, stderr } = await runPi("resume", "text");
   assert.equal(code, 0, stderr);
   assert.match(stdout, /RESUMED DONE/);
+});
+
+test("Pi CLI print mode treats a paused job as stalled instead of waiting forever", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
+  const { code, stdout, stderr } = await runPi("pausedJob", "text");
+  assert.equal(code, 1, stderr);
+  assert.match(stdout, /GAVE UP PAUSED/);
+  assert.match(stderr, /Braid: paused work was never resumed; cancelled job-1/);
 });
 
 test("--braid-ci-timeout cancels outstanding jobs, lets the parent report, and exits 1", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {

@@ -104,7 +104,7 @@ test("status results are text documents; long ones keep controls first and save 
       assert.deepEqual(status!.output.render({}, value as never), [{ type: "text", text: value.text }]);
       const meta = status!.output.presentationMeta!({}, value as never) as Record<string, unknown>;
       assert.equal(meta.text, undefined);
-      assert.deepEqual(meta.execution, { status: "waiting", revision: 0, pausedExecutionIds: [executionId], total: 1, completed: 1 });
+      assert.deepEqual(meta.execution, { status: "waiting", revision: 0, pausedExecutionIds: [executionId], suspendedExecutionIds: [], total: 1, completed: 1 });
     }
     assert.match(whole.text, new RegExp(`^Braid job job-1 · running\nID: \\S+\nGraph waiting · revision 0 · paused executions: ${executionId}\n`));
     assert.match(focused.text, new RegExp(`^Braid job job-1 · running · Graph waiting · revision 0 · paused executions: ${executionId}\nExecution ${executionId} · node a \\(execute\\) · completed\n`));

@@ -13,7 +13,7 @@ export const isSingleShot = (ctx: Pick<ExtensionContext, "mode">) => ctx.mode ==
 
 export const BRAID_DRAIN_GUIDANCE =
   "This is a single-shot run. It stays open until every Braid job finishes and its reminder is delivered, so submit, end your turn, and continue from the reminder as usual. " +
-  "Paused executions are not resumed automatically: resume or cancel them before ending your turn. If only paused executions remain when you end a turn, you get one warning; ending the next turn without resuming them cancels their jobs and the run exits with a failure status.";
+  "Paused executions and paused jobs are not resumed automatically: resume or cancel them before ending your turn. If only paused work remains when you end a turn, you get one warning; ending the next turn without resuming it cancels those jobs and the run exits with a failure status.";
 
 export const BRAID_FINISH_GUIDANCE =
   "When the task is done and no Braid job is outstanding, call braid_finish once with status success or failure and a short summary of the outcome, then end your turn with your final response. " +
@@ -33,10 +33,16 @@ export function parseDuration(value: string): number {
   return ms;
 }
 
+const waitingOn = (job: OutstandingJob) => [
+  job.pausedExecutionIds.length ? `paused executions ${JSON.stringify(job.pausedExecutionIds)}` : "",
+  job.suspendedExecutionIds.length ? `suspended executions ${JSON.stringify(job.suspendedExecutionIds)}` : "",
+  job.paused ? "its job pause" : "",
+].filter(Boolean).join(" and ") || "paused work";
+
 const stalledReminder = (jobs: OutstandingJob[]) =>
   `[system-reminder] This single-shot run cannot end while Braid jobs are outstanding, and nothing can progress: ` +
-  jobs.map(job => `${job.handle} is waiting on paused executions ${JSON.stringify(job.pausedExecutionIds)} at revision ${job.revision}`).join("; ") +
-  `. Resume them with braid_resume or braid_update with resume, or cancel the job with braid_cancel, then continue the original task. ` +
+  jobs.map(job => `${job.handle} is waiting on ${waitingOn(job)} at revision ${job.revision}`).join("; ") +
+  `. Resume executions with braid_resume or braid_update with resume, resume a paused job with braid_resume({jobId}), or cancel the job with braid_cancel, then continue the original task. ` +
   `If you end your turn again without doing so, Braid cancels these jobs and the run exits with a failure status. [/system-reminder]`;
 
 /**
@@ -154,7 +160,7 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
       const outstanding = jobs.outstanding();
       if (!outstanding.length) return settle(event);
       if (outstanding.every(job => job.stalled)) {
-        const key = JSON.stringify(outstanding.map(job => [job.jobId, job.revision, job.pausedExecutionIds]));
+        const key = JSON.stringify(outstanding.map(job => [job.jobId, job.revision, job.pausedExecutionIds, job.suspendedExecutionIds, job.paused]));
         if (key !== warnedStall) {
           warnedStall = key;
           return {
@@ -169,7 +175,7 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
           };
         }
         // Cancellation reminders give the parent a final turn to report the outcome.
-        cancelOutstanding(`paused executions were never resumed; cancelled ${outstanding.map(job => job.handle).join(", ")}`);
+        cancelOutstanding(`paused work was never resumed; cancelled ${outstanding.map(job => job.handle).join(", ")}`);
       }
       await nextChange();
     }

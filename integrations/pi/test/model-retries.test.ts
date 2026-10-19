@@ -172,3 +172,17 @@ test("invalid model retry options are rejected", () => {
   }
   assert.throws(() => createPiRunner(registry, { modelRetryDelayMs: -1 }), /modelRetryDelayMs/);
 });
+
+test("each model request, including a retry, passes the checkpoint first", async () => {
+  const { registry, contexts } = streamingRegistry([
+    { error: "overloaded", started: true },
+    readCall(),
+    text("done"),
+  ]);
+  const runner = createPiRunner(registry, { cwd: readOnlyCwd, modelRetryDelayMs: 0 });
+  assert.equal(runner.pausable, true);
+  const checkpoints: number[] = [];
+  const result = await runner(request({ checkpoint: async () => { checkpoints.push(contexts.length); } }));
+  assert.equal(result.output, "done");
+  assert.deepEqual(checkpoints, [0, 1, 2], "one checkpoint before each of the three requests");
+});

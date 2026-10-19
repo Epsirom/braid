@@ -6,9 +6,9 @@ import type {} from "@deepseek-ai/dsh-commands";
 import type {} from "@deepseek-ai/dsh-system-prompt";
 import type {} from "@deepseek-ai/dsh-jobs";
 import type { BraidInput } from "@chrok/braid";
-import { BraidJobs, type JobOptions, type JobSnapshot } from "./jobs.js";
+import { BraidJobs, type ControlNotice, type JobOptions, type JobSnapshot } from "./jobs.js";
 import { createBraidTools } from "./tools.js";
-import { formatJobList, formatReceipt } from "./status-text.js";
+import { formatControlNotice, formatJobList, formatReceipt } from "./status-text.js";
 import { BRAID_USAGE_GUIDANCE, BRAID_WAIT_REMINDER } from "./schema.js";
 import { renderPanel } from "./display.js";
 import { BraidPanel } from "./panel.js";
@@ -28,7 +28,7 @@ export const inject = ["tools", "llm", "commands", "systemPrompt", "jobs"];
 export function apply(ctx: Context): void {
   const observers = new Set<() => void>();
   const changed = () => { for (const listener of observers) listener(); };
-  const sessions = new Map<Agent, { jobs: BraidJobs; pending: Map<string, UserMessage>; queued: Set<string>; release: () => Promise<void> }>();
+  const sessions = new Map<Agent, { jobs: BraidJobs; pending: Map<string, UserMessage>; queued: Set<string>; notices: Map<string, ControlNotice>; release: () => Promise<void> }>();
   ctx.inject(["typert"], ctx => {
     new BraidPanel(ctx, id => [...sessions].find(([agent]) => agent.session.id === id)?.[1].jobs,
       listener => { observers.add(listener); return () => { observers.delete(listener); }; });
@@ -40,6 +40,28 @@ export function apply(ctx: Context): void {
     state.queued.add(message.source.reminderId);
     try { agent.steer(message); }
     catch { state.queued.delete(message.source.reminderId); }
+  };
+  // Pauses and resumes made by someone else never wake the parent: a woken parent could
+  // resume work the user deliberately paused. Held while idle, the latest change per
+  // execution or job wins; they are injected as context once the parent runs again.
+  const flushNotices = (agent: Agent) => {
+    const state = sessions.get(agent);
+    if (!state?.notices.size || agent.status !== "running") return;
+    const lines = [...state.notices.values()].map(formatControlNotice);
+    state.notices.clear();
+    try {
+      agent.inject(createUserMessage({
+        source: { kind: "braid", reminderId: JSON.stringify(["control", Date.now()]), form: "notice", summary: "Braid: paused or resumed outside this conversation" },
+        content: [{ type: "text", text: `[system-reminder] ${lines.join(" ")} [/system-reminder]` }],
+      }));
+    } catch { /* Notices are advisory; braid_status still shows who paused. */ }
+  };
+  const noteControl = (agent: Agent, notice: ControlNotice) => {
+    const state = sessions.get(agent);
+    if (!state) return;
+    for (const execution of notice.executions ?? [undefined])
+      state.notices.set(JSON.stringify([notice.jobId, execution?.executionId ?? "job"]), { ...notice, ...(execution ? { executions: [execution] } : {}) });
+    flushNotices(agent);
   };
   const session = (agent: Agent) => {
     const existing = sessions.get(agent);
@@ -55,14 +77,14 @@ export function apply(ctx: Context): void {
         content: [{ type: "text", text: `[system-reminder] ${summary}. Retrieve results with braid_status(${lookup}) and continue the original task. Failed or cancelled jobs may contain successful partial results. ${paused ? "Outgoing scheduling was paused. Inspect CURRENT execution.revision and pausedExecutionIds before braid_update with resume or braid_resume. Deadlines continue; finalized jobs cannot resume." : "This reminder does not pause scheduling."} [/system-reminder]` }],
       });
       pending.set(reminderId, message); send(agent, message);
-    });
-    const value = { jobs, pending, queued: new Set<string>(), release: () => jobs.dispose() };
+    }, notice => { noteControl(agent, notice); });
+    const value = { jobs, pending, queued: new Set<string>(), notices: new Map<string, ControlNotice>(), release: () => jobs.dispose() };
     sessions.set(agent, value);
     const off = jobs.subscribe(changed);
     changed();
     // Agent-scoped effects unwind on clear, reload, disposal, or session replacement.
     value.release = agent.ctx.effect(() => () => {
-      off(); pending.clear(); sessions.delete(agent); changed(); return jobs.dispose();
+      off(); pending.clear(); value.notices.clear(); sessions.delete(agent); changed(); return jobs.dispose();
     });
     return value;
   };
@@ -141,6 +163,7 @@ export function apply(ctx: Context): void {
   });
   ctx.on("agent/status", ({ agent, status }) => {
     if (status === "idle") for (const message of sessions.get(agent)?.pending.values() ?? []) send(agent, message);
+    else flushNotices(agent);
   });
   ctx.on("agent/disposed", ({ agent }) => {
     const value = sessions.get(agent);

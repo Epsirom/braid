@@ -194,8 +194,17 @@ export interface ModelRequest {
   predecessors: PredecessorOutput[];
   execution: ExecutionContext;
   signal: AbortSignal;
-  /** Finite deadlines on the performance.now() clock; absent scopes are unlimited. */
+  /**
+   * Finite deadlines on the performance.now() clock; absent scopes are unlimited.
+   * Core moves `node` later after a suspension, so read it each time it is needed.
+   */
   deadlines?: { node?: number; graph?: number };
+  /**
+   * Pausable runners await this before each model request. It resolves at once
+   * unless a pause was requested; then the execution suspends, and it resolves
+   * after resume. Rejects when the execution is aborted.
+   */
+  checkpoint?: () => Promise<void>;
   workspace?: NodeWorkspace;
   /** Rejects read-only writes; adapters must wrap mutating file tools so cleanup waits for in-flight writes. */
   withWorkspaceWrite?: <T>(operation: () => Promise<T>) => Promise<T>;
@@ -225,7 +234,25 @@ export interface ModelResponse {
 }
 
 /** Each call starts a fresh conversation and exposes only the adapter’s declared capabilities. */
-export type ModelRunner = (request: ModelRequest) => Promise<ModelResponse>;
+export interface ModelRunner {
+  (request: ModelRequest): Promise<ModelResponse>;
+  /** True when the runner awaits request.checkpoint() before each model request. Required for pause. */
+  readonly pausable?: boolean;
+}
+
+/** A requested or active suspension of a running execution. */
+export interface ExecutionSuspension {
+  /**
+   * pausing: waiting for the runner's next checkpoint, still holding its slot.
+   * suspended: stopped at a checkpoint; its concurrency slot is released.
+   * resuming: resumed and waiting for a free concurrency slot.
+   */
+  state: "pausing" | "suspended" | "resuming";
+  /** Who asked: a caller-supplied label such as "agent" or "user". */
+  source: string;
+  requestedAt: number;
+  suspendedAt?: number;
+}
 
 /** Frozen snapshots in emission order, including graph revisions and execution identities. */
 export type ExecutionEvent = Readonly<
@@ -248,6 +275,10 @@ export type ExecutionEvent = Readonly<
     | { type: "graph_updated"; graph: BraidInput }
     | { type: "execution_paused"; nodeId: string }
     | { type: "execution_resumed"; nodeId: string }
+    | { type: "execution_suspending"; nodeId: string; source: string }
+    | { type: "execution_suspended"; nodeId: string; source: string }
+    | { type: "graph_paused"; source: string }
+    | { type: "graph_resumed" }
     | { type: "loop_started"; entry: string }
     | { type: "loop_completed"; entry: string }
     | { type: "workspace_updated"; workspace: Readonly<NodeWorkspace> }
@@ -296,9 +327,9 @@ export interface BraidOptions {
   cwd?: string;
   /** Positive integer. Defaults to 4. */
   maxConcurrency?: number;
-  /** Applied separately to each invocation, starting when it runs. Default: 60s. Infinity disables it. */
+  /** Applied separately to each invocation, starting when it runs and stopped while it is suspended. Default: 60s. Infinity disables it. */
   nodeTimeoutMs?: number;
-  /** Includes queueing and execution of the entire graph. Default: 5 minutes. Infinity disables it. */
+  /** Includes queueing, pauses, and execution of the entire graph. Default: 5 minutes. Infinity disables it. */
   graphTimeoutMs?: number;
   /** Caller cancellation, independent of node and graph deadlines. */
   signal?: AbortSignal;
@@ -345,6 +376,8 @@ export interface NodeResult extends Partial<NodeOutput> {
    * did not come purely from the graph definition and predecessor inputs.
    */
   humanInputs?: HumanInput[];
+  /** Present while a pause of this running execution is requested or active. */
+  suspension?: ExecutionSuspension;
 }
 
 export interface BraidResult {
@@ -388,18 +421,29 @@ export interface GraphUpdate {
   removeEdges?: readonly Edge[];
   promptTemplates?: Readonly<Record<string, string>>;
   loops?: readonly LoopDefinition[];
-  /** Resume these completed executions atomically with this update. */
+  /** Resume these held or paused executions atomically with this update. */
   resume?: readonly string[];
+}
+
+export interface PauseOptions {
+  /** Recorded on the suspension and its events. Default: "caller". */
+  source?: string;
 }
 
 export interface BraidSnapshot {
   runId: string;
+  /** waiting: nothing is actively running; only held, suspended, or paused work remains. */
   status: "running" | "waiting" | "finalizing" | "completed" | "failed";
   revision: number;
   graph: BraidInput;
   nodes: Record<string, NodeResult>;
   executions: Record<string, NodeExecution>;
+  /** Settled executions whose outgoing scheduling is held by pauseAfter. */
   pausedExecutionIds: string[];
+  /** Running executions stopped at a checkpoint, including resumed ones waiting for a slot. */
+  suspendedExecutionIds: string[];
+  /** Present while the whole run is paused: no new executions are admitted. */
+  pause?: { source: string; pausedAt: number };
   /** Present as soon as a run-wide failure or cancellation starts draining work. */
   error?: ExecutionError;
 }
@@ -409,6 +453,13 @@ export interface BraidRun {
   result: Promise<BraidResult>;
   snapshot(): BraidSnapshot;
   update(update: GraphUpdate): BraidSnapshot;
+  /** Release held executions, or resume paused ones. Resuming a still-pausing execution withdraws the request. */
   resume(executionIds: readonly string[], expectedRevision: number): BraidSnapshot;
+  /** Suspend running executions at their runner's next checkpoint. Requires a pausable runner. */
+  pause(executionIds: readonly string[], options?: PauseOptions): BraidSnapshot;
+  /** Stop admitting executions and pause every running one. Independent of pauseAfter holds. */
+  pauseRun(options?: PauseOptions): BraidSnapshot;
+  /** Admit executions again and resume the executions that pauseRun paused. */
+  resumeRun(): BraidSnapshot;
   cancel(): void;
 }

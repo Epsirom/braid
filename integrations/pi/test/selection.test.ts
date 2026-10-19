@@ -52,7 +52,7 @@ test("extension registers background tools, a panel command, and guidance to wai
   assert.equal(fake.flags.get("braid-blocking")?.default, false);
   assert.deepEqual(
     [...fake.tools.keys()],
-    ["braid_finish", "braid", "braid_status", "braid_cancel", "braid_update", "braid_resume"],
+    ["braid_finish", "braid", "braid_status", "braid_cancel", "braid_update", "braid_resume", "braid_pause"],
   );
   assert.ok(fake.commands.has("braid"));
   assert.equal(fake.commands.has("braid:blocking"), false);

@@ -44,11 +44,11 @@ test("built browser factory mounts native Remote namespace and tool/sidebar slot
     ctx.provide("sidebarRight", { openTab: kind => { opened = kind; }, openTabIn: (sessionId, kind, options) => { opened = { sessionId, kind, options }; } });
     ctx.provide("sidebarRightTabs", { register: definition => { tabs.set(definition.id, definition); return () => { tabs.delete(definition.id); }; } });
     const fiber = await ctx.plugin(bundle(new URL("../dist/client.js", import.meta.url)));
-    for (let i = 0; i < 30 && entries.size !== 7; i++) await new Promise(resolve => setTimeout(resolve, 5));
-    assert.equal(entries.size, 7); assert.equal(tabs.get("@chrok/dsh-braid").kind, "braid");
+    for (let i = 0; i < 30 && entries.size !== 8; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(entries.size, 8); assert.equal(tabs.get("@chrok/dsh-braid").kind, "braid");
     entries.get("conversation.session.header.actions/").definition.inject().open();
     assert.equal(opened, "braid");
-    for (const name of ["braid", "braid_status", "braid_update", "braid_resume", "braid_cancel"]) {
+    for (const name of ["braid", "braid_status", "braid_update", "braid_resume", "braid_pause", "braid_cancel"]) {
       const entry = entries.get(`tool.call.toolview/${name}`);
       assert.ok(entry, `Missing tool renderer: ${name}`);
       entry.definition.inject("tool-owner").openBraid({ jobId: "recorded-job", executionId: "review@1" });

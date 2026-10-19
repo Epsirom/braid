@@ -57,6 +57,12 @@ test("operation summaries distinguish snapshot progress, updates not applied, re
   assert.match(status.summary, /waiting · r5 · 1\/2 executions complete · 1 paused/);
   assert.equal(toolPresentation("braid_cancel", result({ jobId: "job-1" }, { cancelled: false })).summary, "Job already finished");
   assert.equal(toolPresentation("braid_resume", result({ executionIds: ["a", "b"] }, {})).summary, "Resumed 2 execution(s)");
+  assert.equal(toolPresentation("braid_resume", result({ jobId: "job-1" }, {})).summary, "Resumed job");
+  const pause = toolPresentation("braid_pause", result({ jobId: "job-1", executionIds: ["a"] }, { execution: { revision: 5, pausedExecutionIds: [], suspendedExecutionIds: ["b"] } }));
+  assert.equal(pause.summary, "Pause requested for 1 execution(s)");
+  assert.deepEqual(pause.changes, ["a", "0 still paused · r5", "1 suspended"]);
+  assert.equal(toolPresentation("braid_pause", result({ jobId: "job-1" }, {})).summary, "Pause requested for job");
+  assert.deepEqual(toolNavigation("braid_pause", result({ jobId: "job-1", executionIds: ["a@1"] }, { canonicalJobId: "uuid-1" })), { jobId: "uuid-1", executionId: "a@1", createdBefore: 2000 });
   const list = toolPresentation("braid_status", result({}, { jobs: [{ jobId: "uuid-2", handle: "job-2", status: "running" }] }));
   assert.deepEqual(list.jobs[0], { label: "job-2", status: "running", target: { jobId: "uuid-2", createdBefore: 2000 } });
 });

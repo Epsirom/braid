@@ -12,7 +12,7 @@ const fixture: PanelFrame = {
   rows: [{ jobId: "uuid-a", handle: "job-1", goal: "Review and implement", status: "running", createdAt: 0 }],
   job: { jobId: "uuid-a", handle: "job-1", goal: "Review and implement", status: "running", createdAt: 0,
     revision: 4, phase: "waiting", observedAt: 0, nodes: [{ id: "review", type: "execute", status: "completed" }, { id: "apply", type: "integrate", status: "pending" }],
-    edges: [{ from: "review", to: "apply" }], loops: [], pausedExecutionIds: ["review@1"],
+    edges: [{ from: "review", to: "apply" }], loops: [], pausedExecutionIds: ["review@1"], suspendedExecutionIds: [],
     usage: { inputTokens: 100, outputTokens: 25, cacheReadTokens: 10, cacheWriteTokens: 0 },
     executions: [{ id: "review", executionId: "review@1", revision: 3, status: "completed", type: "execute", iteration: 1, latencyMs: 1800 }],
     events: [{ sequence: 1, timestamp: 0, type: "execution_paused", executionId: "review@1", message: "execution paused" }],
@@ -161,4 +161,30 @@ test("running executions show live phase, waits, limitations and pageable activi
     assert.equal(sequences, 62);
     assert.match(document.querySelector(".br-activity-log")!.textContent!, /entry 11.*entry 12.*entry 62/s);
   } finally { await h.close(); }
+});
+
+test("panel pauses and resumes the whole job and a running execution", async () => {
+  const saved = structuredClone(fixture.job);
+  const job = fixture.job!;
+  job.pausedExecutionIds = [];
+  job.executions = [{ id: "review", executionId: "review@1", revision: 3, status: "running", type: "execute" }];
+  const h = await setup();
+  try {
+    await h.render();
+    await h.click("Pause job");
+    assert.deepEqual(h.controls[0], { sessionId: "owner", jobId: "uuid-a", action: "pause", executionIds: [], revision: 4 });
+    await h.click("Pause this execution");
+    assert.deepEqual(h.controls[1], { sessionId: "owner", jobId: "uuid-a", action: "pause", executionIds: ["review@1"], revision: 4 });
+    job.pause = { source: "user", pausedAt: 0 };
+    job.suspendedExecutionIds = ["review@1"];
+    job.executions[0]!.suspension = { state: "suspended", source: "user", suspendedAt: 0 };
+    await h.render("owner-paused");
+    assert.match(document.body.textContent!, /Job paused by user/);
+    assert.match(document.body.textContent!, /1 execution\(s\) suspended/);
+    assert.match(document.body.textContent!, /Suspended · paused by user/);
+    await h.click("Resume this execution");
+    assert.deepEqual(h.controls[2], { sessionId: "owner-paused", jobId: "uuid-a", action: "resume", executionIds: ["review@1"], revision: 4 });
+    await h.click("Resume job");
+    assert.deepEqual(h.controls[3], { sessionId: "owner-paused", jobId: "uuid-a", action: "resume", executionIds: [], revision: 4 });
+  } finally { await h.close(); fixture.job = saved; }
 });

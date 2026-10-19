@@ -17,9 +17,10 @@ well as the compact definition.
 | --- | --- | --- |
 | Active runtime-managed invocations per graph | 4 | 4 |
 | Materialized executions across loops/updates | 1000 (`maxExecutions`) | 1000 (`maxExecutions`) |
-| Node timeout (starts at admission) | 60 seconds | Unlimited |
-| Graph timeout (includes queueing and paused gates) | 5 minutes | Unlimited |
+| Node timeout (starts at admission, stops while suspended) | 60 seconds | Unlimited |
+| Graph timeout (includes queueing, paused gates, and suspensions) | 5 minutes | Unlimited |
 | Caller cancellation | `AbortSignal` | `braid_cancel` / panel `c` |
+| Pause running work | `pause` / `pauseRun` | `braid_pause` / panel `p` |
 | Worker tool loop | Decision continuation / merge Git-tool loop, bounded by deadlines | Unlimited by default; optional `maxToolRounds` and `maxToolCalls` |
 | Transient model error retries | Runner-defined | 3 per model request (`maxModelRetries`), within the current execution |
 | Result preview | Full result | 50 KB / 2,000 lines of text, then temporary full-text file |

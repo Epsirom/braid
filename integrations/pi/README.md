@@ -27,6 +27,7 @@ It registers:
   `"nodeId": "..."` selects that definition's latest invocation. Omit all IDs
   to list jobs in the current session.
 - `braid_update` / `braid_resume` — edit live definitions or release paused executions.
+- `braid_pause` — pause running executions, or the whole job, without losing their work.
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
 - `braid_finish` — print/JSON runs only: record the run outcome with
   `{ "status": "success" | "failure", "summary": "..." }`.
@@ -294,6 +295,31 @@ See [execution control](../../docs/execution-control.md) for loop schemas, exact
 update semantics, historical dependencies, and workspace lineage. There is no
 scheduler persistence across Pi reloads. Reminders alone do not pause execution.
 
+### Pausing running executions
+
+`pauseAfter` holds a result after the execution finishes. To stop work that is
+still running, call `braid_pause({jobId, executionIds})`. Each execution finishes
+its running tool, then stops before its next model request. It keeps its
+conversation, workspace, and tool budgets, and releases its concurrency slot to
+other nodes. Messages sent to it from the `/braid` assistant while it is paused
+are delivered when it resumes. Resume with `braid_resume({jobId, expectedRevision,
+executionIds})` or `braid_update` with `resume`; the worker continues the same
+conversation. A transient-error retry also waits at the pause point before resending.
+
+Omit `executionIds` to pause the whole job: no new executions start and running
+ones pause. `braid_resume({jobId})` resumes the job and the executions that the
+job pause paused; executions paused separately stay paused.
+
+The node timeout stops while an execution is suspended; the graph timeout keeps
+running. `braid_status` shows suspended executions, a job pause, and who paused
+them.
+
+Users can pause from the panel too (`p`, below). The parent is not woken for
+that: one notice with the latest state per execution or job is added to its next
+turn, and it is told not to resume work the user paused unless the user asks.
+In print and JSON runs, a job held only by pauses counts as stalled: the parent
+gets one warning, and the job is cancelled if it ends the next turn without resuming.
+
 ## Live flow panel
 
 In interactive Pi, background progress appears automatically **above the input
@@ -319,7 +345,9 @@ The bordered panel keeps the job header and keyboard controls visible while
 you scroll the flow and event log. It refreshes as nodes start, finish, fail,
 and pass outputs downstream.
 Use Left/Right to select jobs, Up/Down or Page Up/Page Down to scroll, `c` to
-cancel the selected job, and Escape or `q` to close the panel. Closing the panel
+cancel the selected job, `p` to pause or resume it, and Escape or `q` to close the panel.
+In node selection or an open session, `p` pauses or resumes that node's latest
+execution instead; a suspended node shows `‖ PAUSED`. Closing the panel
 leaves jobs running. In RPC or noninteractive modes, use `braid_status`.
 
 A flowchart wider than the terminal is cropped to the terminal width around the

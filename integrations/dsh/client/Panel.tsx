@@ -151,7 +151,7 @@ function ExecutionDetail({ api, sessionId, job, execution }: { api: PanelApi; se
   </>;
 }
 
-function JobView({ job, api, sessionId, connected, act, busy, target }: { job: PanelJob; api: PanelApi; sessionId: string; connected: boolean; act: (action: "cancel" | "resume", ids: string[]) => void; busy: boolean; target: BraidNavigation | undefined }) {
+function JobView({ job, api, sessionId, connected, act, busy, target }: { job: PanelJob; api: PanelApi; sessionId: string; connected: boolean; act: (action: "cancel" | "resume" | "pause", ids: string[]) => void; busy: boolean; target: BraidNavigation | undefined }) {
   const [selected, setSelected] = useState(() => job.executions.find(e => e.executionId === target?.executionId)?.id
     ?? target?.nodeId ?? (target?.executionId ? "" : job.nodes[0]?.id ?? ""));
   const [chosenExecution, setChosenExecution] = useState(target?.executionId ?? "");
@@ -159,15 +159,24 @@ function JobView({ job, api, sessionId, connected, act, busy, target }: { job: P
   const executions = job.executions.filter(e => e.id === selected);
   const execution = chosenExecution ? executions.find(e => e.executionId === chosenExecution) : executions.at(-1);
   const paused = execution && job.pausedExecutionIds.includes(execution.executionId);
+  // pausing and suspended can be resumed; resuming is already waiting for a slot.
+  const suspended = execution?.suspension && execution.suspension.state !== "resuming";
+  const live = connected && !busy && job.status === "running";
   return <>
     <div className="br-stats"><div><strong>{job.executions.filter(e => e.status === "completed").length}/{job.executions.length}</strong><span>Executions complete</span></div><div><strong>{number(job.usage.inputTokens)}</strong><span>Input tokens</span></div><div><strong>{number(job.usage.outputTokens)}</strong><span>Output tokens</span></div><div><strong>{number(job.usage.cacheReadTokens + job.usage.cacheWriteTokens)}</strong><span>Cache tokens</span></div></div>
     {job.error && <div className="br-notice" role="alert">{job.error}</div>}
+    {job.pause && <div className="br-notice"><strong>Job paused by {job.pause.source}</strong><p className="br-note">No new executions start; running ones stop before their next model request and keep their work. The job deadline continues while paused.</p><button className="br-primary" disabled={!live} onClick={() => act("resume", [])}>Resume job</button></div>}
+    {job.suspendedExecutionIds.length > 0 && <div className="br-notice"><strong>{job.suspendedExecutionIds.length} execution(s) suspended</strong><p className="br-note">Suspended executions keep their conversation and workspace and release their concurrency slot. Their node timeout stops; the job deadline continues.</p></div>}
     {job.pausedExecutionIds.length > 0 && <div className="br-notice"><strong>{job.pausedExecutionIds.length} execution(s) paused</strong><p className="br-note">Inspect the output, then resume outgoing scheduling. Job deadlines continue while paused.</p><button className="br-primary" disabled={!connected || busy || job.status !== "running"} onClick={() => act("resume", job.pausedExecutionIds)}>Resume all paused</button></div>}
     <Graph job={job} selected={selected} select={id => { setSelected(id); setChosenExecution(""); setTab("output"); }}/>
-    <section className="br-section" aria-label="Execution details"><div className="br-section-head"><h3>{selected || "Execution details"}</h3>{execution && <Status status={paused ? "waiting" : execution.status}/>}</div>
+    <section className="br-section" aria-label="Execution details"><div className="br-section-head"><h3>{selected || "Execution details"}</h3>{execution && <Status status={paused ? "waiting" : execution.suspension ? execution.suspension.state : execution.status}/>}</div>
       {chosenExecution && !execution && <p role="status">The requested execution ({chosenExecution}) is no longer available. Select a node to inspect its current history.</p>}
       {executions.length > 0 ? <label><span className="br-muted">Execution history</span><select className="br-select" aria-label="Execution history" value={execution?.executionId ?? ""} onChange={e => setChosenExecution(e.target.value)}>{executions.map(e => <option key={e.executionId} value={e.executionId}>{e.executionId} · {e.status}{e.iteration === undefined ? "" : ` · iteration ${e.iteration}`}</option>)}</select></label> : <p className="br-muted">This node has not run yet.</p>}
       {paused && <button className="br-primary" disabled={!connected || busy || job.status !== "running"} onClick={() => act("resume", [execution!.executionId])}>Resume this execution</button>}
+      {execution?.suspension && <p className="br-note" role="status">{execution.suspension.state === "pausing" ? "Pausing: stops before its next model request; a running tool finishes first." : execution.suspension.state === "resuming" ? "Resumed; waiting for a free concurrency slot." : "Suspended"} · paused by {execution.suspension.source}</p>}
+      {execution?.status === "running" && (suspended
+        ? <button className="br-primary" disabled={!live} onClick={() => act("resume", [execution.executionId])}>Resume this execution</button>
+        : !execution.suspension && <button disabled={!live} onClick={() => act("pause", [execution.executionId])}>Pause this execution</button>)}
       <div className="br-tabs"><button aria-pressed={tab === "output"} onClick={() => setTab("output")}>Output & details</button><button aria-pressed={tab === "events"} onClick={() => setTab("events")}>Event log ({job.events.length})</button></div>
       {tab === "output" && execution && <ExecutionDetail key={execution.executionId} api={api} sessionId={sessionId} job={job} execution={execution}/>}
       {tab === "events" && <><p className="br-note">Latest 80 lifecycle events. Full results remain available through braid_status.</p><ol className="br-events">{[...job.events].reverse().map(event => <li key={event.sequence}><time>{new Date(event.timestamp).toLocaleTimeString([], { hour12: false })}</time><div><p>{event.message}</p><small>#{event.sequence}{event.nodeId ? ` · ${event.nodeId}` : ""}{event.executionId ? ` · ${event.executionId}` : ""}</small></div></li>)}</ol></>}
@@ -217,7 +226,7 @@ function SessionPanel({ sessionId, api, target }: { sessionId: string; api: Pane
   const job = frame?.job;
   // In-flight mutations only affect their mounted job view; stream frames remain authoritative.
   const [actionOwner, setActionOwner] = useState("");
-  const act = async (action: "cancel" | "resume", executionIds: string[]) => {
+  const act = async (action: "cancel" | "resume" | "pause", executionIds: string[]) => {
     if (!job || !connected || busy) return;
     const owner = job.jobId;
     setBusy(true); setActionOwner(owner); setActionError("");
@@ -228,7 +237,7 @@ function SessionPanel({ sessionId, api, target }: { sessionId: string; api: Pane
   return <div className="braid-panel">
     <header className="br-header"><div className="br-eyebrow">Agent orchestration</div><div className="br-heading"><h2>Braid</h2><small role="status">{connected ? "● Live" : error ? "○ Disconnected" : "Connecting…"}</small></div>
       {frame && frame.rows.length > 0 && <><select className="br-select" aria-label="Braid job" disabled={busy} value={job?.jobId ?? ""} onChange={e => { setJobId(e.target.value); setCreatedBefore(undefined); setActionError(""); }}>{frame.rows.map(row => <option key={row.jobId} value={row.jobId}>{row.handle} · {row.status} · {row.goal.slice(0, 70)}</option>)}</select>
-        {job && <><p className="br-goal">{job.goal}</p><div className="br-toolbar"><Status status={job.phase === "waiting" ? "waiting" : job.status}/><small className="br-muted">r{job.revision} · {job.nodes.length} nodes</small><button className="br-danger" style={{ marginLeft: "auto" }} disabled={!connected || busy || job.status !== "running"} onClick={() => void act("cancel", [])}>{busy ? "Working…" : "Cancel job"}</button></div></>}
+        {job && <><p className="br-goal">{job.goal}</p><div className="br-toolbar"><Status status={job.phase === "waiting" ? "waiting" : job.status}/><small className="br-muted">r{job.revision} · {job.nodes.length} nodes</small><button style={{ marginLeft: "auto" }} disabled={!connected || busy || job.status !== "running"} onClick={() => void act(job.pause ? "resume" : "pause", [])}>{job.pause ? "Resume job" : "Pause job"}</button><button className="br-danger" disabled={!connected || busy || job.status !== "running"} onClick={() => void act("cancel", [])}>{busy ? "Working…" : "Cancel job"}</button></div></>}
       </>}
     </header>
     {error && <div className="br-notice" role="alert">{error}<div className="br-toolbar"><button onClick={() => setRetry(v => v + 1)}>Reconnect</button><button onClick={() => { setJobId(undefined); setCreatedBefore(undefined); setRetry(v => v + 1); }}>Latest job</button></div></div>}
