@@ -11,7 +11,7 @@ function parseRequest(value: unknown, method: string): unknown {
   if (r.createdBefore !== undefined && (!Number.isSafeInteger(r.createdBefore) || Number(r.createdBefore) < 0)) throw new Error("Invalid call timestamp");
   if (method !== "watch" && !id("jobId")) throw new Error("A job ID is required");
   if (method === "control" && (
-    !["cancel", "resume", "pause"].includes(String(r.action)) || !Number.isSafeInteger(r.revision) || Number(r.revision) < 0 ||
+    !["cancel", "resume", "pause", "hold", "unhold"].includes(String(r.action)) || !Number.isSafeInteger(r.revision) || Number(r.revision) < 0 ||
     !Array.isArray(r.executionIds) || r.executionIds.length > 10000 || r.executionIds.some(v => typeof v !== "string" || !v || v.length > 1024)
   )) throw new Error("Invalid Braid control request");
   if (method === "detail" && (!id("executionId") || !Number.isSafeInteger(r.offset) || Number(r.offset) < 0 ||

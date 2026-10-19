@@ -1,7 +1,7 @@
 /** Browser-safe, bounded projections. Prompts and provider messages never enter the panel stream. */
 export interface PanelRequest { sessionId: string; jobId?: string; createdBefore?: number }
-/** pause and resume with no executionIds act on the whole job. */
-export interface ControlRequest extends PanelRequest { jobId: string; action: "cancel" | "resume" | "pause"; revision: number; executionIds: string[] }
+/** pause and resume with no executionIds act on the whole job; hold and unhold require running executionIds. */
+export interface ControlRequest extends PanelRequest { jobId: string; action: "cancel" | "resume" | "pause" | "hold" | "unhold"; revision: number; executionIds: string[] }
 /** activityBefore pages earlier activity entries by sequence. */
 export interface DetailRequest extends PanelRequest { jobId: string; executionId: string; offset: number; activityBefore?: number }
 export interface PanelRow { jobId: string; handle: string; goal: string; status: string; createdAt: number }
@@ -29,6 +29,8 @@ export interface PanelExecution {
   activity?: PanelActivity;
   /** Present while a pause of this running execution is requested or active. */
   suspension?: { state: string; source: string; suspendedAt?: number };
+  /** Present when this execution will be held, or was held, after it settles. */
+  holdAfter?: { source: string };
 }
 export interface PanelJob extends PanelRow {
   revision: number; phase: string; error?: string;

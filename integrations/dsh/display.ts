@@ -11,7 +11,7 @@ export function renderPanel(job: JobSnapshot, activity: (executionId: string) =>
   for (const node of state.graph.nodes.slice(0, 80)) {
     const result = state.nodes[node.id];
     const progress = result?.executionId ? job.progress[result.executionId] : undefined;
-    lines.push(`${result?.suspension && result.suspension.state !== "pausing" ? "‖" : result?.status === "running" ? "▶" : "·"} ${node.id} [${node.type}] ${result?.suspension?.state ?? result?.status ?? "pending"}` +
+    lines.push(`${result?.suspension && result.suspension.state !== "pausing" ? "‖" : result?.status === "running" ? "▶" : "·"} ${node.id} [${node.type}] ${result?.suspension?.state ?? result?.status ?? "pending"}${result?.holdAfter && result.status === "running" ? " · hold" : ""}` +
       (progress ? ` · context ${progress.contextTokens}${progress.contextWindow ? `/${progress.contextWindow}` : ""} (${progress.contextSource}) · tools ${progress.toolCalls}` : "") +
       (result?.startedAt ? ` · ${Math.max(0, (result.finishedAt ?? Date.now()) - result.startedAt)} ms` : ""));
     for (const edge of state.graph.edges.filter(edge => edge.from === node.id))

@@ -36,6 +36,18 @@
   In Pi print mode, a job held only by pauses is stalled: one warning, then
   cancellation. See [compatibility](docs/compatibility.md#pausing-running-executions-unreleased)
   for type-level changes such as new event types.
+- The result of an execution that is already running can be held once it
+  finishes, like `pauseAfter`, without cancelling it or editing edges
+  ([#95](https://github.com/Epsirom/braid/issues/95)). `pauseAfter` is captured
+  at admission, so this covers a decision made while a node runs, including one
+  whose final model request is already in flight. Core adds
+  `BraidRun.holdAfter(executionIds, hold, { source })`, which also removes a hold,
+  including one from `pauseAfter`, for that execution only. Executions carry
+  `holdAfter`, and the `execution_hold_added`/`execution_hold_removed` events
+  record changes. Pi and DSH add `after: true` to `braid_pause` (hold) and
+  `braid_resume` (remove the hold), plus panel controls (Pi `/braid` key `h`;
+  DSH **Hold result when finished** and **Remove hold**). Holds made by the user
+  reach the parent as notices, like pauses.
 
 ### Fixes
 

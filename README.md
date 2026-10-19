@@ -201,7 +201,8 @@ nodes. Both read-only and writable Git executions get isolated predecessor
 snapshots; read-only disables write capabilities. Outside Git all filesystem
 access is read-only. `notifyOnCompletion` requests host reminders, `pauseAfter`
 holds outgoing scheduling, and `requireSuccess` makes failure abort the whole run.
-All three booleans default to false.
+All three booleans default to false. `BraidRun.holdAfter` adds or removes the
+same hold on an execution that is already running.
 
 Unknown fields, missing references, duplicate exact edges, and undeclared cycles
 are rejected. Declared structured loops require a finite iteration limit and an
@@ -339,7 +340,8 @@ Graph deadlines and execution limits remain active while paused.
 Nodes are mutable definitions; execution instances retain captured prompts and
 inputs. `startBraid` exposes revision-checked `update`, `resume`, `snapshot`, and
 `cancel`, plus `pause`/`pauseRun`/`resumeRun` to suspend running executions at
-their next model request without losing their work. Updates can change running nodes, completed nodes, edges, templates, and
+their next model request without losing their work, and `holdAfter` to hold a
+running execution's result once it settles. Updates can change running nodes, completed nodes, edges, templates, and
 loop topology at any time before finalization. Completion uses the latest graph.
 See [loops and live updates](docs/execution-control.md) for schemas and examples.
 
@@ -360,7 +362,8 @@ human message to a running worker. Instance events carry `executionId`, admissio
 `fromExecutionId`.
 
 `loop_started`/`loop_completed` report rounds. `execution_paused` and
-`execution_resumed` report gates; `execution_suspending`/`execution_suspended`
+`execution_resumed` report gates, and `execution_hold_added`/`execution_hold_removed`
+changes to a running execution's hold; `execution_suspending`/`execution_suspended`
 report pauses of running executions, and `graph_paused`/`graph_resumed` pauses
 of the whole run. `graph_completed` or `graph_failed` terminates
 the log. Completion/failure is published after checkpointing. Node events repeat

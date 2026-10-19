@@ -1,5 +1,5 @@
 import type {
-  BraidInput, BraidInputNode, BraidSnapshot, ExecutionActivity, ExecutionError, NodeExecution, NodeResult, NodeWorkspace,
+  BraidInput, BraidInputNode, BraidSnapshot, ExecutionActivity, ExecutionError, ExecutionHold, NodeExecution, NodeResult, NodeWorkspace,
 } from "@chrok/braid";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -76,6 +76,7 @@ function executionLine(execution: NodeResult & Partial<Pick<NodeExecution, "iter
   if (execution.iteration) parts.push(`iteration ${execution.iteration}`);
   parts.push(execution.skipReason ? `${execution.status} (${execution.skipReason})` : execution.status);
   if (execution.suspension) parts.push(`${execution.suspension.state}, paused by ${execution.suspension.source}`);
+  if (pendingHold(execution)) parts.push(`holds when finished, set by ${holdSource(execution.holdAfter!)}`);
   if (execution.latencyMs !== undefined) parts.push(duration(execution.latencyMs));
   if (execution.decision) parts.push(`decision ${execution.decision}`);
   if (execution.error) parts.push(failure(execution.error));
@@ -100,17 +101,40 @@ function control(execution: Control): string {
 
 /** Paused-by-user work is the user's call: say so wherever the parent sees it. */
 const USER_PAUSE_NOTE = "The user paused this; do not resume it unless the user asks.";
+const USER_HOLD_NOTE = "The user set this hold; do not remove it or release the result unless the user asks.";
 
-/** One sentence for a pause or resume the parent did not make. */
+/** A hold that applies once a still-unsettled execution finishes. Settled holds are paused executions. */
+function pendingHold(execution: NodeResult): boolean {
+  return Boolean(execution.holdAfter) && (execution.status === "running" || execution.status === "runnable");
+}
+const holdSource = (hold: ExecutionHold) => hold.source === "definition" ? "pauseAfter" : hold.source;
+
+/** One sentence for a pause, resume, or hold change the parent did not make. */
 export function formatControlNotice(notice: ControlNotice): string {
   const who = notice.source === "user" ? "The user" : `A ${notice.source} control`;
   const target = notice.executions
     ? notice.executions.map(execution => `node ${JSON.stringify(execution.nodeId)} execution ${execution.executionId}`).join(", ")
     : "the whole job";
   const lookup = JSON.stringify({ jobId: notice.handle, ...(notice.executions?.length === 1 ? { executionId: notice.executions[0]!.executionId } : {}) });
-  return notice.action === "paused"
-    ? `${who} paused ${target} of Braid job ${notice.handle}. Paused work keeps its conversation and workspace. Do not resume it unless the user asks; check the current state with braid_status(${lookup}).`
-    : `${who} resumed ${target} of Braid job ${notice.handle}; it continues where it stopped.`;
+  switch (notice.action) {
+    case "paused": return `${who} paused ${target} of Braid job ${notice.handle}. Paused work keeps its conversation and workspace. Do not resume it unless the user asks; check the current state with braid_status(${lookup}).`;
+    case "resumed": return `${who} resumed ${target} of Braid job ${notice.handle}; it continues where it stopped.`;
+    case "held": return `${who} set ${target} of Braid job ${notice.handle} to hold its result once it finishes; downstream work waits for a resume. Do not release it unless the user asks; check the current state with braid_status(${lookup}).`;
+    case "unheld": return `${who} removed the hold on ${target} of Braid job ${notice.handle}; its result goes downstream when it finishes.`;
+  }
+}
+
+/** The result of braid_pause or braid_resume with after=true. */
+export function formatHold(job: JobSnapshot, executionIds: readonly string[], hold: boolean): string {
+  const execution = job.execution;
+  if (!hold) return [`Braid job ${job.handle}: hold removed for ${ids(executionIds)}; their results go downstream when they finish.`, control(execution)].join("\n");
+  return [
+    `Braid job ${job.handle}: ${ids(executionIds)} keep running and will be held when they finish; downstream work waits until you release them.`,
+    control(execution),
+    "Each one appears in paused executions once it finishes, and you get a pause reminder. Review it with braid_status, then release it with " +
+      `braid_resume({"jobId":"${job.handle}","expectedRevision":<current>,"executionIds":[...]}), or atomically with braid_update resume. ` +
+      `To remove the hold before it finishes, use braid_resume({"jobId":"${job.handle}","executionIds":[...],"after":true}).`,
+  ].join("\n");
 }
 
 /** The result of braid_pause: what is pausing now and how to continue. */
@@ -183,6 +207,7 @@ export interface NodeStatus {
 export function formatNodeStatus({ job, node, activity, now }: NodeStatus): string {
   const lines = [`Braid job ${job.handle} · ${job.status} · ${control(job.execution)}`,
     ...node.suspension ? [`Execution is ${node.suspension.state}, paused by ${node.suspension.source}${node.suspension.suspendedAt !== undefined ? ` since ${iso(node.suspension.suspendedAt)}` : ""}.${node.suspension.source === "user" ? ` ${USER_PAUSE_NOTE}` : ""}`] : [],
+    ...pendingHold(node) ? [`Its result will be held when it finishes (set by ${holdSource(node.holdAfter!)}).${node.holdAfter!.source === "user" ? ` ${USER_HOLD_NOTE}` : ""}`] : [],
     `Execution ${node.executionId ?? "(none yet)"} · node ${node.id}${node.node ? ` (${node.node.type})` : ""}${node.iteration ? ` · iteration ${node.iteration}` : ""} · ${node.skipReason ? `${node.status} (${node.skipReason})` : node.status}`];
   const timing = [node.startedAt !== undefined && `started ${iso(node.startedAt)}`, node.latencyMs !== undefined && `took ${duration(node.latencyMs)}`,
     node.model && `model ${node.model}`, node.usage && `usage input ${node.usage.inputTokens}, output ${node.usage.outputTokens}`].filter(Boolean);
@@ -204,7 +229,7 @@ export function formatJobStatus(job: JobSnapshot, now: number): string {
   // Control fields lead: a long goal or output must not push them out of a truncated preview.
   const header = [`Braid job ${job.handle} · ${job.status}`, `ID: ${job.jobId}`, control(job.execution)];
   if (job.status === "running" && (job.execution.pause?.source === "user" ||
-      Object.values(job.execution.executions).some(item => item.suspension?.source === "user"))) header.push(USER_PAUSE_NOTE);
+      Object.values(job.execution.executions).some(item => item.suspension?.source === "user" || item.holdAfter?.source === "user"))) header.push(USER_PAUSE_NOTE);
   const error = job.error ?? (job.result?.error ? failure(job.result.error) : job.execution.error ? failure(job.execution.error) : undefined);
   if (error) header.push(`Error: ${error}`);
   const usage = formatUsage(job.usage);

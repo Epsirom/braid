@@ -4,7 +4,7 @@ import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { GraphUpdate } from "@chrok/braid";
 import { BRAID_ASYNC_GUIDANCE, braidParameters, nodeParameters, updateEdgeParameters, loopParameters } from "./schema.js";
 import type { BraidJobs, JobSnapshot } from "./jobs.js";
-import { boundedText, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUpdate } from "./status-text.js";
+import { boundedText, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUpdate } from "./status-text.js";
 
 const id = Type.String({ minLength: 1, pattern: "\\S" });
 const revision = Type.Integer({ minimum: 0 });
@@ -25,6 +25,17 @@ function control(job: JobSnapshot) {
     suspendedExecutionIds: job.execution.suspendedExecutionIds, ...(job.execution.pause ? { pause: job.execution.pause } : {}),
     total: executions.length, completed: executions.filter(execution => execution.status === "completed").length,
   } };
+}
+
+/** Holds and their removal apply to running executions only; explain the usual mistake. */
+function hold(jobs: BraidJobs, jobId: string, executionIds: readonly string[] | undefined, value: boolean): JobSnapshot {
+  if (!executionIds) throw new Error("after=true requires executionIds of running executions; read them from braid_status");
+  try { return jobs.holdAfter(jobId, executionIds, value, "agent"); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/running execution IDs/.test(message)) throw error;
+    throw new Error(`${message}. after=true applies only while an execution is still running; a finished result that is held is released with braid_resume({jobId, expectedRevision, executionIds}) without after.`);
+  }
 }
 
 async function bounded(text: string, name: string) {
@@ -96,18 +107,29 @@ export function createBraidTools(
       catch (error) { throw new Error(`Braid update rejected; no changes or resumes applied. ${error instanceof Error ? error.message : String(error)}. Retry the complete corrected patch with dependencies, loops, and resume IDs.`); }
       return { text: formatUpdate(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision, pausedExecutionIds: job.execution.pausedExecutionIds };
     }),
-    tool("braid_resume", "Release paused (pauseAfter) executions, or resume suspended ones in the same conversation, by execution ID at expectedRevision. Omit executionIds to resume a job paused with braid_pause; executions paused separately stay suspended. This does not reset budgets or the graph deadline. Do not resume work the user paused unless the user asks.", Type.Object({
+    tool("braid_resume", "Release paused (pauseAfter) executions, or resume suspended ones in the same conversation, by execution ID at expectedRevision. Omit executionIds to resume a job paused with braid_pause; executions paused separately stay suspended. This does not reset budgets or the graph deadline. With after=true it instead removes the hold on still-running executions. Do not resume work the user paused or held unless the user asks.", Type.Object({
       jobId: id, expectedRevision: Type.Optional(revision), executionIds: Type.Optional(Type.Array(id, { minItems: 1, uniqueItems: true })),
+      after: Type.Optional(Type.Boolean({ description: "true: remove the hold that braid_pause after=true or pauseAfter put on these still-running executions, so their results go downstream when they finish. Requires executionIds; expectedRevision is not needed. A result that is already held is released without after." })),
     }, { additionalProperties: false }), (args, context) => {
+      if (args.after) {
+        const job = hold(getJobs(context), args.jobId, args.executionIds, false);
+        return { text: formatHold(job, args.executionIds!, false), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision,
+          pausedExecutionIds: job.execution.pausedExecutionIds, suspendedExecutionIds: job.execution.suspendedExecutionIds };
+      }
       const jobs = getJobs(context);
       if (args.executionIds && args.expectedRevision === undefined) throw new Error("expectedRevision is required with executionIds; read it from braid_status");
       const job = args.executionIds ? jobs.resume(args.jobId, args.executionIds, args.expectedRevision!) : jobs.resumeJob(args.jobId);
       return { text: formatResume(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision,
         pausedExecutionIds: job.execution.pausedExecutionIds, suspendedExecutionIds: job.execution.suspendedExecutionIds };
     }),
-    tool("braid_pause", "Temporarily stop running executions without losing their work: each finishes its running tool, then stops before its next model request, keeping its conversation, workspace, and tool budgets, and releasing its concurrency slot. Omit executionIds to pause the whole job: no new executions start and running ones pause. Resume with braid_resume. The node timeout stops while suspended; the graph timeout keeps running, so resume or cancel paused work.", Type.Object({
+    tool("braid_pause", "Temporarily stop running executions without losing their work: each finishes its running tool, then stops before its next model request, keeping its conversation, workspace, and tool budgets, and releasing its concurrency slot. Omit executionIds to pause the whole job: no new executions start and running ones pause. Resume with braid_resume. The node timeout stops while suspended; the graph timeout keeps running, so resume or cancel paused work. With after=true it does not suspend: each execution finishes, then its result is held until braid_resume.", Type.Object({
       jobId: id, executionIds: Type.Optional(Type.Array(id, { minItems: 1, uniqueItems: true })),
+      after: Type.Optional(Type.Boolean({ description: "true: do not suspend; let these running executions finish, then hold their results like pauseAfter, so downstream work waits for braid_resume. Use it to review a result that is still being produced. Requires executionIds; applies to these executions only, not their node definitions." })),
     }, { additionalProperties: false }), (args, context) => {
+      if (args.after) {
+        const job = hold(getJobs(context), args.jobId, args.executionIds, true);
+        return { text: formatHold(job, args.executionIds!, true), ...control(job) };
+      }
       const job = getJobs(context).pause(args.jobId, args.executionIds, "agent");
       return { text: formatPause(job, args.executionIds), ...control(job) };
     }),

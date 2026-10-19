@@ -81,11 +81,12 @@ export interface NodeCompletion {
   errorCode?: ExecutionError["code"];
 }
 
-/** A pause or resume someone other than the parent agent made, such as the user in /braid. */
+/** A pause, resume, or hold change someone other than the parent agent made, such as the user in /braid. */
 export interface ControlNotice {
   jobId: string;
   handle: string;
-  action: "paused" | "resumed";
+  /** held/unheld: a hold on running executions' results was added or removed. */
+  action: "paused" | "resumed" | "held" | "unheld";
   /** Omitted for the whole job. */
   executions?: { executionId: string; nodeId: string }[];
   source: string;
@@ -284,7 +285,7 @@ export class BraidJobs {
           const instance = event.executionId ? state?.executions[event.executionId] : undefined;
           const shouldNotify = event.type === "execution_paused" ||
             ((event.type === "node_completed" || event.type === "node_failed") && instance?.node.notifyOnCompletion &&
-              (!instance.node.pauseAfter || state?.error));
+              (!instance.holdAfter || state?.error));
           if (!this.disposed && !job.blocking && shouldNotify && "nodeId" in event && instance) {
             try {
               void Promise.resolve(this.onNodeFinished({
@@ -456,6 +457,21 @@ export class BraidJobs {
     if (executionIds) job.run.pause(executionIds, { source });
     else job.run.pauseRun({ source });
     this.notify(job, "paused", source, executionIds);
+    this.changed();
+    return this.get(jobId)!;
+  }
+
+  /**
+   * Hold running executions' results once they finish (hold = true), or remove
+   * that hold, without suspending them. source records who asked.
+   */
+  holdAfter(jobId: string, executionIds: readonly string[], hold: boolean, source: string): JobSnapshot {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    if (!job.run || job.status !== "running") throw new Error("Job is not accepting updates");
+    if (job.blocking) throw new Error("Blocking Braid jobs cannot hold results; start Pi without --braid-blocking.");
+    job.run.holdAfter(executionIds, hold, { source });
+    this.notify(job, hold ? "held" : "unheld", source, executionIds);
     this.changed();
     return this.get(jobId)!;
   }

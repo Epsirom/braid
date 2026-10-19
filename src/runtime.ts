@@ -584,6 +584,23 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     for (const id of ids) requestPause(executions.get(id)!, source, false);
     return snapshot();
   }
+  function holdAfter(ids: readonly string[], hold: boolean, options?: PauseOptions): BraidSnapshot {
+    assertActive();
+    const source = pauseSource(options);
+    if (typeof hold !== "boolean") throw new TypeError("hold must be a boolean");
+    // Settled executions are rejected even before routing, so a hold never changes after completion is reported.
+    if (!Array.isArray(ids) || !ids.length || new Set(ids).size !== ids.length ||
+        ids.some(id => !running.has(id) || settled(executions.get(id)!)))
+      throw new Error("holdAfter must contain unique running execution IDs");
+    for (const id of ids) {
+      const record = executions.get(id)!;
+      if (Boolean(record.holdAfter) === hold) continue;
+      if (hold) record.holdAfter = { source, requestedAt: Date.now() };
+      else delete record.holdAfter;
+      log.emit({ type: hold ? "execution_hold_added" : "execution_hold_removed", nodeId: record.id, source, ...context(record) });
+    }
+    return snapshot();
+  }
   function pauseRun(options?: PauseOptions): BraidSnapshot {
     assertActive();
     const source = pauseSource(options);
@@ -750,6 +767,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       predecessorExecutionIds: predecessors.map(value => value.executionId), status: skipReason ? "skipped" : "runnable",
       ...(loopId ? { loopId, iteration: loops.get(loopId)!.iteration } : {}),
       ...(node.model ?? defaultModel ? { model: node.model ?? defaultModel! } : {}),
+      ...(node.pauseAfter && !skipReason ? { holdAfter: { source: "definition", requestedAt: Date.now() } } : {}),
     };
     executions.set(record.executionId, record);
     latest.set(node.id, record);
@@ -774,7 +792,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
         if (infrastructure) controller.abort(new RunError(error.code, error.message));
         else if (record.node.requireSuccess) controller.abort(new RunError("REQUIRED_NODE_FAILED", `Required node '${record.id}' (${record.executionId}) failed: ${error.message}`));
       }, suspensionControl(record));
-      if (record.node.pauseAfter && !controller.signal.aborted) {
+      if (record.holdAfter && !controller.signal.aborted) {
         paused.add(record.executionId);
         scopedLog.emit({ type: "execution_paused", nodeId: record.id });
       }
@@ -891,6 +909,6 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     result.events = Object.freeze(log.events);
     return result;
   }
-  return { runId, result: Promise.resolve().then(execute), snapshot, update, cancel, pause, pauseRun, resumeRun,
+  return { runId, result: Promise.resolve().then(execute), snapshot, update, cancel, pause, holdAfter, pauseRun, resumeRun,
     resume(ids, expectedRevision) { assertMutable(expectedRevision); validateResume(ids); release(ids); wake(); return snapshot(); } };
 }

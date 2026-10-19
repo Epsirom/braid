@@ -104,6 +104,34 @@ even at a leaf. Independent branches continue. Pi sends a pause reminder;
 either on its own or in the same transaction as a graph update. Removing a paused
 node definition does not discard its gate: explicitly resume or cancel it.
 
+### Holding a running execution
+
+`pauseAfter` is captured when an execution is admitted, so a `braid_update` that
+sets it affects only later executions. To hold the result of an execution that is
+already running, add a hold to that execution:
+
+```ts
+run.holdAfter([executionId], true, { source: "agent" });  // hold once it settles
+run.holdAfter([executionId], false, { source: "agent" }); // or let it flow downstream
+```
+
+A hold set this way behaves exactly like `pauseAfter`: when the execution settles,
+completed or failed, it is listed in `pausedExecutionIds`, `execution_paused` is
+emitted, and `resume` releases it. It applies to this execution only and changes
+neither its captured `node` nor the graph definition. Removing a hold that came
+from the definition's `pauseAfter` releases only this execution; later ones still
+pause. Each execution's `holdAfter` field (`{ source, requestedAt }`, with source
+`"definition"` for `pauseAfter`) is authoritative over `node.pauseAfter`.
+
+`holdAfter` accepts running executions only, including suspended ones, and works
+with any runner. It rejects pending, settled, and held executions: once an
+execution reports completion its hold no longer changes, even while it finishes
+checkpointing. It neither takes nor increments the graph revision. Repeating the
+current state changes nothing; otherwise `execution_hold_added` or
+`execution_hold_removed` records the change and its source. A hold and a
+suspension are independent: resuming a suspended execution keeps its hold, so a
+held result still needs a second resume once it settles.
+
 ## Pausing running executions
 
 `pauseAfter` holds an execution after it finishes. To stop an execution while it
