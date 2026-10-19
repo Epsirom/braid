@@ -8,6 +8,30 @@ import { context, deferred, input, response } from "./helpers.js";
 
 const bounds = { timeout: 2_000 };
 
+test("forwarding a missing predecessor fails before the model or downstream integration runs", bounds, async t => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  let calls = 0;
+  const job = jobs.start({
+    goal: "missing handoff",
+    nodes: [
+      { type: "execute", id: "relay", prompt: "review", requireSuccess: true },
+      { type: "execute", id: "apply", prompt: "integrate" },
+    ],
+    edges: [{ from: "relay", to: "apply" }],
+  }, { forwardPredecessor: { from: "scope", through: "relay" } }, context(async () => {
+    calls++;
+    return response("Should not run");
+  }));
+  await jobs.wait(job.handle);
+  const result = jobs.get(job.handle)!.result!;
+  assert.equal(result.status, "failed");
+  assert.equal(result.error!.code, "REQUIRED_NODE_FAILED");
+  assert.match(result.nodes.relay!.error!.message, /Cannot forward missing predecessor 'scope' through 'relay'/);
+  assert.equal(calls, 0);
+  assert.equal(Object.values(result.executions).some(execution => execution.id === "apply"), false);
+});
+
 test("blocking waits for parallel branches and their join, returns outputs and claims usage once", bounds, async t => {
   const rootsStarted = deferred<void>();
   const firstFinished = deferred<void>();

@@ -8,11 +8,12 @@ import {
   createLiveState,
   type BraidToolDetails,
 } from "../display.js";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { createBraidTools } from "../index.js";
 import { BraidJobs, type JobSnapshot } from "../jobs.js";
+import { registerReviewCommand } from "../review.js";
 import { context, input, response } from "./helpers.js";
 
 function renderResult(
@@ -277,6 +278,25 @@ test("partial renderer remains compact before Braid has result details", () => {
     ),
   );
   assert.match(rendered, /Braid is running…/);
+});
+
+test("the built-in review chart renders one retry return lane", async t => {
+  const jobs = new BraidJobs();
+  t.after(() => jobs.dispose());
+  const start = t.mock.method(jobs, "start", () => ({ jobId: "review", handle: "job-1" }) as never);
+  let handler!: Parameters<ExtensionAPI["registerCommand"]>[1]["handler"];
+  registerReviewCommand({
+    registerCommand(_name: string, options: { handler: typeof handler }) { handler = options.handler; },
+    sendMessage() {},
+  } as never, jobs);
+  await handler("", context(async () => response()) as never);
+  const graph = start.mock.calls[0]!.arguments[0]!;
+  const live = createLiveState();
+  applyEvent(live, { type: "graph_updated", graph, sequence: 1, timestamp: 0 });
+  const plainTheme = { fg: (_color: string, value: string) => value, bg: (_color: string, value: string) => value, bold: (value: string) => value };
+  const chart = lines(renderGraphResult(live, false, false, plainTheme), 1_000);
+  assert.equal(chart.match(/◄/g)?.length, 1, chart);
+  assert.match(chart, /retry/);
 });
 
 test("a too-wide flowchart is cropped to the terminal width around a running node", () => {

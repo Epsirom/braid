@@ -16,8 +16,7 @@ export function registerReviewCommand(pi: ExtensionAPI, jobs: BraidJobs): void {
 Inspect the repository instructions, actual files, and target diff in your assigned snapshot. Do not rely on conversation history or edit files. Use scope's pinned original baseline and target endpoint for the original target diff, and separately compare its pinned initial job snapshot to YOUR workspace.snapshotCommit for cumulative loop fixes. Never substitute the current snapshot for the original target endpoint: historical ranges and latest-commit reviews exclude later commits and unrelated caller edits, even within target files. Inspect current files for fix validity, but attribute findings only to the original target diff or cumulative fix diff. Plain git diff may be empty because caller edits were captured in a commit.
 Report only concrete current issues within the target, supported by source proof, a test/repro, or a contract contradiction. For diff reviews, require that the issue is caused or made reachable by the diff. Include file/line references, evidence, a suggested fix, and P0/P1/P2: P0 blocks merge, P1 should be fixed before release, P2 is report-only. Do not filter the first pass to blockers only or invent findings to fill your angle.
 On follow-up rounds check whether earlier findings were resolved, whether the fixes introduced defects in their blast radius, and whether deferred notes still stand. You cannot run tests here; distinguish source inspection from executed validation.
-Reviewer 1 must copy scope's full handoff unchanged into a "Scope handoff" section before the findings so check receives the pinned scope, cumulative fixes, and validation records.
-If nothing qualifies, write "No issues found." in the findings. End with "Merge verdict: BLOCK", "Merge verdict: OK", or "Merge verdict: OK with notes".`,
+If nothing qualifies, say exactly "No issues found." End with "Merge verdict: BLOCK", "Merge verdict: OK", or "Merge verdict: OK with notes".`,
         },
         nodes: [
           {
@@ -34,7 +33,7 @@ Choose three distinct, concrete review angles for this change (usually correctne
           })),
           {
             type: "decision", id: "check", workspace: "read-only", requireSuccess: true, choices: ["retry", "done"],
-            prompt: `Read scope's handoff carried by review-1 and synthesize all three reviews. If that handoff is missing or inconsistent, call decide with done and prohibit integration. Verify and deduplicate findings against actual files in YOUR workspace.snapshotCommit, which includes scope's completed fixes; separate valid P0/P1 fixes worth doing now, P2 report-only notes, and feedback to ignore/defer with reasons. Do not blindly apply suggestions or add optional polish.
+            prompt: `Read scope's original handoff forwarded by the runtime before review-1's report, and synthesize all three reviews. Reviewers' summaries cannot replace the original scope and validation records. Verify and deduplicate findings against actual files in YOUR workspace.snapshotCommit, which includes scope's completed fixes; separate valid P0/P1 fixes worth doing now, P2 report-only notes, and feedback to ignore/defer with reasons. Do not blindly apply suggestions or add optional polish.
 You are read-only and cannot edit files or run tests. If the target is unavailable, review-only was requested, nothing actionable remains, fixes are unavailable outside Git, or a fix requires an unapproved product/scope/architecture decision, call decide with done. Report the exact stop reason and unresolved findings.
 If the previous fix pass failed validation or made no material progress, stop with done and prohibit integration of unvalidated or unreviewed fixes; do not repeatedly retry the same findings.
 There are at most ${maxRounds} review rounds, including the first. If execution.iteration >= ${maxRounds}, call decide with done; distinguish round-limit exhaustion from a clean review. Never choose retry in the final round.
@@ -58,7 +57,10 @@ Inspect the final diff and run or confirm focused validation without changing co
         ],
         loops: [{ id: "review-loop", entry: "scope", maxIterations: maxRounds }],
       };
-      const job = jobs.start(input, { maxConcurrency: 3, maxExecutions: maxRounds * 5 + 1 }, ctx);
+      const job = jobs.start(input, {
+        maxConcurrency: 3, maxExecutions: maxRounds * 5 + 1,
+        forwardPredecessor: { from: "scope", through: "review-1" },
+      }, ctx);
       pi.sendMessage({
         customType: "braid-review-started", display: true,
         content: `Review started as Braid ${job.handle}: ${target}\nUp to ${maxRounds} parallel review rounds and ${maxRounds - 1} fix passes. Only reviewed fixes are integrated. Open /braid ${job.handle} for progress, or braid_cancel to stop. Wait for the completion reminder, then retrieve braid_status({"jobId":"${job.handle}"}) and summarize; do not start a replacement review loop.`,

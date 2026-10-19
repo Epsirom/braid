@@ -10,7 +10,6 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import type { MergeSource, NodeWorkspace, PredecessorOutput } from "@chrok/braid";
 import { BraidJobs } from "../jobs.js";
 import { registerReviewCommand } from "../review.js";
-import { applyEvent, createLiveState, renderGraphResult } from "../display.js";
 import { context, response } from "./helpers.js";
 
 const exec = promisify(execFile);
@@ -86,14 +85,8 @@ test("/braid:review registers a bounded background graph and trims its target", 
   assert.doesNotMatch(input.goal, /  HEAD/);
   assert.deepEqual(input.loops, [{ id: "review-loop", entry: "scope", maxIterations: 3 }]);
   assert.deepEqual(input.edges.filter(edge => edge.to === "check").map(edge => edge.from).sort(), ["review-1", "review-2", "review-3"]);
-  const live = createLiveState();
-  applyEvent(live, { type: "graph_updated", graph: input, sequence: 1, timestamp: 0 });
-  const theme = { fg: (_color: string, value: string) => value, bg: (_color: string, value: string) => value, bold: (value: string) => value };
-  const chart = renderGraphResult(live, false, false, theme).render(1_000).join("\n");
-  assert.equal(chart.match(/◄/g)?.length, 1, chart);
-  assert.match(chart, /retry/);
   assert.ok(input.nodes.every(node => node.requireSuccess));
-  assert.deepEqual(options, { maxConcurrency: 3, maxExecutions: 16 });
+  assert.deepEqual(options, { maxConcurrency: 3, maxExecutions: 16, forwardPredecessor: { from: "scope", through: "review-1" } });
   assert.equal(submittedContext, ctx);
   assert.equal(messages.length, 1);
   assert.equal(messages[0]![0].customType, "braid-review-started");
@@ -141,8 +134,7 @@ test("/braid:review fixes one checkpoint, re-reviews it, and preserves staged an
       assert.equal(data.predecessors.length, 1);
       assert.equal(data.predecessors[0]!.nodeId, "scope");
       reviewed.push(round);
-      const handoff = data.nodeId === "review-1" ? `Scope handoff:\n${data.predecessors[0]!.output}\n\n` : "";
-      return response(handoff + (round === 1 ? "P1 code.txt: confirmed bug" : "No actionable findings"));
+      return response(round === 1 ? "P1 code.txt: confirmed bug" : "No actionable findings");
     }
     if (data.nodeId === "check") {
       assert.equal(data.workspace.mode, "read-only");
@@ -187,6 +179,36 @@ test("/braid:review fixes one checkpoint, re-reviews it, and preserves staged an
   assert.equal(await readFile(join(root, "caller-new.txt"), "utf8"), "untracked caller\n");
   assert.equal(result.terminalOutputs.apply!.output, "Review completed after two rounds; integrated the fix");
   assert.equal((await git(root, "worktree", "list", "--porcelain")).split("\n").filter(line => line.startsWith("worktree ")).length, 1);
+});
+
+test("/braid:review preserves scope's validation record when reviewers omit or alter it", { timeout: 30_000 }, async t => {
+  const { jobs, ctx, handler } = await repository(t);
+  const handoff = "Pinned baseline: 1111111111111111111111111111111111111111\nTarget endpoint: 2222222222222222222222222222222222222222\nValidation: npm test exited 1; do not integrate.";
+  let checkInput: Payload | undefined;
+  t.mock.method(ctx.modelRegistry, "complete", async (_model: unknown, worker: Context) => {
+    const data = payload(worker);
+    if (data.nodeId === "scope") return response(handoff);
+    if (data.nodeId === "review-1") return response("No issues found. Merge verdict: OK");
+    if (data.nodeId === "review-2") return response("Scope handoff: baseline 3333333333333333333333333333333333333333; npm test passed.");
+    if (data.nodeId === "review-3") return response("Scope context: validation run. Merge verdict: OK");
+    if (data.nodeId === "check") {
+      checkInput = data;
+      if (worker.messages.length === 1) return decide("done");
+      return response("Validation failed; prohibit integration.");
+    }
+    if (worker.messages.length === 1) return toolResponse({ type: "toolCall", id: "finish", name: "finish_merge", arguments: {
+      dispositions: data.mergeSources!.map(source => ({ executionId: source.executionId!, disposition: "discarded", reason: "Validation failed" })),
+    } });
+    return response("No changes integrated.");
+  });
+  await handler("", ctx as unknown as ExtensionCommandContext);
+  const job = jobs.list()[0]!;
+  await jobs.wait(job.handle);
+  const result = jobs.get(job.handle)!.result!;
+  assert.equal(result.status, "completed", JSON.stringify(result));
+  assert.ok(checkInput);
+  assert.ok(checkInput.predecessors.some(predecessor => predecessor.output.includes(handoff)),
+    "check must receive the original scope handoff even when no reviewer repeats it correctly");
 });
 
 for (const outcome of ["clean", "capped", "limit", "reviewer failure"] as const) {

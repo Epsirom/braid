@@ -166,8 +166,9 @@ focused validation. Optional P2 polish is reported. A product, scope, or
 architecture decision stops the loop for user input.
 
 The flow is scope → three parallel reviews → check, with retry returning from
-check to scope. Reviewer 1 carries scope's full handoff to check, including the
-pinned review scope, cumulative fixes, and validation records.
+check to scope. The runtime forwards scope's original handoff with review-1's
+report, including the pinned review scope, cumulative fixes, and validation
+records. Reviewers do not rewrite this handoff; a missing source fails the node.
 
 The graph enforces a fixed maximum of **three review rounds**, including the
 first, and **two fix passes**. The final round reports remaining issues without
