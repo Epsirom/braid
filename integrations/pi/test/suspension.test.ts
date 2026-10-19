@@ -9,8 +9,11 @@ import { context, deferred, input, response } from "./helpers.js";
 
 const plainTheme = { fg: (_color: string, value: string) => value, bg: (_color: string, value: string) => value, bold: (value: string) => value } as never;
 const textOf = (result: { content: unknown[] }) => (result.content[0] as { text: string }).text;
-const until = async (condition: () => boolean) => {
-  for (let i = 0; i < 2000 && !condition(); i++) await new Promise(resolve => setImmediate(resolve));
+// Bound the wait by time, not ticks: workspace setup awaits file-system calls,
+// which can take many event-loop turns on slow runners (notably Windows).
+const until = async (condition: () => boolean, timeoutMs = 5_000) => {
+  const deadline = performance.now() + timeoutMs;
+  while (!condition() && performance.now() < deadline) await new Promise(resolve => setImmediate(resolve));
   assert.ok(condition(), "condition not reached");
 };
 
