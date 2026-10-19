@@ -9,6 +9,18 @@
   print and JSON runs already wait for background jobs, so drop the command to
   migrate.
 
+### Features
+
+- Pi nodes retry transient model errors, such as HTTP 429 rate limits, overload,
+  5xx responses, and dropped streams, inside the running execution instead of
+  failing the node. The conversation, completed tool calls, workspace, and tool
+  budgets are kept, and completed tools are not run again. Requests rejected
+  before a response starts are retried by Pi's provider client, which honors
+  `Retry-After`; streams that fail after starting are restarted by Braid with
+  exponential backoff. Retries stop at cancellation and node/graph deadlines.
+  Set `options.maxModelRetries` (default 3, `0` disables) to change the limit
+  ([#93](https://github.com/Epsirom/braid/pull/93)) — @Epsirom.
+
 ### Fixes
 
 - Pi `/braid:review` removes the direct scope-to-check dependency, leaving a

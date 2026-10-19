@@ -34,6 +34,7 @@ export interface JobOptions {
   graphTimeoutMs?: number;
   maxToolRounds?: number;
   maxToolCalls?: number;
+  maxModelRetries?: number;
   /** Copy an upstream output through one node without asking its model to repeat it. */
   forwardPredecessor?: { from: string; through: string };
 }
@@ -189,6 +190,7 @@ export class BraidJobs {
             humanInputs: job.humanInputs,
             maxToolRounds: options.maxToolRounds ?? Infinity,
             maxToolCalls: options.maxToolCalls ?? Infinity,
+            ...(options.maxModelRetries === undefined ? {} : { maxModelRetries: options.maxModelRetries }),
             onUsage: (usage) => {
               if (job.status === "running" && !job.controller.signal.aborted)
                 reports.push(usage);
