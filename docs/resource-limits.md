@@ -21,6 +21,7 @@ well as the compact definition.
 | Graph timeout (includes queueing and paused gates) | 5 minutes | Unlimited |
 | Caller cancellation | `AbortSignal` | `braid_cancel` / panel `c` |
 | Worker tool loop | Decision continuation / merge Git-tool loop, bounded by deadlines | Unlimited by default; optional `maxToolRounds` and `maxToolCalls` |
+| Transient model error retries | Runner-defined | 3 per model request (`maxModelRetries`), within the current execution |
 | Result preview | Full result | 50 KB / 2,000 lines of text, then temporary full-text file |
 | Token / monetary budget | Not enforced | Not enforced |
 

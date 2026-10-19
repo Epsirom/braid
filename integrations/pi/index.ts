@@ -99,6 +99,7 @@ const braidParameters = Type.Object({
     maxConcurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum simultaneous node executions; default 4." })),
     maxExecutions: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "Total execution limit across all iterations and updates; default 1000." })),
     nodeTimeoutMs: timeout("node"), graphTimeoutMs: timeout("graph"), maxToolRounds: toolBudget("rounds"), maxToolCalls: toolBudget("calls"),
+    maxModelRetries: Type.Optional(Type.Integer({ minimum: 0, maximum: 10, description: "Retries per model request for transient provider errors such as rate limits, overload, and network failures. The node continues where it was; completed tool calls are not repeated. Default 3; 0 disables." })),
   }, { additionalProperties: false })),
 }, { additionalProperties: false });
 

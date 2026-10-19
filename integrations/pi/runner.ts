@@ -2,6 +2,8 @@ import { resolve } from "node:path";
 import {
   StringEnum,
   Type,
+  isRetryableAssistantError,
+  retryDelayMs,
   validateToolCall,
   type AssistantMessage,
   type Context,
@@ -60,6 +62,29 @@ export interface PiRunnerOptions {
   maxToolRounds?: number;
   /** Per node, including decide and rejected requests. Omit or use Infinity for no limit. */
   maxToolCalls?: number;
+  /** Retries per model request for transient provider errors; 0 disables. Default: 3. */
+  maxModelRetries?: number;
+  /** First backoff before Braid restarts a failed model stream, doubling per retry. Default: 2000. */
+  modelRetryDelayMs?: number;
+}
+
+const DEFAULT_MODEL_RETRIES = 3;
+/** Caps both Braid's backoff and a provider's Retry-After; longer requested waits fail immediately. */
+const MAX_MODEL_RETRY_DELAY_MS = 60_000;
+
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /**
@@ -90,6 +115,14 @@ export function createPiRunner(
     if (value !== Infinity && (!Number.isSafeInteger(value) || value < 1)) {
       throw new TypeError(`${name} must be Infinity or a positive safe integer`);
     }
+  }
+  const maxModelRetries = options.maxModelRetries ?? DEFAULT_MODEL_RETRIES;
+  const modelRetryDelayMs = options.modelRetryDelayMs ?? 2000;
+  if (!Number.isSafeInteger(maxModelRetries) || maxModelRetries < 0) {
+    throw new TypeError("maxModelRetries must be a non-negative safe integer");
+  }
+  if (!Number.isFinite(modelRetryDelayMs) || modelRetryDelayMs < 0) {
+    throw new TypeError("modelRetryDelayMs must be a non-negative finite number");
   }
   const onUsage = options.onUsage;
   const onProgress = options.onProgress;
@@ -286,79 +319,102 @@ export function createPiRunner(
       });
       // The registry resolves stored API keys, OAuth, custom headers and endpoints.
       // complete() is stream().result(); streaming only adds observation.
+      // pi-ai retries rejected requests before a response starts, honoring Retry-After.
       const requestOptions = {
         signal: request.signal,
         sessionId,
         cacheRetention: "none" as const,
         transport: "sse" as const,
-        maxRetries: 0,
+        maxRetries: maxModelRetries,
+        maxRetryDelayMs: MAX_MODEL_RETRY_DELAY_MS,
       };
-      activity?.modelRequest();
-      let response: AssistantMessage;
-      try {
-        if (registry.stream) {
-          const stream = registry.stream(model, context, requestOptions);
-          for await (const event of stream) {
-            if (event.type !== "done" && event.type !== "error") transcripts?.streaming(executionId!, event.partial);
-            if (event.type === "text_delta") activity?.modelStream("text", event.delta);
-            else if (event.type === "thinking_delta") activity?.modelStream("reasoning", event.delta);
-            else if (event.type === "toolcall_start" || event.type === "toolcall_delta") {
-              const block = event.partial.content[event.contentIndex];
-              activity?.modelStream("tool_call", event.type === "toolcall_delta" ? event.delta : "",
-                block?.type === "toolCall" ? block.name : undefined);
+      let retries = 0;
+      while (true) {
+        activity?.modelRequest();
+        let response: AssistantMessage;
+        // Without a stream we cannot tell where a request failed, so Braid may retry it too.
+        let started = !registry.stream;
+        try {
+          if (registry.stream) {
+            const stream = registry.stream(model, context, requestOptions);
+            for await (const event of stream) {
+              if (event.type === "start") started = true;
+              if (event.type !== "done" && event.type !== "error") transcripts?.streaming(executionId!, event.partial);
+              if (event.type === "text_delta") activity?.modelStream("text", event.delta);
+              else if (event.type === "thinking_delta") activity?.modelStream("reasoning", event.delta);
+              else if (event.type === "toolcall_start" || event.type === "toolcall_delta") {
+                const block = event.partial.content[event.contentIndex];
+                activity?.modelStream("tool_call", event.type === "toolcall_delta" ? event.delta : "",
+                  block?.type === "toolCall" ? block.name : undefined);
+              }
             }
+            response = await stream.result();
+          } else {
+            response = await registry.complete(model, context, requestOptions);
           }
-          response = await stream.result();
-        } else {
-          response = await registry.complete(model, context, requestOptions);
+        } catch (error) {
+          activity?.modelError(error instanceof Error ? error.message : String(error));
+          throw error;
         }
-      } catch (error) {
-        activity?.modelError(error instanceof Error ? error.message : String(error));
-        throw error;
+        // A failed attempt stays visible in the session view but never enters the context.
+        transcripts?.assistant(executionId!, response);
+        activity?.modelResponse({
+          text: response.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n\n"),
+          reasoning: response.content.flatMap(block => block.type === "thinking" ? [block.thinking] : []).join("\n\n"),
+          toolCalls: response.content.flatMap(block => block.type === "toolCall" ? [{ id: block.id, name: block.name }] : []),
+          stopReason: response.stopReason,
+          inputTokens: response.usage.input + response.usage.cacheRead + response.usage.cacheWrite,
+          outputTokens: response.usage.output,
+        });
+        if (response.stopReason !== "stop" && response.stopReason !== "toolUse") {
+          activity?.modelError(response.errorMessage || `Pi model ended with '${response.stopReason}'`);
+        }
+        actualModel = `${response.provider}/${response.responseModel ?? response.model}`;
+        const providerContextTokens =
+          response.usage.input +
+          response.usage.cacheRead +
+          response.usage.cacheWrite;
+        if (providerContextTokens) reportedContextTokens = providerContextTokens;
+        reportProgress({
+          nodeId: request.node.id,
+          ...(request.execution.executionId ? { executionId: request.execution.executionId } : {}),
+          contextTokens: reportedContextTokens ?? estimateContextTokens(context),
+          contextWindow: model.contextWindow,
+          contextSource:
+            reportedContextTokens !== undefined ? "reported" : "estimate",
+          toolCalls,
+          toolRounds,
+          phase: "model",
+        });
+        // Failed attempts are billed too.
+        onUsage?.(structuredClone(response.usage));
+        usage.inputTokens +=
+          response.usage.input +
+          response.usage.cacheRead +
+          response.usage.cacheWrite;
+        usage.outputTokens += response.usage.output;
+        request.signal.throwIfAborted();
+        // A stream that failed after it started is restarted from the same context. Tools run
+        // only after a complete response, so nothing from the failed attempt has executed.
+        if (response.stopReason === "error" && started && retries < maxModelRetries && isRetryableAssistantError(response)) {
+          const delayMs = retryDelayMs({ baseDelayMs: modelRetryDelayMs, maxAgentDelayMs: MAX_MODEL_RETRY_DELAY_MS }, retries + 1);
+          const deadline = Math.min(request.deadlines?.node ?? Infinity, request.deadlines?.graph ?? Infinity);
+          // Report the provider error rather than a timeout when the wait cannot finish in time.
+          if (performance.now() + delayMs < deadline) {
+            retries++;
+            activity?.modelError(`Retrying model request in ${Math.ceil(delayMs / 1000)}s (${retries}/${maxModelRetries})`);
+            await abortableDelay(delayMs, request.signal);
+            continue;
+          }
+        }
+        if (response.stopReason !== "stop" && response.stopReason !== "toolUse") {
+          throw new Error(
+            response.errorMessage ||
+              `Pi model ended with '${response.stopReason}'`,
+          );
+        }
+        return response;
       }
-      transcripts?.assistant(executionId!, response);
-      activity?.modelResponse({
-        text: response.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n\n"),
-        reasoning: response.content.flatMap(block => block.type === "thinking" ? [block.thinking] : []).join("\n\n"),
-        toolCalls: response.content.flatMap(block => block.type === "toolCall" ? [{ id: block.id, name: block.name }] : []),
-        stopReason: response.stopReason,
-        inputTokens: response.usage.input + response.usage.cacheRead + response.usage.cacheWrite,
-        outputTokens: response.usage.output,
-      });
-      if (response.stopReason !== "stop" && response.stopReason !== "toolUse") {
-        activity?.modelError(response.errorMessage || `Pi model ended with '${response.stopReason}'`);
-      }
-      actualModel = `${response.provider}/${response.responseModel ?? response.model}`;
-      const providerContextTokens =
-        response.usage.input +
-        response.usage.cacheRead +
-        response.usage.cacheWrite;
-      if (providerContextTokens) reportedContextTokens = providerContextTokens;
-      reportProgress({
-        nodeId: request.node.id,
-        ...(request.execution.executionId ? { executionId: request.execution.executionId } : {}),
-        contextTokens: reportedContextTokens ?? estimateContextTokens(context),
-        contextWindow: model.contextWindow,
-        contextSource:
-          reportedContextTokens !== undefined ? "reported" : "estimate",
-        toolCalls,
-        toolRounds,
-        phase: "model",
-      });
-      onUsage?.(structuredClone(response.usage));
-      usage.inputTokens +=
-        response.usage.input +
-        response.usage.cacheRead +
-        response.usage.cacheWrite;
-      usage.outputTokens += response.usage.output;
-      request.signal.throwIfAborted();
-      if (response.stopReason !== "stop" && response.stopReason !== "toolUse") {
-        throw new Error(
-          response.errorMessage ||
-            `Pi model ended with '${response.stopReason}'`,
-        );
-      }
-      return response;
     };
 
     const toolResult = (
