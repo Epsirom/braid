@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- The deprecated Pi session command `/braid:blocking` is removed. Blocking mode
+  is still available through the deprecated `--braid-blocking` flag until 0.5.0;
+  print and JSON runs already wait for background jobs, so drop the command to
+  migrate.
+
 ## 0.4.0 — 2026-10-16
 
 ### Features and breaking changes
