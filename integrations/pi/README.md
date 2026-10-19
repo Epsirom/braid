@@ -617,6 +617,7 @@ pass any of these fields in the `braid` tool's `options`:
 | --- | --- |
 | `maxToolRounds` | Maximum assistant responses containing tool calls, per node |
 | `maxToolCalls` | Maximum total requested tool calls, per node |
+| `maxModelRetries` | Retries per model request for transient provider errors; default 3, `0` disables, at most 10 |
 | `nodeTimeoutMs` | Time allowed for each node after it starts, in milliseconds |
 | `graphTimeoutMs` | Time allowed for the entire graph, including queueing and pauses, in milliseconds |
 | `maxExecutions` | Total materialized execution records, including skips; default 1000, positive safe integer |
@@ -709,8 +710,8 @@ timeout remains unlimited:
 }
 ```
 
-The adapter sets `maxRetries: 0`, `cacheRetention: "none"`, and gives each node a
-fresh provider context. Tool budgets are unlimited unless `maxToolRounds` or
+The adapter sets `cacheRetention: "none"` and gives each node a fresh provider
+context. Tool budgets are unlimited unless `maxToolRounds` or
 `maxToolCalls` is set. Missing paths, invalid arguments, disallowed writes, and
 unavailable tools are returned as tool errors so the node can recover. Provider
 authentication and calls may still incur normal provider costs. Braid cannot
@@ -718,6 +719,29 @@ forcibly stop synchronous JavaScript or a remote provider that ignores
 cancellation. Cancellation prevents further tool calls but does not roll back
 writes already made. Core waits for tracked writes, preserves checkpoints, and
 removes worker worktrees before completing cancellation.
+
+### Transient model errors
+
+A transient provider error, such as a rate limit (HTTP 429), overload, a 5xx
+response, or a dropped connection, is retried inside the running node execution.
+The node keeps its conversation, tool results, workspace, decision, merge state,
+and tool-budget counts; the failed request is sent again with the same context.
+Tools run only after a complete model response, so a retry never repeats a
+completed tool call. `options.maxModelRetries` sets the retries for each model
+request (default 3; `0` disables them):
+
+- If the provider rejects a request before its response starts, Pi's provider
+  client retries it with exponential backoff and honors `Retry-After`. A requested
+  wait longer than 60 seconds fails immediately.
+- If a response stream fails after it started, Braid discards the partial
+  response and restarts the request after 2, 4, then 8 seconds.
+
+Quota, billing, and other non-transient errors are not retried. Retries stop on
+cancellation, and Braid does not start a wait that would outlast the node or
+graph deadline. When retries run out, the node fails with the provider error and
+follows the usual failure rules, including `requireSuccess`. Failed attempts stay
+visible in the session view, and their reported usage is counted. Braid does not
+retry a whole node execution.
 
 The tool output is capped at 50KB/2000 lines to protect Pi context. When exceeded,
 the adapter writes the complete text to a temporary file (mode 600 on POSIX;
