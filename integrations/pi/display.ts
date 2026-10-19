@@ -251,21 +251,6 @@ function mermaidLabelLines(
   return lines;
 }
 
-function hasAlternatePath(edge: Edge, edges: readonly Edge[]): boolean {
-  const visited = new Set([edge.from]);
-  const pending = [edge.from];
-  for (const id of pending) {
-    for (const next of edges) {
-      if (next === edge || next.from !== id || next.choice !== undefined || next.feedback !== undefined ||
-          next.executionId !== undefined || visited.has(next.to)) continue;
-      if (next.to === edge.to) return true;
-      visited.add(next.to);
-      pending.push(next.to);
-    }
-  }
-  return false;
-}
-
 function mermaidSource(result: BraidResult | BraidLiveState, selected?: string): string {
   const parts = graphParts(result);
   const feedbackSources = new Map(parts.edges.filter(edge => edge.feedback !== undefined).map(edge => [edge.to, edge.from]));
@@ -298,11 +283,10 @@ function mermaidSource(result: BraidResult | BraidLiveState, selected?: string):
     );
   }
   for (const edge of parts.edges) {
-    // Simplify only the drawing; the direct edge still carries its original handoff.
-    if (edge.choice === undefined && edge.feedback === undefined && edge.executionId === undefined &&
-        feedbackSources.get(edge.from) === edge.to && hasAlternatePath(edge, parts.edges)) continue;
+    // Distinguish the direct data handoff from its reverse retry edge.
+    const arrow = edge.feedback === undefined && feedbackSources.get(edge.from) === edge.to ? "-.->" : "-->";
     lines.push(
-      `  ${names.get(edge.from)} -->${edge.choice ? `|${escapeMermaidText(edge.choice)}|` : ""} ${names.get(edge.to)}`,
+      `  ${names.get(edge.from)} ${arrow}${edge.choice ? `|${escapeMermaidText(edge.choice)}|` : ""} ${names.get(edge.to)}`,
     );
   }
   return lines.join("\n");

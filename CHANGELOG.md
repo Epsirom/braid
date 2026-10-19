@@ -23,10 +23,10 @@
 
 ### Fixes
 
-- Pi loop charts omit redundant unconditional forward shortcuts opposite a
-  retry edge, leaving a single return lane in `/braid:review` and user-defined
-  graphs with the same shape. Runtime dependencies and original handoffs are
-  preserved.
+- Pi loop charts draw forward handoffs opposite a retry edge dotted and keep
+  the feedback edge solid, distinguishing the two directions in `/braid:review`
+  and user-defined graphs with the same shape. All dependencies remain visible,
+  and runtime handoffs are unchanged.
 
 ## 0.4.0 — 2026-10-16
 

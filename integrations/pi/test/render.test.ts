@@ -11,6 +11,7 @@ import {
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { validateToolArguments } from "@earendil-works/pi-ai";
+import { render as renderMermaid } from "grok-mermaid";
 import { createBraidTools } from "../index.js";
 import { BraidJobs, type JobSnapshot } from "../jobs.js";
 import { registerReviewCommand } from "../review.js";
@@ -280,7 +281,7 @@ test("partial renderer remains compact before Braid has result details", () => {
   assert.match(rendered, /Braid is running…/);
 });
 
-test("the built-in review chart renders one retry return lane", async t => {
+test("the built-in review chart distinguishes the direct handoff from retry", async t => {
   const jobs = new BraidJobs();
   t.after(() => jobs.dispose());
   const start = t.mock.method(jobs, "start", () => ({ jobId: "review", handle: "job-1" }) as never);
@@ -295,11 +296,11 @@ test("the built-in review chart renders one retry return lane", async t => {
   applyEvent(live, { type: "graph_updated", graph, sequence: 1, timestamp: 0 });
   const plainTheme = { fg: (_color: string, value: string) => value, bg: (_color: string, value: string) => value, bold: (value: string) => value };
   const chart = lines(renderGraphResult(live, false, false, plainTheme), 1_000);
-  assert.equal(chart.match(/◄/g)?.length, 1, chart);
+  assert.match(chart, /[╎╌]/);
   assert.match(chart, /retry/);
 });
 
-test("loop charts simplify redundant forward shortcuts without changing dependencies", () => {
+test("loop charts draw forward handoffs dotted and feedback solid without changing dependencies", () => {
   const graph: BraidInput = {
     goal: "loop",
     nodes: [
@@ -328,10 +329,22 @@ test("loop charts simplify redundant forward shortcuts without changing dependen
   const plainTheme = { fg: (_color: string, value: string) => value, bg: (_color: string, value: string) => value, bold: (value: string) => value };
   const chart = (details: BraidToolDetails) => {
     const rendered = renderGraphResult(details, false, false, plainTheme).render(1_000);
-    return rendered.slice(rendered.findIndex(line => /[┌╭]/.test(line))).join("\n");
+    return rendered.slice(rendered.findIndex(line => /[┌╭]/.test(line))).map(line => line.trimEnd()).join("\n");
   };
   const withoutShortcut = (edges: readonly Edge[]) => edges.filter(edge => edge.from !== "start" || edge.to !== "route");
-  const expected = chart({ ...live, edges: withoutShortcut(graph.edges) });
+  const expectedSource = `flowchart TD
+  n0{"○ start<br/>pending · —"}
+  n1["○ inspect<br/>pending · —"]
+  n2{"○ route<br/>pending · —"}
+  n3["○ end<br/>pending · —"]
+  n0 --> n1
+  n1 --> n2
+  n0 -.-> n2
+  n2 -->|again| n0
+  n2 -->|done| n3`;
+  const expected = renderMermaid(expectedSource)!.plain.join("\n");
+  assert.notEqual(expected, chart({ ...live, edges: withoutShortcut(graph.edges) }));
+  assert.notEqual(expected, renderMermaid(expectedSource.replace("-.->", "-->"))!.plain.join("\n"));
   for (const details of [live, updatedLive, { ...result, nodes: live.nodes, events }, { ...result, nodes: live.nodes, events: [updated] }]) {
     const rendered = chart(details);
     assert.equal(rendered, expected);
@@ -343,13 +356,15 @@ test("loop charts simplify redundant forward shortcuts without changing dependen
   const cases: Array<{ name: string; edges: Edge[] }> = [
     { name: "labelled shortcut", edges: graph.edges.map(edge => edge.from === "start" && edge.to === "route" ? { ...edge, choice: "direct" } : edge) },
     { name: "historical shortcut", edges: graph.edges.map(edge => edge.from === "start" && edge.to === "route" ? { ...edge, executionId: "old-start" } : edge) },
-    { name: "conditional alternative", edges: graph.edges.map(edge => edge.to === "inspect" ? { ...edge, choice: "inspect" } : edge) },
-    { name: "historical alternative", edges: graph.edges.map(edge => edge.to === "inspect" ? { ...edge, executionId: "old-start" } : edge) },
     { name: "required forward edge", edges: graph.edges.filter(edge => edge.from !== "inspect" && edge.to !== "inspect") },
     { name: "ordinary DAG shortcut", edges: graph.edges.filter(edge => !edge.feedback) },
   ];
   for (const { name, edges } of cases) {
-    assert.notEqual(chart({ ...live, edges }), chart({ ...live, edges: withoutShortcut(edges) }), name);
+    const rendered = chart({ ...live, edges });
+    assert.notEqual(rendered, chart({ ...live, edges: withoutShortcut(edges) }), name);
+    if (edges.some(edge => edge.feedback)) assert.match(rendered, /[╎╌]/, name);
+    else assert.doesNotMatch(rendered, /[╎╌]/, name);
+    if (name === "labelled shortcut") assert.match(rendered, /direct/);
     const fromEvents = createLiveState();
     for (const node of events.filter(event => event.type === "node_created")) applyEvent(fromEvents, node);
     for (const edge of edges) applyEvent(fromEvents, { type: "edge_created", ...edge, sequence: 20, timestamp: 0 });
