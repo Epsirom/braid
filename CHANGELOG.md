@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixes
+
+- Pi `/braid:review` removes the direct scope-to-check dependency, leaving a
+  single retry return edge in the loop chart. Reviewer 1 forwards scope's full
+  handoff to check through its review report.
+
 ## 0.4.0 — 2026-10-16
 
 ### Features and breaking changes

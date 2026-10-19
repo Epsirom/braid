@@ -71,6 +71,9 @@ for (const mode of ["historical range", "latest commit"] as const) {
     assert.match(reviewer, /pinned original baseline and target endpoint/);
     assert.match(reviewer, /initial job snapshot to YOUR workspace.snapshotCommit/);
     assert.match(reviewer, /attribute findings only to the original target diff or cumulative fix diff/);
+    assert.match(reviewer, /Reviewer 1 must copy scope's full handoff unchanged/);
+    assert.match(check.prompt as string, /Read scope's handoff carried by review-1/);
+    assert.match(check.prompt as string, /handoff is missing or inconsistent, call decide with done and prohibit integration/);
     assert.match(check.prompt as string, /original baseline, original target endpoint, initial job snapshot, and target\/file scope unchanged/);
   });
 }

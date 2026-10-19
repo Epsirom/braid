@@ -10,6 +10,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import type { MergeSource, NodeWorkspace, PredecessorOutput } from "@chrok/braid";
 import { BraidJobs } from "../jobs.js";
 import { registerReviewCommand } from "../review.js";
+import { applyEvent, createLiveState, renderGraphResult } from "../display.js";
 import { context, response } from "./helpers.js";
 
 const exec = promisify(execFile);
@@ -84,6 +85,13 @@ test("/braid:review registers a bounded background graph and trims its target", 
   assert.match(input.goal, /HEAD~2\.\.HEAD/);
   assert.doesNotMatch(input.goal, /  HEAD/);
   assert.deepEqual(input.loops, [{ id: "review-loop", entry: "scope", maxIterations: 3 }]);
+  assert.deepEqual(input.edges.filter(edge => edge.to === "check").map(edge => edge.from).sort(), ["review-1", "review-2", "review-3"]);
+  const live = createLiveState();
+  applyEvent(live, { type: "graph_updated", graph: input, sequence: 1, timestamp: 0 });
+  const theme = { fg: (_color: string, value: string) => value, bg: (_color: string, value: string) => value, bold: (value: string) => value };
+  const chart = renderGraphResult(live, false, false, theme).render(1_000).join("\n");
+  assert.equal(chart.match(/◄/g)?.length, 1, chart);
+  assert.match(chart, /retry/);
   assert.ok(input.nodes.every(node => node.requireSuccess));
   assert.deepEqual(options, { maxConcurrency: 3, maxExecutions: 16 });
   assert.equal(submittedContext, ctx);
@@ -130,14 +138,19 @@ test("/braid:review fixes one checkpoint, re-reviews it, and preserves staged an
       assert.ok(worker.tools!.some(tool => tool.name === "git"));
       assert.ok(!worker.tools!.some(tool => ["write", "edit", "bash", "powershell"].includes(tool.name)));
       assert.equal(await readFile(join(data.workspace.workingDirectory, "code.txt"), "utf8"), round === 1 ? "broken\n" : "fixed\n");
+      assert.equal(data.predecessors.length, 1);
+      assert.equal(data.predecessors[0]!.nodeId, "scope");
       reviewed.push(round);
-      return response(round === 1 ? "P1 code.txt: confirmed bug" : "No actionable findings");
+      const handoff = data.nodeId === "review-1" ? `Scope handoff:\n${data.predecessors[0]!.output}\n\n` : "";
+      return response(handoff + (round === 1 ? "P1 code.txt: confirmed bug" : "No actionable findings"));
     }
     if (data.nodeId === "check") {
       assert.equal(data.workspace.mode, "read-only");
       assert.ok(!worker.tools!.some(tool => ["write", "edit", "bash", "powershell"].includes(tool.name)));
-      assert.equal(data.predecessors.length, 4);
-      assert.ok(data.predecessors.some(predecessor => predecessor.nodeId === "scope"));
+      assert.deepEqual(data.predecessors.map(predecessor => predecessor.nodeId).sort(), ["review-1", "review-2", "review-3"]);
+      const handoff = data.predecessors.find(predecessor => predecessor.nodeId === "review-1")!.output;
+      assert.ok(handoff.includes(`Scope round ${round};`), handoff);
+      if (round === 2) assert.match(handoff, /Fixed code\.txt; validation passed/);
       assert.equal(new Set(data.predecessors.map(predecessor => predecessor.workspace!.checkpointCommit)).size, 1);
       if (turn === 0) return decide(round === 1 ? "retry" : "done");
       return response(round === 1 ? "Fix code.txt; P1 confirmed; preserve pinned scope" : "Fixed code.txt; validation retained; no unresolved findings");

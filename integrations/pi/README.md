@@ -165,6 +165,10 @@ fixes only evidenced, in-scope P0/P1 problems in an isolated worktree, then runs
 focused validation. Optional P2 polish is reported. A product, scope, or
 architecture decision stops the loop for user input.
 
+The flow is scope → three parallel reviews → check, with retry returning from
+check to scope. Reviewer 1 carries scope's full handoff to check, including the
+pinned review scope, cumulative fixes, and validation records.
+
 The graph enforces a fixed maximum of **three review rounds**, including the
 first, and **two fix passes**. The final round reports remaining issues without
 making further edits; reaching the cap does not mean the review is clean.
