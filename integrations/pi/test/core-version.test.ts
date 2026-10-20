@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertCoreVersion, REQUIRED_CORE_VERSION } from "../core-version.js";
 
 const required = REQUIRED_CORE_VERSION.replaceAll(".", "\\.");
@@ -35,7 +35,7 @@ test("Pi fails at load and runner creation on an older core instead of a model e
   await writeFile(oldCore, `const { BRAID_VERSION, isStepInterrupted, ...core } = require(${JSON.stringify(fileURLToPath(import.meta.resolve("@chrok/braid")))});\nmodule.exports = core;\n`);
   const piRequire = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"));
   // jiti is Pi's own dependency, not ours, so only the part used here is typed.
-  const { createJiti } = await import(piRequire.resolve("jiti")) as {
+  const { createJiti } = await import(pathToFileURL(piRequire.resolve("jiti")).href) as {
     createJiti(id: string, options: { moduleCache: boolean; alias: Record<string, string> }): { import<T>(id: string): Promise<T> };
   };
   const jiti = createJiti(import.meta.url, { moduleCache: false, alias: { "@chrok/braid": oldCore } });
