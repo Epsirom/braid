@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   parseReplanArguments,
+  replanInstructions,
   replanToolDefinition,
   startBraid,
   type BraidInput,
@@ -170,6 +171,14 @@ test("requestReplan is offered to execute and decision nodes only", async t => {
   }, { runner });
   assert.equal((await run.result).status, "completed");
   assert.deepEqual(offered, { execute: true, decision: true, merge: false });
+});
+
+test("worker guidance reminds decision nodes that a replan does not replace decide", () => {
+  const request = (decision: boolean) => ({ requestReplan: () => {}, ...(decision ? { decide: () => {} } : {}) }) as unknown as ModelRequest;
+  assert.match(replanInstructions(request(false)), /call request_replan as soon as you know/);
+  assert.doesNotMatch(replanInstructions(request(false)), /decide/);
+  assert.match(replanInstructions(request(true)), /does not replace decide; still call decide exactly once/);
+  assert.equal(replanInstructions({} as ModelRequest), "", "merge and integrate nodes get no guidance");
 });
 
 test("the shared tool schema matches the argument parser", () => {

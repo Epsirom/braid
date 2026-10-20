@@ -27,13 +27,17 @@ const node = {
 export function replanToolDefinition() {
   return {
     name: "request_replan",
-    description: "Ask the parent agent to change the plan around this node. Use it when what you found makes planned work wrong, unnecessary, or insufficient, or calls for work nobody planned. It does not change the graph or stop you: the parent is notified now, and your successors wait for its decision after you finish. Keep working and give your final answer, which the parent reads as evidence. Optionally include suggestion, a graph edit the parent may apply; refer only to node IDs you know, such as your own. An invalid suggestion is rejected with the reason; fix it or omit it. Calling again replaces your earlier request.",
+    description: "Ask the parent agent to change the plan. Use it when your findings show that the goal needs a different plan than your prompt assumes: its premise is wrong, the requested work is unnecessary, or substantial work outside your prompt is needed. " +
+      "Use it rarely: each call holds your successors and wakes the parent. Do not call it for ordinary obstacles you can work through, to report your result, to ask for confirmation, or for uncertainty you can state in your final answer. " +
+      "Call it as soon as you know, so the parent can stop work that is no longer needed. It does not change the graph or stop you: keep working as far as it still makes sense and give your final answer, which the parent reads as evidence. On a decision node it does not replace decide. " +
+      "You cannot see the rest of the graph. suggestion is optional; use it only to add nodes after your own node ID, and describe any other change in reason. An invalid suggestion is rejected with the reason; fix it or omit it. Calling again replaces your earlier request.",
     parameters: {
       type: "object",
       properties: {
-        reason: { type: "string", minLength: 1, description: "What you found and why the plan should change." },
+        reason: { type: "string", minLength: 1, description: "One to three sentences: what you found and what should change. Put the evidence in your final answer." },
         suggestion: {
           type: "object",
+          description: "Optional graph edit the parent may apply, for example new nodes with edges from your node ID.",
           properties: {
             upsertNodes: { type: "array", items: node },
             removeNodeIds: { type: "array", items: { type: "string" } },
@@ -50,9 +54,9 @@ export function replanToolDefinition() {
 
 /** System prompt guidance for nodes that receive request_replan. */
 export function replanInstructions(request: ModelRequest): string {
-  return request.requestReplan
-    ? "If what you find shows that the planned work after this node is wrong, unnecessary, or insufficient, call request_replan with the reason instead of working around the plan; then finish your answer. "
-    : "";
+  if (!request.requestReplan) return "";
+  return "If your findings show that the goal needs a different plan than your prompt assumes (its premise is wrong, the requested work is unnecessary, or substantial work outside your prompt is needed), call request_replan as soon as you know, then finish your assigned work as far as it still makes sense. Do not call it for ordinary obstacles. " +
+    (request.decide ? "It does not replace decide; still call decide exactly once. " : "");
 }
 
 export function parseReplanArguments(value: unknown): ReplanInput {
@@ -64,4 +68,4 @@ export function parseReplanArguments(value: unknown): ReplanInput {
 }
 
 export const REPLAN_RECORDED =
-  "Replan requested. The parent agent has been notified; your successors wait for its decision after you finish. Continue your work and give your final answer, including the evidence behind this request.";
+  "Replan requested. The parent agent has been notified; your successors wait for its decision after you finish. Continue your work and give your final answer, including the evidence behind this request. Do not call request_replan again unless your reason changes.";
