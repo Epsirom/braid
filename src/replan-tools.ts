@@ -27,14 +27,15 @@ const node = {
 export function replanToolDefinition() {
   return {
     name: "request_replan",
-    description: "Ask the parent agent to change the plan. Use it when your findings show that the goal needs a different plan than your prompt assumes: its premise is wrong, the requested work is unnecessary, or substantial work outside your prompt is needed. " +
+    description: "Report a finding that may change the plan to the parent agent. You see only the goal, your prompt, and your direct inputs, not the rest of the graph, so report what you found, not a new plan; the parent decides which planned work it affects. " +
+      "Use it when what you found contradicts what your prompt assumes, makes your task unnecessary, or affects more than your task in a way the goal depends on, such as a root cause that also explains other problems. " +
       "Use it rarely: each call holds your successors and wakes the parent. Do not call it for ordinary obstacles you can work through, to report your result, to ask for confirmation, or for uncertainty you can state in your final answer. " +
       "Call it as soon as you know, so the parent can stop work that is no longer needed. It does not change the graph or stop you: keep working as far as it still makes sense and give your final answer, which the parent reads as evidence. On a decision node it does not replace decide. " +
-      "You cannot see the rest of the graph. suggestion is optional; use it only to add nodes after your own node ID, and describe any other change in reason. An invalid suggestion is rejected with the reason; fix it or omit it. Calling again replaces your earlier request.",
+      "suggestion is optional; use it only to add nodes after your own node ID, and describe anything else in reason. An invalid suggestion is rejected with the reason; fix it or omit it. Calling again replaces your earlier request.",
     parameters: {
       type: "object",
       properties: {
-        reason: { type: "string", minLength: 1, description: "One to three sentences: what you found and what should change. Put the evidence in your final answer." },
+        reason: { type: "string", minLength: 1, description: "One to three sentences: what you found, how it differs from what your prompt assumed, and what it affects. Put the evidence in your final answer." },
         suggestion: {
           type: "object",
           description: "Optional graph edit the parent may apply, for example new nodes with edges from your node ID.",
@@ -55,7 +56,7 @@ export function replanToolDefinition() {
 /** System prompt guidance for nodes that receive request_replan. */
 export function replanInstructions(request: ModelRequest): string {
   if (!request.requestReplan) return "";
-  return "If your findings show that the goal needs a different plan than your prompt assumes (its premise is wrong, the requested work is unnecessary, or substantial work outside your prompt is needed), call request_replan as soon as you know, then finish your assigned work as far as it still makes sense. Do not call it for ordinary obstacles. " +
+  return "You see only the goal, your prompt, and your direct inputs, not the rest of the graph. If what you find contradicts what your prompt assumes, makes your task unnecessary, or affects more than your task in a way the goal depends on, call request_replan as soon as you know to report the finding, not a new plan, then finish your assigned work as far as it still makes sense. Do not call it for ordinary obstacles. " +
     (request.decide ? "It does not replace decide; still call decide exactly once. " : "");
 }
 
