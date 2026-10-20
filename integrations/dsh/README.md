@@ -48,6 +48,7 @@ agent's model captured at submission.
 | Atomically edit/resume | `braid_update({ jobId, expectedRevision, ...patch })` |
 | Resume without edits | `braid_resume({ jobId, expectedRevision, executionIds })` |
 | Pause running executions or the whole job | `braid_pause({ jobId, executionIds? })`; resume a paused job with `braid_resume({ jobId })` |
+| Hold a running execution's result once it finishes | `braid_pause({ jobId, executionIds, after: true })`; remove the hold with `braid_resume({ jobId, executionIds, after: true })` |
 | Cancel | `braid_cancel({ jobId })` or `/braid cancel <jobId>` |
 | Human progress snapshot | `/braid [jobId]`, `/braid list` |
 | Graph, execution details and controls | **Braid** in the session header or right-sidebar guide |
@@ -246,6 +247,18 @@ and **Pause this execution** buttons do the same for the user. The parent is not
 woken for those: one notice per execution or job, with the latest state, is
 injected as context once the agent next runs, and asks it not to resume work the
 user paused unless the user asks.
+
+`pauseAfter` is captured when an execution starts, so changing it with
+`braid_update` affects only later executions. To review the result of an
+execution that is already running, call `braid_pause({ jobId, executionIds,
+after: true })`. The execution keeps running; once it finishes, completed or
+failed, it is held exactly like `pauseAfter`, with a pause reminder.
+`braid_resume({ jobId, executionIds, after: true })` removes the hold while it
+is still running, including one that came from `pauseAfter`. Only those
+executions change, not their node definitions. A result that is already held is
+released with the usual `braid_resume` or `braid_update` `resume`. The panel's
+**Hold result when finished** and **Remove hold** buttons do the same for the
+user, with the same notices to the parent.
 
 Completion and pause messages use DSH `agent.steer`: a running agent consumes
 them at the next step, and an idle agent wakes. Acknowledged messages are removed;

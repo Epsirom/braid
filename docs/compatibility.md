@@ -153,6 +153,13 @@ stops admission. TypeScript consumers may need small changes:
 - Runners that copied `request.deadlines.node` must read it again before each use:
   core moves it later after a suspension.
 
+Holding running executions ([#95](https://github.com/Epsirom/braid/issues/95))
+also needs no migration. `BraidRun` adds `holdAfter`, `NodeResult` adds an optional
+`holdAfter`, and `ExecutionEvent` adds `execution_hold_added` and
+`execution_hold_removed`. Executions admitted with `pauseAfter` now carry
+`holdAfter: { source: "definition" }`; read that field, not `node.pauseAfter`, to
+tell whether an execution will be held.
+
 In Pi and DSH, `braid_resume` makes `executionIds` and `expectedRevision`
 optional (omit both to resume a paused job) and still requires the revision with
 IDs. In Pi print mode, a stalled run now also covers suspended executions and

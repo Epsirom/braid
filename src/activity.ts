@@ -207,6 +207,15 @@ export class ExecutionActivityTracker {
           kind: "lifecycle",
           summary: suspended ? `Suspended · paused by ${event.source}` : `Pause requested by ${event.source} · stops before the next model request`,
         }, event.timestamp);
+      } else if (event.type === "execution_hold_added" || event.type === "execution_hold_removed") {
+        const record = this.ensure(event.executionId, event.nodeId, event.timestamp);
+        if (record.finishedAt !== undefined) return;
+        this.add(record, {
+          kind: "lifecycle",
+          summary: event.type === "execution_hold_added"
+            ? `Hold after completion added by ${event.source}`
+            : `Hold after completion removed by ${event.source}`,
+        }, event.timestamp);
       } else if (event.type === "execution_resumed") {
         // Also emitted when a pauseAfter hold is released, after the execution finished.
         const record = this.records.get(event.executionId);

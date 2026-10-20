@@ -17,6 +17,7 @@ export type {
   ExecutionContext,
   ExecutionError,
   ExecutionEvent,
+  ExecutionHold,
   ExecutionSuspension,
   ModelRequest,
   ModelResponse,

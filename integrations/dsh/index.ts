@@ -59,8 +59,10 @@ export function apply(ctx: Context): void {
   const noteControl = (agent: Agent, notice: ControlNotice) => {
     const state = sessions.get(agent);
     if (!state) return;
+    // The latest change per execution or job wins; holds and pauses are tracked separately.
+    const kind = notice.action === "held" || notice.action === "unheld" ? "hold" : "pause";
     for (const execution of notice.executions ?? [undefined])
-      state.notices.set(JSON.stringify([notice.jobId, execution?.executionId ?? "job"]), { ...notice, ...(execution ? { executions: [execution] } : {}) });
+      state.notices.set(JSON.stringify([notice.jobId, execution?.executionId ?? "job", kind]), { ...notice, ...(execution ? { executions: [execution] } : {}) });
     flushNotices(agent);
   };
   const session = (agent: Agent) => {

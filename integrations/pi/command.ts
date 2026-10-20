@@ -198,10 +198,10 @@ export class BraidPanel implements Component {
       ? ["Enter send   Esc stop or hide   Tab hide   PgUp/PgDn or wheel scroll   ctrl+c close",
         "Enter send · Esc hide · Tab hide", "Enter send · Tab hide"]
       : this.focus
-      ? [`${tab}Esc back   ←/→ executions   ↑/↓ scroll   End follow   ctrl+o tools   p pause   c cancel   q close`,
+      ? [`${tab}Esc back   ←/→ executions   ↑/↓ scroll   End follow   ctrl+o tools   p pause   h hold   c cancel   q close`,
         "Esc back · ←/→ executions · p pause · q close", "Esc back · q close"]
       : this.choosing !== undefined
-      ? [`${tab}↑/↓/←/→ choose node   Enter open session   p pause   Esc back   PgUp/PgDn page   q close`,
+      ? [`${tab}↑/↓/←/→ choose node   Enter open session   p pause   h hold   Esc back   PgUp/PgDn page   q close`,
         "↑/↓ choose · Enter open · p pause · Esc back", "Enter open · Esc back"]
       : [`${tab}v select node   ←/→ jobs   ↑/↓ scroll   p pause job   c cancel   Esc close`,
         "v select node · ←/→ jobs · p pause job · Esc close", "v select · Esc close"];
@@ -448,6 +448,11 @@ export class BraidPanel implements Component {
       this.refresh();
       return;
     }
+    if (data === "h" && job && (this.focus || this.choosing !== undefined)) {
+      this.toggleHold(job);
+      this.refresh();
+      return;
+    }
     if (this.focus) this.sessionInput(data, job);
     else if (this.choosing !== undefined && job) this.chooseInput(data, job);
     else if (matchesKey(data, "escape")) {
@@ -492,6 +497,33 @@ export class BraidPanel implements Component {
       }
     } catch (error) {
       this.notice = `Cannot pause or resume: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  /**
+   * h toggles the hold on the execution in view: a running one keeps running and
+   * is held when it finishes; a held result is released. The parent agent gets a notice.
+   */
+  private toggleHold(job: JobSnapshot): void {
+    const execution = job.execution;
+    try {
+      if (!execution || job.status !== "running") throw new Error("Only a running job can hold results");
+      const executionId = this.focus
+        ? "executionId" in this.focus ? this.focus.executionId : this.executionsOf(job, this.focus.nodeId).at(-1)
+        : this.executionsOf(job, this.choosing!).at(-1);
+      if (!executionId) throw new Error("This node has not run yet");
+      if (execution.pausedExecutionIds.includes(executionId)) {
+        this.jobs.resume(job.jobId, [executionId], execution.revision, "user");
+        this.notice = "Released · the result goes downstream";
+      } else if (execution.executions[executionId]?.holdAfter) {
+        this.jobs.holdAfter(job.jobId, [executionId], false, "user");
+        this.notice = "Hold removed · the result goes downstream when the execution finishes";
+      } else {
+        this.jobs.holdAfter(job.jobId, [executionId], true, "user");
+        this.notice = "Holding · the execution keeps running; its result waits for release when it finishes";
+      }
+    } catch (error) {
+      this.notice = `Cannot hold or release: ${error instanceof Error ? error.message : String(error)}`;
     }
   }
 

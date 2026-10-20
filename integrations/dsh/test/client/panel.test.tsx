@@ -188,3 +188,21 @@ test("panel pauses and resumes the whole job and a running execution", async () 
     assert.deepEqual(h.controls[3], { sessionId: "owner-paused", jobId: "uuid-a", action: "resume", executionIds: [], revision: 4 });
   } finally { await h.close(); fixture.job = saved; }
 });
+
+test("panel holds a running execution's result and removes the hold", async () => {
+  const saved = structuredClone(fixture.job);
+  const job = fixture.job!;
+  job.pausedExecutionIds = [];
+  job.executions = [{ id: "review", executionId: "review@1", revision: 3, status: "running", type: "execute" }];
+  const h = await setup();
+  try {
+    await h.render();
+    await h.click("Hold result when finished");
+    assert.deepEqual(h.controls[0], { sessionId: "owner", jobId: "uuid-a", action: "hold", executionIds: ["review@1"], revision: 4 });
+    job.executions[0]!.holdAfter = { source: "definition" };
+    await h.render("owner-held");
+    assert.match(document.body.textContent!, /Holds its result when finished · set by pauseAfter/);
+    await h.click("Remove hold");
+    assert.deepEqual(h.controls[1], { sessionId: "owner-held", jobId: "uuid-a", action: "unhold", executionIds: ["review@1"], revision: 4 });
+  } finally { await h.close(); fixture.job = saved; }
+});

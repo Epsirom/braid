@@ -151,7 +151,7 @@ function ExecutionDetail({ api, sessionId, job, execution }: { api: PanelApi; se
   </>;
 }
 
-function JobView({ job, api, sessionId, connected, act, busy, target }: { job: PanelJob; api: PanelApi; sessionId: string; connected: boolean; act: (action: "cancel" | "resume" | "pause", ids: string[]) => void; busy: boolean; target: BraidNavigation | undefined }) {
+function JobView({ job, api, sessionId, connected, act, busy, target }: { job: PanelJob; api: PanelApi; sessionId: string; connected: boolean; act: (action: "cancel" | "resume" | "pause" | "hold" | "unhold", ids: string[]) => void; busy: boolean; target: BraidNavigation | undefined }) {
   const [selected, setSelected] = useState(() => job.executions.find(e => e.executionId === target?.executionId)?.id
     ?? target?.nodeId ?? (target?.executionId ? "" : job.nodes[0]?.id ?? ""));
   const [chosenExecution, setChosenExecution] = useState(target?.executionId ?? "");
@@ -177,6 +177,10 @@ function JobView({ job, api, sessionId, connected, act, busy, target }: { job: P
       {execution?.status === "running" && (suspended
         ? <button className="br-primary" disabled={!live} onClick={() => act("resume", [execution.executionId])}>Resume this execution</button>
         : !execution.suspension && <button disabled={!live} onClick={() => act("pause", [execution.executionId])}>Pause this execution</button>)}
+      {execution?.status === "running" && execution.holdAfter && <p className="br-note" role="status">Holds its result when finished · set by {execution.holdAfter.source === "definition" ? "pauseAfter" : execution.holdAfter.source}</p>}
+      {execution?.status === "running" && (execution.holdAfter
+        ? <button disabled={!live} onClick={() => act("unhold", [execution.executionId])}>Remove hold</button>
+        : <button disabled={!live} onClick={() => act("hold", [execution.executionId])}>Hold result when finished</button>)}
       <div className="br-tabs"><button aria-pressed={tab === "output"} onClick={() => setTab("output")}>Output & details</button><button aria-pressed={tab === "events"} onClick={() => setTab("events")}>Event log ({job.events.length})</button></div>
       {tab === "output" && execution && <ExecutionDetail key={execution.executionId} api={api} sessionId={sessionId} job={job} execution={execution}/>}
       {tab === "events" && <><p className="br-note">Latest 80 lifecycle events. Full results remain available through braid_status.</p><ol className="br-events">{[...job.events].reverse().map(event => <li key={event.sequence}><time>{new Date(event.timestamp).toLocaleTimeString([], { hour12: false })}</time><div><p>{event.message}</p><small>#{event.sequence}{event.nodeId ? ` · ${event.nodeId}` : ""}{event.executionId ? ` · ${event.executionId}` : ""}</small></div></li>)}</ol></>}
@@ -226,7 +230,7 @@ function SessionPanel({ sessionId, api, target }: { sessionId: string; api: Pane
   const job = frame?.job;
   // In-flight mutations only affect their mounted job view; stream frames remain authoritative.
   const [actionOwner, setActionOwner] = useState("");
-  const act = async (action: "cancel" | "resume" | "pause", executionIds: string[]) => {
+  const act = async (action: "cancel" | "resume" | "pause" | "hold" | "unhold", executionIds: string[]) => {
     if (!job || !connected || busy) return;
     const owner = job.jobId;
     setBusy(true); setActionOwner(owner); setActionError("");

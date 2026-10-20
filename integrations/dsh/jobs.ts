@@ -44,11 +44,12 @@ interface Job {
   activity: ExecutionActivityTracker;
 }
 
-/** A pause or resume someone other than the parent agent made, such as the user in the panel. */
+/** A pause, resume, or hold change someone other than the parent agent made, such as the user in the panel. */
 export interface ControlNotice {
   jobId: string;
   handle: string;
-  action: "paused" | "resumed";
+  /** held/unheld: a hold on running executions' results was added or removed. */
+  action: "paused" | "resumed" | "held" | "unheld";
   /** Omitted for the whole job. */
   executions?: { executionId: string; nodeId: string }[];
   source: string;
@@ -154,7 +155,7 @@ export class BraidJobs {
     const node = state?.executions[event.executionId];
     if (!node) return;
     const paused = event.type === "execution_paused";
-    if (!paused && (!node.node.notifyOnCompletion || (node.node.pauseAfter && !state?.error))) return;
+    if (!paused && (!node.node.notifyOnCompletion || (node.holdAfter && !state?.error))) return;
     this.remind({ jobId, handle, status: node.status, executionId: node.executionId, nodeId: node.id,
       ...(node.iteration === undefined ? {} : { iteration: node.iteration }), paused, sequence: event.sequence });
   }
@@ -212,6 +213,15 @@ export class BraidJobs {
     if (executionIds) job.run.pause(executionIds, { source });
     else job.run.pauseRun({ source });
     this.control(job, "paused", source, executionIds);
+    this.changed(); return this.get(id);
+  }
+
+  /** Hold running executions' results once they finish (hold = true), or remove that hold, without suspending them. */
+  holdAfter(id: string, executionIds: readonly string[], hold: boolean, source: string): JobSnapshot {
+    const job = this.lookup(id);
+    if (job.status !== "running") throw new Error("This run is no longer accepting updates");
+    job.run.holdAfter(executionIds, hold, { source });
+    this.control(job, hold ? "held" : "unheld", source, executionIds);
     this.changed(); return this.get(id);
   }
 

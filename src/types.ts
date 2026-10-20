@@ -254,6 +254,13 @@ export interface ExecutionSuspension {
   suspendedAt?: number;
 }
 
+/** A hold on an execution's outgoing scheduling, applied once it settles. */
+export interface ExecutionHold {
+  /** "definition" for the node's pauseAfter, otherwise the caller-supplied label. */
+  source: string;
+  requestedAt: number;
+}
+
 /** Frozen snapshots in emission order, including graph revisions and execution identities. */
 export type ExecutionEvent = Readonly<
   {
@@ -277,6 +284,8 @@ export type ExecutionEvent = Readonly<
     | { type: "execution_resumed"; nodeId: string }
     | { type: "execution_suspending"; nodeId: string; source: string }
     | { type: "execution_suspended"; nodeId: string; source: string }
+    | { type: "execution_hold_added"; nodeId: string; source: string }
+    | { type: "execution_hold_removed"; nodeId: string; source: string }
     | { type: "graph_paused"; source: string }
     | { type: "graph_resumed" }
     | { type: "loop_started"; entry: string }
@@ -378,6 +387,11 @@ export interface NodeResult extends Partial<NodeOutput> {
   humanInputs?: HumanInput[];
   /** Present while a pause of this running execution is requested or active. */
   suspension?: ExecutionSuspension;
+  /**
+   * Present when this execution will be held after it settles, from its
+   * definition's pauseAfter or from BraidRun.holdAfter. Authoritative over node.pauseAfter.
+   */
+  holdAfter?: ExecutionHold;
 }
 
 export interface BraidResult {
@@ -426,7 +440,7 @@ export interface GraphUpdate {
 }
 
 export interface PauseOptions {
-  /** Recorded on the suspension and its events. Default: "caller". */
+  /** Recorded on the suspension or hold and its events. Default: "caller". */
   source?: string;
 }
 
@@ -438,7 +452,7 @@ export interface BraidSnapshot {
   graph: BraidInput;
   nodes: Record<string, NodeResult>;
   executions: Record<string, NodeExecution>;
-  /** Settled executions whose outgoing scheduling is held by pauseAfter. */
+  /** Settled executions whose outgoing scheduling is held by pauseAfter or holdAfter. */
   pausedExecutionIds: string[];
   /** Running executions stopped at a checkpoint, including resumed ones waiting for a slot. */
   suspendedExecutionIds: string[];
@@ -457,6 +471,11 @@ export interface BraidRun {
   resume(executionIds: readonly string[], expectedRevision: number): BraidSnapshot;
   /** Suspend running executions at their runner's next checkpoint. Requires a pausable runner. */
   pause(executionIds: readonly string[], options?: PauseOptions): BraidSnapshot;
+  /**
+   * Add (hold = true) or remove a hold on running executions, applied when each
+   * settles exactly like pauseAfter. Affects only these executions, not their definitions.
+   */
+  holdAfter(executionIds: readonly string[], hold: boolean, options?: PauseOptions): BraidSnapshot;
   /** Stop admitting executions and pause every running one. Independent of pauseAfter holds. */
   pauseRun(options?: PauseOptions): BraidSnapshot;
   /** Admit executions again and resume the executions that pauseRun paused. */

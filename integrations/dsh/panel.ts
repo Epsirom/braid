@@ -28,6 +28,7 @@ export function panelJob(job: JobSnapshot, activity: (executionId: string) => Ex
       ...(job.progress[e.executionId] ? { progress: job.progress[e.executionId]! } : {}),
       ...(e.suspension ? { suspension: { state: e.suspension.state, source: clip(e.suspension.source, 100),
         ...(e.suspension.suspendedAt === undefined ? {} : { suspendedAt: e.suspension.suspendedAt }) } } : {}),
+      ...(e.holdAfter ? { holdAfter: { source: clip(e.holdAfter.source, 100) } } : {}),
       ...(() => {
         const live = e.status === "running" ? activity(e.executionId) : undefined;
         return live ? { activity: panelActivity(live) } : {};
@@ -95,6 +96,10 @@ export class BraidPanel extends TypertRemoteService {
       // Panel actions are the user's; the parent agent gets a notice instead of being woken.
       const executionIds = request.executionIds.length ? request.executionIds : undefined;
       if (request.action === "pause") jobs.pause(request.jobId, executionIds, "user");
+      else if (request.action === "hold" || request.action === "unhold") {
+        if (!executionIds) throw new Error("Choose a running execution to hold");
+        jobs.holdAfter(request.jobId, executionIds, request.action === "hold", "user");
+      }
       else if (request.action === "resume") {
         if (executionIds) jobs.resume(request.jobId, executionIds, request.revision, "user");
         else jobs.resumeJob(request.jobId, "user");

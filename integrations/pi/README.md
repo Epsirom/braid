@@ -27,7 +27,8 @@ It registers:
   `"nodeId": "..."` selects that definition's latest invocation. Omit all IDs
   to list jobs in the current session.
 - `braid_update` / `braid_resume` — edit live definitions or release paused executions.
-- `braid_pause` — pause running executions, or the whole job, without losing their work.
+- `braid_pause` — pause running executions, or the whole job, without losing their
+  work; with `after: true`, hold a running execution's result once it finishes.
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
 - `braid_finish` — print/JSON runs only: record the run outcome with
   `{ "status": "success" | "failure", "summary": "..." }`.
@@ -137,7 +138,7 @@ so the next turn can retrieve partial outputs and recovery checkpoints.
 Wait/result retrieval errors include the existing job handle and any terminal
 usage; retrieve that job with `braid_status` instead of submitting the graph again.
 `pauseAfter: true` is rejected before starting a blocking job because it requires
-a later resume call. The interactive
+a later resume call; `braid_pause` with `after: true` is rejected for the same reason. The interactive
 `/braid:review` command continues to use its background review workflow.
 
 Jobs live in memory for the current Pi session. Quitting, reloading extensions,
@@ -258,7 +259,18 @@ the current graph revision and paused execution IDs, then:
 ```
 
 Pass this to `braid_update`. It validates and commits the full change and resume
-atomically. To continue without edits, call `braid_resume({jobId,
+atomically.
+
+`pauseAfter` is captured when an execution starts, so changing it with
+`braid_update` affects only later executions. To review the result of an
+execution that is already running, call `braid_pause({jobId, executionIds,
+after: true})`. The execution is not suspended: it keeps running, and once it
+finishes, completed or failed, it is held exactly like `pauseAfter`, with a pause
+reminder. `braid_resume({jobId, executionIds, after: true})` removes the hold
+while it is still running, including one that came from `pauseAfter`. Either
+way only those executions change, not their node definitions. A result that is
+already held is released with the usual `braid_resume` or `braid_update`
+`resume`. To continue without edits, call `braid_resume({jobId,
 expectedRevision, executionIds})`. Definitions can be changed while executions
 are running or waiting, including inside a loop. Existing instances keep their
 captured prompt, inputs, and policy; completion routes through the latest graph.
@@ -314,7 +326,7 @@ The node timeout stops while an execution is suspended; the graph timeout keeps
 running. `braid_status` shows suspended executions, a job pause, and who paused
 them.
 
-Users can pause from the panel too (`p`, below). The parent is not woken for
+Users can pause and hold from the panel too (`p` and `h`, below). The parent is not woken for
 that: one notice with the latest state per execution or job is added to its next
 turn, and it is told not to resume work the user paused unless the user asks.
 In print and JSON runs, a job held only by pauses counts as stalled: the parent
@@ -347,7 +359,9 @@ and pass outputs downstream.
 Use Left/Right to select jobs, Up/Down or Page Up/Page Down to scroll, `c` to
 cancel the selected job, `p` to pause or resume it, and Escape or `q` to close the panel.
 In node selection or an open session, `p` pauses or resumes that node's latest
-execution instead; a suspended node shows `‖ PAUSED`. Closing the panel
+execution instead; a suspended node shows `‖ PAUSED`. `h` holds that execution's
+result once it finishes, removes the hold if one is set (its status shows
+`· hold`), or releases a result that is already held. Closing the panel
 leaves jobs running. In RPC or noninteractive modes, use `braid_status`.
 
 A flowchart wider than the terminal is cropped to the terminal width around the

@@ -1,5 +1,5 @@
 import type {
-  BraidInput, BraidInputNode, BraidSnapshot, ExecutionActivity, ExecutionError, NodeExecution, NodeResult, NodeWorkspace,
+  BraidInput, BraidInputNode, BraidSnapshot, ExecutionActivity, ExecutionError, ExecutionHold, NodeExecution, NodeResult, NodeWorkspace,
 } from "@chrok/braid";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { JobSnapshot } from "./jobs.js";
@@ -59,6 +59,7 @@ function executionLine(execution: NodeResult & Partial<Pick<NodeExecution, "iter
   if (execution.iteration) parts.push(`iteration ${execution.iteration}`);
   parts.push(execution.skipReason ? `${execution.status} (${execution.skipReason})` : execution.status);
   if (execution.suspension) parts.push(`${execution.suspension.state}, paused by ${execution.suspension.source}`);
+  if (pendingHold(execution)) parts.push(`holds when finished, set by ${holdSource(execution.holdAfter!)}`);
   if (execution.latencyMs !== undefined) parts.push(duration(execution.latencyMs));
   if (execution.decision) parts.push(`decision ${execution.decision}`);
   if (execution.error) parts.push(failure(execution.error));
@@ -84,9 +85,16 @@ function control(execution: Control | undefined): string {
 
 /** Paused-by-user work is the user's call: say so wherever the parent sees it. */
 const USER_PAUSE_NOTE = "The user paused this; do not resume it unless the user asks.";
+const USER_HOLD_NOTE = "The user set this hold; do not remove it or release the result unless the user asks.";
+
+/** A hold that applies once a still-unsettled execution finishes. Settled holds are paused executions. */
+function pendingHold(execution: NodeResult): boolean {
+  return Boolean(execution.holdAfter) && (execution.status === "running" || execution.status === "runnable");
+}
+const holdSource = (hold: ExecutionHold) => hold.source === "definition" ? "pauseAfter" : hold.source;
 
 function userPaused(execution: Control | undefined, executions: readonly NodeResult[]): boolean {
-  return execution?.pause?.source === "user" || executions.some(item => item.suspension?.source === "user");
+  return execution?.pause?.source === "user" || executions.some(item => item.suspension?.source === "user" || item.holdAfter?.source === "user");
 }
 
 /** The submission receipt. The caller already has the graph it submitted. */
@@ -105,6 +113,19 @@ export function formatResume(job: JobSnapshot): string {
   const execution = job.execution!;
   return `Braid job ${job.handle} resumed at revision ${execution.revision}. Still paused: ${ids(execution.pausedExecutionIds)}. ` +
     `Still suspended: ${ids(execution.suspendedExecutionIds)}.${execution.pause ? ` The job itself is still paused by ${execution.pause.source}.` : ""}`;
+}
+
+/** The result of braid_pause or braid_resume with after=true. */
+export function formatHold(job: JobSnapshot, executionIds: readonly string[], hold: boolean): string {
+  const execution = job.execution!;
+  if (!hold) return [`Braid job ${job.handle}: hold removed for ${ids(executionIds)}; their results go downstream when they finish.`, control(execution)].join("\n");
+  return [
+    `Braid job ${job.handle}: ${ids(executionIds)} keep running and will be held when they finish; downstream work waits until you release them.`,
+    control(execution),
+    "Each one appears in paused executions once it finishes, and you get a pause reminder. Review it with braid_status, then release it with " +
+      `braid_resume({"jobId":"${job.handle}","expectedRevision":<current>,"executionIds":[...]}), or atomically with braid_update resume. ` +
+      `To remove the hold before it finishes, use braid_resume({"jobId":"${job.handle}","executionIds":[...],"after":true}).`,
+  ].join("\n");
 }
 
 /** The result of braid_pause: what is pausing now and how to continue. */
@@ -159,6 +180,7 @@ export interface NodeStatus {
 export function formatNodeStatus({ job, node, activity, now }: NodeStatus): string {
   const lines = [`Braid job ${job.handle} · ${job.status} · ${control(job.execution)}`,
     ...node.suspension ? [`Execution is ${node.suspension.state}, paused by ${node.suspension.source}${node.suspension.suspendedAt !== undefined ? ` since ${iso(node.suspension.suspendedAt)}` : ""}.${node.suspension.source === "user" ? ` ${USER_PAUSE_NOTE}` : ""}`] : [],
+    ...pendingHold(node) ? [`Its result will be held when it finishes (set by ${holdSource(node.holdAfter!)}).${node.holdAfter!.source === "user" ? ` ${USER_HOLD_NOTE}` : ""}`] : [],
     `Execution ${node.executionId ?? "(none yet)"} · node ${node.id}${node.node ? ` (${node.node.type})` : ""}${node.iteration ? ` · iteration ${node.iteration}` : ""} · ${node.skipReason ? `${node.status} (${node.skipReason})` : node.status}`];
   const timing = [node.startedAt !== undefined && `started ${iso(node.startedAt)}`, node.latencyMs !== undefined && `took ${duration(node.latencyMs)}`,
     node.model && `model ${node.model}`, node.usage && `usage input ${node.usage.inputTokens}, output ${node.usage.outputTokens}`].filter(Boolean);

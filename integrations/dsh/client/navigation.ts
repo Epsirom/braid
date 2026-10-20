@@ -91,7 +91,12 @@ export function toolPresentation(toolName: string, props: ToolCallPhaseProps): T
   } else if (toolName === "braid_resume" || toolName === "braid_pause") {
     // Without execution IDs, both act on the whole job.
     const target = "executionIds" in args ? `${array(args.executionIds).length} execution(s)` : "job";
-    model.summary = toolName === "braid_pause"
+    // after=true adds (pause) or removes (resume) a hold instead of suspending or resuming.
+    model.summary = args.after === true
+      ? toolName === "braid_pause"
+        ? failed ? "Hold rejected" : `${settled ? "Holding" : "Requesting hold for"} ${target}`
+        : failed ? "Hold removal rejected" : `${settled ? "Hold removed for" : "Removing hold for"} ${target}`
+      : toolName === "braid_pause"
       ? failed ? "Pause rejected" : `${settled ? "Pause requested for" : "Pausing"} ${target}`
       : failed ? "Resume rejected" : `${settled ? "Resumed" : "Resuming"} ${target}`;
     const ids = names(array(args.executionIds)); if (ids) model.changes.push(ids);

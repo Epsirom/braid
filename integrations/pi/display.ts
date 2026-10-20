@@ -242,7 +242,7 @@ function mermaidLabelLines(
   const iteration = "executions" in result ? result.executions[node.executionId ?? ""]?.iteration : result.iterations?.[id];
   const lines = [
     `${selected ? SELECTED_NODE_MARK + icon.slice(1) : icon} ${compact(id, 24)}${iteration ? ` #${iteration}` : ""}`,
-    `${status}${decision} · ${nodeElapsed(node, now)}`,
+    `${status}${node.holdAfter && (node.status === "running" || node.status === "runnable") ? " · hold" : ""}${decision} · ${nodeElapsed(node, now)}`,
   ];
   if (progress) {
     const window =
@@ -391,6 +391,8 @@ function eventText(event: ExecutionEvent): string {
     case "execution_resumed": return `resumed · ${compact(event.nodeId, 40)} · ${event.executionId}`;
     case "execution_suspending": return `pausing · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
     case "execution_suspended": return `suspended · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
+    case "execution_hold_added": return `hold added · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
+    case "execution_hold_removed": return `hold removed · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
     case "graph_paused": return `job paused · by ${compact(event.source, 20)}`;
     case "graph_resumed": return "job resumed";
     case "loop_started": return `loop ${compact(event.loopId, 40)} · iteration ${event.iteration}`;
@@ -572,6 +574,12 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
       break;
     case "execution_resumed":
       delete node.suspension;
+      break;
+    case "execution_hold_added":
+      node.holdAfter = { source: event.source, requestedAt: event.timestamp };
+      break;
+    case "execution_hold_removed":
+      delete node.holdAfter;
       break;
     case "node_completed":
     case "node_failed":

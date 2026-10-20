@@ -8,10 +8,10 @@ import { BraidPanel } from "../panel.js";
 import type { PanelDetail, PanelFrame } from "../panel-types.js";
 import { answer, context, input, llm, until } from "./helpers.js";
 
-async function setup() {
+async function setup(runtime = llm(() => answer("x".repeat(70000)))) {
   const ctx = new Context();
   await ctx.plugin(Registry); await ctx.plugin(Gateway);
-  const jobs = new BraidJobs(llm(() => answer("x".repeat(70000))));
+  const jobs = new BraidJobs(runtime);
   const listeners = new Set<() => void>();
   const off = jobs.subscribe(() => { for (const listener of listeners) listener(); });
   await ctx.inject(["typert"], ctx => { new BraidPanel(ctx, id => id === "owner" ? jobs : undefined,
@@ -92,5 +92,28 @@ test("native detail pages execution activity and validates activity cursors", as
     const page = await h.invoke("detail", { sessionId: "owner", jobId: receipt.jobId, executionId, offset: 0, activityBefore: 3 }) as PanelDetail;
     assert.deepEqual(page.activity!.entries.map(entry => entry.sequence), [1, 2]);
     await assert.rejects(h.invoke("detail", { sessionId: "owner", jobId: receipt.jobId, executionId, offset: 0, activityBefore: 0 }), /boundary validation/);
+  } finally { await h.cleanup(); }
+});
+
+test("native panel holds and unholds a running execution as the user", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const h = await setup(llm(async (_options, index) => { if (index === 0) await gate; return answer(); }));
+  try {
+    const receipt = h.jobs.start({ ...input, nodes: [input.nodes[0]!, { type: "execute", id: "b", prompt: "next" }], edges: [{ from: "a", to: "b" }] }, {}, context());
+    await until(() => h.jobs.get(receipt.jobId).execution.executions[Object.keys(h.jobs.get(receipt.jobId).execution.executions)[0]!]?.status === "running");
+    const executionId = Object.keys(h.jobs.get(receipt.jobId).execution.executions)[0]!;
+    const request = { sessionId: "owner", jobId: receipt.jobId, revision: 0, executionIds: [executionId] };
+    await assert.rejects(h.invoke("control", { ...request, action: "hold", executionIds: [] }), /running execution/);
+    const held = await h.invoke("control", { ...request, action: "hold" }) as PanelFrame;
+    assert.deepEqual(held.job!.executions[0]!.holdAfter, { source: "user" });
+    await h.invoke("control", { ...request, action: "unhold" });
+    await h.invoke("control", { ...request, action: "hold" });
+    release();
+    await until(() => h.jobs.get(receipt.jobId).execution.pausedExecutionIds.includes(executionId));
+    assert.equal(h.jobs.get(receipt.jobId).execution.nodes.b!.status, "pending", "b waits for the release");
+    await h.invoke("control", { ...request, action: "resume" });
+    await h.jobs.wait(receipt.jobId);
+    assert.equal(h.jobs.get(receipt.jobId).status, "completed");
   } finally { await h.cleanup(); }
 });
