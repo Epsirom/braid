@@ -26,6 +26,10 @@ import {
   mergeInstructions,
   parseGitToolArguments,
   parseFinishMergeArguments,
+  parseReplanArguments,
+  replanInstructions,
+  replanToolDefinition,
+  REPLAN_RECORDED,
   type ExecutionActivityTracker,
   type GitResult,
   type ModelRunner,
@@ -202,6 +206,10 @@ export function createPiRunner(
       const definition = finishMergeToolDefinition(request.merge.sources.map(source => source.executionId!));
       allToolDefinitions.push({ ...definition, parameters: Type.Unsafe(definition.parameters), constrainedSampling: { type: "json_schema", strict: "prefer" } });
     }
+    if (request.requestReplan) {
+      const definition = replanToolDefinition();
+      allToolDefinitions.push({ ...definition, parameters: Type.Unsafe(definition.parameters) });
+    }
     if (request.node.type === "decision") {
       allToolDefinitions.push({
         name: "decide",
@@ -230,6 +238,7 @@ export function createPiRunner(
             "Read workingDirectory directly; in Git this is an isolated predecessor snapshot. Outside Git it is the source directory. " +
             (request.git ? "Use Git inspection to review changes or predecessor checkpoints; the assigned snapshot contains predecessor edits. " : "")) +
         mergeInstructions(request) +
+        replanInstructions(request) +
         (writeRoot
           ? "You may use Pi's shell tools to install local dependencies, build, run tests, and fix failures in workingDirectory. " +
             "Worktrees isolate code snapshots, not host permissions: shell access is not sandboxed. Keep file changes within your assigned workspace; integrate alone may edit sourceRoot. " +
@@ -515,6 +524,15 @@ export function createPiRunner(
     };
 
     const executeCall = async (call: ToolCall, signal: AbortSignal): Promise<ToolResultMessage> => {
+      if (call.name === "request_replan" && request.requestReplan) {
+        try {
+          request.requestReplan(parseReplanArguments(call.arguments));
+          return toolResult(call, REPLAN_RECORDED, false);
+        } catch (error) {
+          request.signal.throwIfAborted();
+          return toolResult(call, error instanceof Error ? error.message : String(error), true);
+        }
+      }
       if (call.name !== "decide") return executeFileTool(call, signal);
       if (request.node.type !== "decision") {
         return toolResult(call, "decide is available only on decision nodes", true);

@@ -5,6 +5,16 @@
 ### Features
 
 - Core exports `BRAID_VERSION`.
+- A running execute or decision node can ask its graph owner to replan with
+  `request.requestReplan({ reason, suggestion? })`. Core records the request on
+  the execution as `replan`, holds its result like `pauseAfter`, and emits
+  `replan_requested`; the node keeps running. An optional suggested graph edit
+  is validated against the current graph but never applied by core. Pi and DSH
+  workers get a `request_replan` tool, the parent agent gets a waking reminder
+  with the reason, and `braid_status` shows the request and suggestion. The
+  parent applies changes with the existing `braid_update`, `braid_resume`,
+  `braid_pause`, and `braid_cancel` (closes
+  [#105](https://github.com/Epsirom/braid/issues/105)) — @Epsirom.
 
 ### Changes
 
@@ -12,6 +22,9 @@
   leave `maxToolRounds`, `maxToolCalls`, `nodeTimeoutMs`, `graphTimeoutMs`, and
   `onNodeTimeout` unset unless the user asks for limits, instead of suggesting
   hard limits and `onNodeTimeout=fail`. Defaults are unchanged — @Epsirom.
+- `ExecutionEvent` adds `replan_requested`, `NodeResult` adds an optional
+  `replan`, and `ModelRequest` adds an optional `requestReplan`. An exhaustive
+  `switch` over event types needs a case (or a default) for the new event — @Epsirom.
 
 ### Fixes
 

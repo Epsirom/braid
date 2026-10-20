@@ -6,6 +6,7 @@ import {
 import {
   formatBudgetReminder, interruptedToolResult, isStepInterrupted, notRunToolResult, gitToolDefinition, finishMergeToolDefinition,
   mergeInstructions, parseGitToolArguments, parseFinishMergeArguments,
+  parseReplanArguments, replanInstructions, replanToolDefinition, REPLAN_RECORDED,
   type ExecutionActivityTracker, type GitResult, type ModelRunner,
 } from "@chrok/braid";
 import { assertCoreVersion } from "./core-version.js";
@@ -77,6 +78,7 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
       const integrating = request.node.type === "merge" || request.node.type === "integrate";
       if (request.git) tools.push(gitToolDefinition(integrating));
       if (request.merge) tools.push(finishMergeToolDefinition(request.merge.sources.map(source => source.executionId!)));
+      if (request.requestReplan) tools.push(replanToolDefinition());
       if (request.node.type === "decision") tools.push({
         name: "decide", description: "Select exactly one declared choice before answering.",
         parameters: { type: "object", properties: { choice: { type: "string", enum: request.node.choices } }, required: ["choice"], additionalProperties: false },
@@ -94,6 +96,7 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
         "Checkpoints exclude ignored new dependencies, caches, and build outputs. Run tests for your changes. " +
         "Parent transcript, skills, extension tools, and MCP tools are not inherited. " +
         mergeInstructions(request) +
+        replanInstructions(request) +
         (request.node.type === "decision" ? "Call decide exactly once, then answer. " : "") +
         "Return a nonempty natural-language result." +
         (files.guidance ? `\n\n${files.guidance}` : "");
@@ -199,6 +202,9 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
               request.decide(args.choice);
               decided = true;
               text = `Recorded choice: ${args.choice}`;
+            } else if (call.name === "request_replan" && request.requestReplan) {
+              request.requestReplan(parseReplanArguments(args));
+              text = REPLAN_RECORDED;
             } else if (call.name === "git" && request.git) {
               const parsed = parseGitToolArguments(args, integrating);
               const result = await request.git(parsed.args, parsed.input);

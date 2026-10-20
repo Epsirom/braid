@@ -13,7 +13,7 @@ export const isSingleShot = (ctx: Pick<ExtensionContext, "mode">) => ctx.mode ==
 
 export const BRAID_DRAIN_GUIDANCE =
   "This is a single-shot run. It stays open until every Braid job finishes and its reminder is delivered, so submit, end your turn, and continue from the reminder as usual. " +
-  "Paused executions and paused jobs are not resumed automatically: resume or cancel them before ending your turn. If only paused work remains when you end a turn, you get one warning; ending the next turn without resuming it cancels those jobs and the run exits with a failure status.";
+  "Paused executions, including results held by a node's replan request, and paused jobs are not resumed automatically: resume or cancel them before ending your turn. If only paused work remains when you end a turn, you get one warning; ending the next turn without resuming it cancels those jobs and the run exits with a failure status.";
 
 export const BRAID_FINISH_GUIDANCE =
   "When the task is done and no Braid job is outstanding, call braid_finish once with status success or failure and a short summary of the outcome, then end your turn with your final response. " +

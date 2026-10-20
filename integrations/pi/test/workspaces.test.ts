@@ -211,7 +211,7 @@ test("Pi braid tool submits read-only review and decision nodes with Git inspect
     const turn = turns.get(nodeId) ?? 0;
     turns.set(nodeId, turn + 1);
     assert.deepEqual(worker.tools!.map(tool => tool.name), [
-      ...(await createAvailableReadTools(ctx.cwd)).tools.map(tool => tool.name), "git",
+      ...(await createAvailableReadTools(ctx.cwd)).tools.map(tool => tool.name), "git", "request_replan",
       ...(nodeId === "route" && turn === 0 ? ["decide"] : []),
     ]);
     if (turn === 0) {

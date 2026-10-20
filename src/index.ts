@@ -40,6 +40,9 @@ export type {
   PauseOptions,
   PredecessorOutput,
   PromptTemplateReference,
+  ReplanInput,
+  ReplanRequest,
+  ReplanSuggestion,
   ResumeOptions,
   TokenUsage,
 } from "./types.js";
@@ -65,3 +68,4 @@ export {
   parseGitToolArguments,
   parseFinishMergeArguments,
 } from "./merge-tools.js";
+export { replanToolDefinition, replanInstructions, parseReplanArguments, REPLAN_RECORDED } from "./replan-tools.js";

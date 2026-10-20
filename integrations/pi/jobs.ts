@@ -84,6 +84,22 @@ export interface NodeCompletion {
   /** Identifies this execution event within the job. */
   eventSequence: number;
   errorCode?: ExecutionError["code"];
+  /** The execution asked for a replan; its result is held for the parent. */
+  replanRequested?: boolean;
+}
+
+/** A running execution asked the parent to replan; its result will be held when it finishes. */
+export interface ReplanNotice {
+  jobId: string;
+  handle: string;
+  nodeId: string;
+  executionId: string;
+  iteration?: number;
+  reason: string;
+  /** The node suggested a graph edit, readable with braid_status. */
+  suggested: boolean;
+  /** Identifies this request within the job; a repeated request is a new one. */
+  eventSequence: number;
 }
 
 /** An execution the node timeout paused; the parent decides what happens next. */
@@ -147,6 +163,7 @@ export class BraidJobs {
     private readonly onNodeFinished: (completion: NodeCompletion) => void = () => {},
     private readonly onControl: (notice: ControlNotice) => void = () => {},
     private readonly onTimeoutPause: (pause: TimeoutPause) => void = () => {},
+    private readonly onReplanRequested: (notice: ReplanNotice) => void = () => {},
   ) {}
 
   /** The parent made the change itself; anyone else's change becomes a notice for it. */
@@ -329,6 +346,16 @@ export class BraidJobs {
               } catch { /* Notification failures must not affect scheduling. */ }
             }
           }
+          // A replan request wakes the parent now, while the node keeps working.
+          if (!this.disposed && event.type === "replan_requested" && event.executionId) {
+            try {
+              void Promise.resolve(this.onReplanRequested({
+                jobId: job.jobId, handle: job.handle, nodeId: event.nodeId, executionId: event.executionId,
+                ...(event.iteration ? { iteration: event.iteration } : {}),
+                reason: event.reason, suggested: event.suggestion !== undefined, eventSequence: event.sequence,
+              })).catch(() => {});
+            } catch { /* Notification failures must not affect scheduling. */ }
+          }
           const terminal = event.type === "execution_paused" || event.type === "node_completed" || event.type === "node_failed";
           const state = terminal ? job.run?.snapshot() : undefined;
           const instance = event.executionId ? state?.executions[event.executionId] : undefined;
@@ -347,6 +374,7 @@ export class BraidJobs {
                 status: instance.status === "completed" ? "completed" : "failed",
                 eventSequence: event.sequence,
                 ...(instance.error ? { errorCode: instance.error.code } : {}),
+                ...(instance.replan ? { replanRequested: true } : {}),
               })).catch(() => {});
             } catch {
               /* Notification failures must not affect scheduling or results. */

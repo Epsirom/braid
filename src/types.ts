@@ -227,6 +227,14 @@ export interface ModelRequest {
   /** Present only on decision nodes. An adapter exposes this as the decide tool. */
   decide?: (choice: string) => void;
   /**
+   * Present on execute and decision nodes. An adapter exposes this as the
+   * request_replan tool. Records the request, holds this execution's result like
+   * pauseAfter, and lets the execution continue; the graph owner decides how to
+   * replan. A suggestion is validated against the current graph. A repeated call
+   * replaces the request. Throws on invalid input or once the invocation has ended.
+   */
+  requestReplan?: (request: ReplanInput) => void;
+  /**
    * Adapters call this when they deliver a human message to the running worker,
    * before the model request that includes it. Core records it on the execution
    * and in the event log. Throws once the invocation has ended.
@@ -282,6 +290,23 @@ export interface ExecutionHold {
   requestedAt: number;
 }
 
+/** A graph edit a node suggests to its graph owner; applied only through a GraphUpdate. */
+export type ReplanSuggestion = Pick<GraphUpdate, "upsertNodes" | "removeNodeIds" | "addEdges" | "removeEdges">;
+
+/** What a running execution asks of its graph owner. */
+export interface ReplanInput {
+  /** Why the current plan should change. */
+  reason: string;
+  suggestion?: ReplanSuggestion;
+}
+
+/** A replan request recorded on an execution. */
+export interface ReplanRequest extends ReplanInput {
+  /** The graph revision the request, and its suggestion, was validated against. */
+  revision: number;
+  requestedAt: number;
+}
+
 /** Frozen snapshots in emission order, including graph revisions and execution identities. */
 export type ExecutionEvent = Readonly<
   {
@@ -307,6 +332,7 @@ export type ExecutionEvent = Readonly<
     | { type: "execution_suspended"; nodeId: string; source: string }
     | { type: "execution_hold_added"; nodeId: string; source: string }
     | { type: "execution_hold_removed"; nodeId: string; source: string }
+    | { type: "replan_requested"; nodeId: string; reason: string; suggestion?: ReplanSuggestion }
     | { type: "graph_paused"; source: string }
     | { type: "graph_resumed" }
     | { type: "loop_started"; entry: string }
@@ -420,6 +446,8 @@ export interface NodeResult extends Partial<NodeOutput> {
    * definition's pauseAfter or from BraidRun.holdAfter. Authoritative over node.pauseAfter.
    */
   holdAfter?: ExecutionHold;
+  /** Present when this execution asked its graph owner to replan. */
+  replan?: ReplanRequest;
 }
 
 export interface BraidResult {
