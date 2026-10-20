@@ -31,6 +31,7 @@ import {
   type ModelRunner,
   type NodeWorkspace as PiNodeWorkspace,
 } from "@chrok/braid";
+import { assertCoreVersion } from "./core-version.js";
 import { createWorktreeWriteTools } from "./write-tools.js";
 import { createAvailableReadTools } from "./read-tools.js";
 import { createWorkspaceShellTools } from "./shell-tools.js";
@@ -107,6 +108,7 @@ export function createPiRunner(
   onUsageOrOptions?: ((usage: Usage) => void) | PiRunnerOptions,
   cwd = process.cwd(),
 ): ModelRunner {
+  assertCoreVersion();
   const options: PiRunnerOptions =
     typeof onUsageOrOptions === "function"
       ? { onUsage: onUsageOrOptions, cwd }

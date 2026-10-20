@@ -2,12 +2,25 @@
 
 ## Unreleased
 
+### Features
+
+- Core exports `BRAID_VERSION`.
+
 ### Changes
 
 - Pi and DSH guidance and `braid` option descriptions now tell the agent to
   leave `maxToolRounds`, `maxToolCalls`, `nodeTimeoutMs`, `graphTimeoutMs`, and
   `onNodeTimeout` unset unless the user asks for limits, instead of suggesting
   hard limits and `onNodeTimeout=fail`. Defaults are unchanged — @Epsirom.
+
+### Fixes
+
+- Pi and DSH check the loaded core version when they load and when they create
+  a runner. With a mismatched core, such as one kept by a Pi process started
+  before an upgrade, they fail with both versions and upgrade and restart
+  guidance instead of failing every node with `MODEL_ERROR: (0 ,
+  _braid.isStepInterrupted) is not a function` after its first model response
+  (closes [#102](https://github.com/Epsirom/braid/issues/102)) — @Epsirom.
 
 ## 0.5.0 — 2026-10-20
 

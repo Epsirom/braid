@@ -6,6 +6,7 @@ import type {} from "@deepseek-ai/dsh-commands";
 import type {} from "@deepseek-ai/dsh-system-prompt";
 import type {} from "@deepseek-ai/dsh-jobs";
 import type { BraidInput } from "@chrok/braid";
+import { assertCoreVersion } from "./core-version.js";
 import { BraidJobs, type ControlNotice, type JobOptions, type JobSnapshot } from "./jobs.js";
 import { createBraidTools } from "./tools.js";
 import { formatControlNotice, formatJobList, formatReceipt, formatTimeoutPause } from "./status-text.js";
@@ -26,6 +27,7 @@ export const name = "braid";
 export const inject = ["tools", "llm", "commands", "systemPrompt", "jobs"];
 
 export function apply(ctx: Context): void {
+  assertCoreVersion();
   const observers = new Set<() => void>();
   const changed = () => { for (const listener of observers) listener(); };
   const sessions = new Map<Agent, { jobs: BraidJobs; pending: Map<string, UserMessage>; queued: Set<string>; notices: Map<string, ControlNotice>; release: () => Promise<void> }>();

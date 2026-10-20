@@ -227,6 +227,9 @@ Core, Pi, and DSH release together with matching versions. During 0.x, patch rel
 preserve documented behavior; breaking API or semantic changes require a minor
 version bump, a changelog entry, and migration guidance. New optional fields or
 fixes that restore the documented contract may ship in a patch.
+Pi and DSH require the exact core version they depend on, which core exports as
+`BRAID_VERSION`, and fail to load with any other. After upgrading, restart the host:
+a running process keeps the core it loaded first.
 
 Supported core entry points are `@chrok/braid` and `@chrok/braid/adapters/openai`.
 The root `@chrok/braid` entry point also exports adapter helpers:
