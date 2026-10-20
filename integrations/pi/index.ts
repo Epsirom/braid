@@ -34,8 +34,8 @@ const timeout = (scope: "node" | "graph") =>
       exclusiveMinimum: 0,
       maximum: 2_147_483_647,
       description: scope === "graph"
-        ? "Total wall-clock timeout in milliseconds, including queueing and pauses. Updates/resume do not reset it; reserve time for final integration. Omit for no time limit."
-        : "Active time in milliseconds per node execution, excluding pauses; omit for no time limit. See onNodeTimeout for what happens when it runs out.",
+        ? "Total wall-clock timeout in milliseconds, including queueing and pauses. Usually omit: by default there is no time limit. Set it only when the user asks for one; updates/resume do not reset it, so reserve time for final integration."
+        : "Active time in milliseconds per node execution, excluding pauses. Usually omit: by default there is no time limit. Set it only when the user asks for one; an execution that runs out is paused by default (see onNodeTimeout), so you can give it more time.",
     }),
   );
 const resumeTimeout = Type.Optional(Type.Number({
@@ -48,7 +48,7 @@ const toolBudget = (unit: string) =>
     Type.Integer({
       minimum: 1,
       maximum: Number.MAX_SAFE_INTEGER,
-      description: `Maximum tool ${unit} per node, including decide and rejected requests; omit for no limit`,
+      description: `Maximum tool ${unit} per node, including decide and rejected requests. Usually omit: by default there is no limit. Set it only when the user asks for one; a node that exceeds it fails.`,
     }),
   );
 
@@ -105,7 +105,7 @@ const braidParameters = Type.Object({
     maxConcurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum simultaneous node executions; default 4." })),
     maxExecutions: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "Total execution limit across all iterations and updates; default 1000." })),
     nodeTimeoutMs: timeout("node"), graphTimeoutMs: timeout("graph"), maxToolRounds: toolBudget("rounds"), maxToolCalls: toolBudget("calls"),
-    onNodeTimeout: Type.Optional(StringEnum(["pause", "fail"], { description: "What a node timeout does. pause (default): interrupt the current step and suspend the execution with its work, and send you a reminder to resume it with a new time budget or cancel it. fail: the execution fails with NODE_TIMEOUT." })),
+    onNodeTimeout: Type.Optional(StringEnum(["pause", "fail"], { description: "What a node timeout does. Usually omit to keep the default, pause: interrupt the current step and suspend the execution with its work, and send you a reminder to resume it with a new time budget or cancel it. fail: the execution fails with NODE_TIMEOUT and cannot continue its conversation; use it only when the user asks for it." })),
     maxModelRetries: Type.Optional(Type.Integer({ minimum: 0, maximum: 10, description: "Retries per model request for transient provider errors such as rate limits, overload, and network failures. The node continues where it was; completed tool calls are not repeated. Default 3; 0 disables." })),
   }, { additionalProperties: false })),
 }, { additionalProperties: false });
@@ -196,7 +196,7 @@ export function createBraidTools(jobs: BraidJobs) {
         "Do not use braid for simple one-step answers or trivial direct edits. Let writable nodes run shell commands and tests for their work; use merge nodes to combine and validate snapshots before explicit integration.",
         BRAID_FILESYSTEM_GUIDANCE,
         "Decision nodes additionally receive decide. Nodes cannot call recursive Braid.",
-        "Tool and time budgets are unlimited by default. Set maxToolRounds, maxToolCalls, nodeTimeoutMs, or graphTimeoutMs in options to impose hard limits; nodes receive system reminders of their remaining budgets before each model call. By default a node timeout pauses the execution instead of failing it, and you get a reminder to resume or cancel it; set onNodeTimeout=fail to fail it instead.",
+        "Leave maxToolRounds, maxToolCalls, nodeTimeoutMs, graphTimeoutMs, and onNodeTimeout unset unless the user asks for limits: tool and time budgets are unlimited by default, which suits background work. When limits are set, nodes receive system reminders of their remaining budgets before each model call, and a node timeout pauses the execution and sends you a reminder to resume it with more time or cancel it.",
       ],
       parameters: braidParameters,
       renderCall(args, theme) {

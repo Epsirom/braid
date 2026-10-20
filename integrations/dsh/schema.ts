@@ -16,8 +16,8 @@ const timeout = (scope: "node" | "graph") =>
       exclusiveMinimum: 0,
       maximum: 2_147_483_647,
       description: scope === "graph"
-        ? "Total wall-clock timeout in milliseconds, including queueing and pauses. Updates/resume do not reset it; reserve time for final integration. Omit for no time limit."
-        : "Active time in milliseconds per node execution, excluding pauses; omit for no time limit. See onNodeTimeout for what happens when it runs out.",
+        ? "Total wall-clock timeout in milliseconds, including queueing and pauses. Usually omit: by default there is no time limit. Set it only when the user asks for one; updates/resume do not reset it, so reserve time for final integration."
+        : "Active time in milliseconds per node execution, excluding pauses. Usually omit: by default there is no time limit. Set it only when the user asks for one; an execution that runs out is paused by default (see onNodeTimeout), so you can give it more time.",
     }),
   );
 const toolBudget = (unit: string) =>
@@ -25,7 +25,7 @@ const toolBudget = (unit: string) =>
     Type.Integer({
       minimum: 1,
       maximum: Number.MAX_SAFE_INTEGER,
-      description: `Maximum tool ${unit} per node, including decide and rejected requests; omit for no limit`,
+      description: `Maximum tool ${unit} per node, including decide and rejected requests. Usually omit: by default there is no limit. Set it only when the user asks for one; a node that exceeds it fails.`,
     }),
   );
 
@@ -82,7 +82,7 @@ export const braidParameters = Type.Object({
     maxConcurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum simultaneous node executions; default 4." })),
     maxExecutions: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "Total execution limit across all iterations and updates; default 1000." })),
     nodeTimeoutMs: timeout("node"), graphTimeoutMs: timeout("graph"), maxToolRounds: toolBudget("rounds"), maxToolCalls: toolBudget("calls"),
-    onNodeTimeout: Type.Optional(Type.Union([Type.Literal("pause"), Type.Literal("fail")], { description: "What a node timeout does. pause (default): interrupt the current step and suspend the execution with its work, and send you a reminder to resume it with a new time budget or cancel it. fail: the execution fails with NODE_TIMEOUT." })),
+    onNodeTimeout: Type.Optional(Type.Union([Type.Literal("pause"), Type.Literal("fail")], { description: "What a node timeout does. Usually omit to keep the default, pause: interrupt the current step and suspend the execution with its work, and send you a reminder to resume it with a new time budget or cancel it. fail: the execution fails with NODE_TIMEOUT and cannot continue its conversation; use it only when the user asks for it." })),
   }, { additionalProperties: false })),
 }, { additionalProperties: false });
 
@@ -115,7 +115,8 @@ export const BRAID_USAGE_GUIDANCE = [
   "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Use braid_status({jobId, executionId}) to retrieve the exact execution; nodeId selects the latest instance. Use pauseAfter=true to hold outgoing scheduling. Definitions can always be changed with braid_update using expectedRevision; existing executions retain their captured inputs. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes.",
   "Use braid_pause to stop running executions temporarily (each stops before its next model request and keeps its conversation and workspace), or the whole job; adjust the graph, then resume. " +
   "pauseAfter is captured when an execution starts; to review a running execution's result before downstream work starts, use braid_pause({jobId, executionIds, after: true}) instead, and braid_resume({jobId, executionIds, after: true}) removes that hold. The user can also pause, hold, and resume from the Braid panel; you get a notice with your next step. Do not resume work the user paused unless the user asks.",
-  "When an execution exceeds its nodeTimeoutMs it is paused, not failed, and you get a reminder: resume it with braid_resume (optionally a new nodeTimeoutMs), or fail only that execution with braid_cancel and executionIds. Set options.onNodeTimeout=fail to fail it instead.",
+  "Leave maxToolRounds, maxToolCalls, nodeTimeoutMs, graphTimeoutMs, and onNodeTimeout unset unless the user asks for limits: tool and time budgets are unlimited by default, which suits background work. " +
+  "When an execution exceeds its nodeTimeoutMs it is paused, not failed, and you get a reminder: resume it with braid_resume (optionally a new nodeTimeoutMs), or fail only that execution with braid_cancel and executionIds.",
   "Make the delegation choice once per user request. Reminders and definition errors are not new tasks. If the same definition problem recurs, stop resubmitting and report the concrete mismatch; do not launch repeated probe/replacement jobs. In braid_update, add new nodes together with their dependencies and loops: a node added without incoming edges can start immediately, even while another execution is paused.",
   "Do not use braid for a simple one-step answer, a trivial direct edit, a single shell command, or when decomposition adds no value. Writable nodes can implement and test their work. The parent reviews results and performs any remaining validation after Braid completes.",
 ].join("\n");

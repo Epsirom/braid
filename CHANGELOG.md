@@ -6,6 +6,13 @@
 
 - Core exports `BRAID_VERSION`.
 
+### Changes
+
+- Pi and DSH guidance and `braid` option descriptions now tell the agent to
+  leave `maxToolRounds`, `maxToolCalls`, `nodeTimeoutMs`, `graphTimeoutMs`, and
+  `onNodeTimeout` unset unless the user asks for limits, instead of suggesting
+  hard limits and `onNodeTimeout=fail`. Defaults are unchanged — @Epsirom.
+
 ### Fixes
 
 - Pi and DSH check the loaded core version when they load and when they create
