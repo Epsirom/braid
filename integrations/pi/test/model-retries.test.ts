@@ -160,7 +160,10 @@ test("cancellation interrupts the retry backoff", async () => {
   const run = createPiRunner(fake.registry, { cwd: readOnlyCwd, modelRetryDelayMs: 60_000 })(
     request({ signal: controller.signal }),
   );
-  setTimeout(() => controller.abort(new Error("cancelled by user")), 10);
+  // Cancel during the backoff, after the first attempt; a fixed timer can fire before it under load.
+  while (fake.contexts.length === 0) await new Promise(resolve => setTimeout(resolve, 1));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  controller.abort(new Error("cancelled by user"));
   await assert.rejects(run, /cancelled by user/);
   assert.equal(fake.contexts.length, 1);
 });
