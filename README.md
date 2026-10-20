@@ -643,7 +643,7 @@ and [GitHub releases](https://github.com/Epsirom/braid/releases) for published r
 - Upgrading from 0.3: also follow the [0.3 → 0.4 migration guide](docs/compatibility.md#migrating-from-03-to-04).
 - Upgrading from 0.2: also follow the [0.2 → 0.3 migration guide](docs/compatibility.md#migrating-from-02-to-03).
 - Upgrading from 0.1: also follow the [0.1 → 0.2 guide](docs/compatibility.md#migrating-from-01-to-02).
-- Using the previous release: see the [0.4.0 documentation](https://github.com/Epsirom/braid/tree/v0.4.0).
+- Using the previous release: see the [0.5.0 documentation](https://github.com/Epsirom/braid/tree/v0.5.0).
 
 ## Contributing and project status
 

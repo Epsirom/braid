@@ -1,10 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 — 2026-10-20
 
 ### Features
 
-- Core exports `BRAID_VERSION`.
 - A running execute or decision node can ask its graph owner to replan with
   `request.requestReplan({ reason, suggestion? })`. Core records the request on
   the execution as `replan`, holds its result like `pauseAfter`, and emits
@@ -13,18 +12,27 @@
   workers get a `request_replan` tool, the parent agent gets a waking reminder
   with the reason, and `braid_status` shows the request and suggestion. The
   parent applies changes with the existing `braid_update`, `braid_resume`,
-  `braid_pause`, and `braid_cancel` (closes
+  `braid_pause`, and `braid_cancel`. Because a node sees only the goal, its
+  prompt, and its direct inputs, the tool asks it to report what it found and
+  how that differs from what its prompt assumed, and leaves deciding which
+  planned work is affected to the parent
+  ([#106](https://github.com/Epsirom/braid/pull/106),
+  [#107](https://github.com/Epsirom/braid/pull/107), closes
   [#105](https://github.com/Epsirom/braid/issues/105)) — @Epsirom.
+- Core exports `BRAID_VERSION`
+  ([#103](https://github.com/Epsirom/braid/pull/103)) — @Epsirom.
 
 ### Changes
 
 - Pi and DSH guidance and `braid` option descriptions now tell the agent to
   leave `maxToolRounds`, `maxToolCalls`, `nodeTimeoutMs`, `graphTimeoutMs`, and
   `onNodeTimeout` unset unless the user asks for limits, instead of suggesting
-  hard limits and `onNodeTimeout=fail`. Defaults are unchanged — @Epsirom.
+  hard limits and `onNodeTimeout=fail`. Defaults are unchanged
+  ([#104](https://github.com/Epsirom/braid/pull/104)) — @Epsirom.
 - `ExecutionEvent` adds `replan_requested`, `NodeResult` adds an optional
   `replan`, and `ModelRequest` adds an optional `requestReplan`. An exhaustive
-  `switch` over event types needs a case (or a default) for the new event — @Epsirom.
+  `switch` over event types needs a case (or a default) for the new event
+  ([#106](https://github.com/Epsirom/braid/pull/106)) — @Epsirom.
 
 ### Fixes
 
@@ -33,7 +41,19 @@
   before an upgrade, they fail with both versions and upgrade and restart
   guidance instead of failing every node with `MODEL_ERROR: (0 ,
   _braid.isStepInterrupted) is not a function` after its first model response
-  (closes [#102](https://github.com/Epsirom/braid/issues/102)) — @Epsirom.
+  ([#103](https://github.com/Epsirom/braid/pull/103), closes
+  [#102](https://github.com/Epsirom/braid/issues/102)) — @Epsirom.
+
+No migration from 0.5.0 is required; new event types follow the
+[versioning policy](docs/compatibility.md#versioning). After upgrading, restart
+Pi or DSH so it loads the matching core. Pi 1.2.0 and DSH 0.2.0-rc.2 remain the
+tested host versions; integrations require Node.js 22.19+.
+
+### New Contributors
+
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.5.0...v0.5.1).
 
 ## 0.5.0 — 2026-10-20
 
