@@ -94,6 +94,8 @@
   for slower CI workers
   ([#97](https://github.com/Epsirom/braid/pull/97),
   [#88](https://github.com/Epsirom/braid/pull/88)) — @Epsirom.
+- Allow timer granularity in timeout-pause duration assertions across core, Pi,
+  and DSH ([#100](https://github.com/Epsirom/braid/pull/100)) — @Epsirom.
 
 See the [0.4 → 0.5 migration guide](docs/compatibility.md#migrating-from-04-to-05)
 for the timeout policy, removed blocking mode, and TypeScript interface changes.

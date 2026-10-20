@@ -46,7 +46,8 @@ test("a node timeout pauses the execution, reports what it was doing, and resume
   assert.equal(pause.executionId, executionId);
   assert.equal(pause.nodeId, "a");
   assert.equal(pause.nodeTimeoutMs, 200);
-  assert.ok(pause.activeMs >= 200);
+  // Node timers truncate fractional delays and may fire a few milliseconds early.
+  assert.ok(pause.activeMs >= pause.nodeTimeoutMs - 5, `ran ${pause.activeMs}ms`);
   assert.match(pause.activity!, /^model for /, "it was waiting for the model when the timeout fired");
   assert.equal(requests.length, 1, "the interrupted request is not resent before resume");
 

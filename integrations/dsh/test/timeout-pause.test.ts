@@ -40,7 +40,8 @@ test("a node timeout pauses the execution, reports what it was doing, and resume
   const executionId = Object.keys(jobs.get(job.handle).execution.executions)[0]!;
   const pause = pauses[0]!;
   assert.deepEqual([pause.executionId, pause.nodeId, pause.nodeTimeoutMs], [executionId, "a", 200]);
-  assert.ok(pause.activeMs >= 200);
+  // Node timers truncate fractional delays and may fire a few milliseconds early.
+  assert.ok(pause.activeMs >= pause.nodeTimeoutMs - 5, `ran ${pause.activeMs}ms`);
   assert.match(pause.activity!, /^model for /);
   assert.match(formatTimeoutPause(pause), new RegExp(`node "a" execution ${executionId} was paused because it exceeded its node timeout`));
   assert.equal(requests.length, 1);

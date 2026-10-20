@@ -87,7 +87,9 @@ test("a node timeout interrupts the current step and suspends the execution with
   assert.equal(suspension.state, "suspended");
   assert.equal(suspension.source, "node_timeout");
   assert.equal(suspension.timeout!.nodeTimeoutMs, 150);
-  assert.ok(suspension.timeout!.activeMs >= 150, `ran ${suspension.timeout!.activeMs}ms`);
+  // Node timers truncate fractional delays and may fire a few milliseconds early.
+  assert.ok(suspension.timeout!.activeMs >= suspension.timeout!.nodeTimeoutMs - 5,
+    `ran ${suspension.timeout!.activeMs}ms`);
   assert.equal(state.nodes.b!.status, "pending", "successors wait");
   const pauseEvents = events.filter(event => event.type === "execution_suspending" || event.type === "execution_suspended");
   assert.deepEqual(pauseEvents.map(event => [event.type, "source" in event && event.source]),
