@@ -134,18 +134,28 @@ held result still needs a second resume once it settles.
 
 ### Replan requests from a node
 
-A running node may learn that the plan around it is wrong: a sibling branch is
-unnecessary, two planned fixes share one root cause, or the approach does not
-work. Execute and decision nodes can ask the graph owner to replan. A node cannot
-change the graph itself; global changes stay with the owner, which sees the whole
-graph and the user's intent.
+A running node may find that its task rests on a wrong premise: the timeout it
+was asked to fix in the parser comes from a cache setting, the bug is already
+fixed, or the cause it found also explains other problems. Execute and decision
+nodes can report such a finding and ask the graph owner to replan. A node sees
+only the goal, its own prompt, and its direct predecessors, not the rest of the
+graph, so it reports what it found rather than a new plan. The owner, which sees
+the whole graph and the user's intent, decides which planned work the finding
+affects, for example that a sibling fix is now unnecessary. A node cannot change
+the graph itself.
 
 ```ts
 request.requestReplan!({
-  reason: "Both failures come from the cache key; fix-b is unnecessary",
-  suggestion: { removeNodeIds: ["fix-b"] }, // optional
+  reason: "The timeouts come from the cache TTL, not the parser; the TTL also explains the stale reads.",
+  suggestion: { // optional; a node knows only its own ID, so it can only add work after itself
+    upsertNodes: [{ type: "execute", id: "fix-cache-ttl", prompt: "Fix the cache TTL." }],
+    addEdges: [{ from: "investigate", to: "fix-cache-ttl" }],
+  },
 });
 ```
+
+Owners get more precise requests by saying in a node's prompt what related work
+other nodes handle, so the node can tell which of them its finding affects.
 
 The call returns at once and the execution keeps running. Core records the
 request on the execution as `replan: { reason, suggestion?, revision, requestedAt }`

@@ -175,7 +175,8 @@ test("requestReplan is offered to execute and decision nodes only", async t => {
 
 test("worker guidance reminds decision nodes that a replan does not replace decide", () => {
   const request = (decision: boolean) => ({ requestReplan: () => {}, ...(decision ? { decide: () => {} } : {}) }) as unknown as ModelRequest;
-  assert.match(replanInstructions(request(false)), /call request_replan as soon as you know/);
+  assert.match(replanInstructions(request(false)), /call request_replan as soon as you know to report the finding, not a new plan/);
+  assert.match(replanInstructions(request(false)), /not the rest of the graph/);
   assert.doesNotMatch(replanInstructions(request(false)), /decide/);
   assert.match(replanInstructions(request(true)), /does not replace decide; still call decide exactly once/);
   assert.equal(replanInstructions({} as ModelRequest), "", "merge and integrate nodes get no guidance");
@@ -184,6 +185,8 @@ test("worker guidance reminds decision nodes that a replan does not replace deci
 test("the shared tool schema matches the argument parser", () => {
   const definition = replanToolDefinition();
   assert.equal(definition.name, "request_replan");
+  assert.match(definition.description, /report what you found, not a new plan/);
+  assert.doesNotMatch(definition.description, /outside your prompt/, "a node cannot tell what is planned elsewhere");
   assert.deepEqual(definition.parameters.required, ["reason"]);
   assert.deepEqual(parseReplanArguments({ reason: "r", suggestion: { removeNodeIds: ["b"] } }), { reason: "r", suggestion: { removeNodeIds: ["b"] } });
   assert.throws(() => parseReplanArguments({ suggestion: {} }), /reason/);
