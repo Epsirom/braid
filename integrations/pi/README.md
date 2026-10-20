@@ -2,26 +2,26 @@
 
 [![npm](https://img.shields.io/npm/v/%40chrok%2Fpi-braid?label=%40chrok%2Fpi-braid)](https://www.npmjs.com/package/@chrok/pi-braid)
 
-This optional Pi extension runs Braid agent graphs as background jobs by default, with
+This optional Pi extension runs Braid agent graphs as background jobs, with
 bounded loops, live updates, pause/resume, and a live flow panel.
 
-**0.4 API:** The npm badge shows the published version; see
+**0.5 API:** The npm badge shows the published version; see
 [GitHub releases](https://github.com/Epsirom/braid/releases) for release notes.
-Review the [0.3 → 0.4 migration guide](https://github.com/Epsirom/braid/blob/v0.4.0/docs/compatibility.md#migrating-from-03-to-04)
-before upgrading: print and JSON runs wait for background jobs, Pi SDK sessions
-in the default print mode drain jobs before `session.prompt()` returns, and
-blocking mode is deprecated. Users coming from 0.2 also need the
-[0.2 → 0.3 guide](https://github.com/Epsirom/braid/blob/v0.4.0/docs/compatibility.md#migrating-from-02-to-03),
+Review the [0.4 → 0.5 migration guide](https://github.com/Epsirom/braid/blob/v0.5.0/docs/compatibility.md#migrating-from-04-to-05)
+before upgrading: running executions can pause and resume, configured node
+timeouts pause by default, and blocking mode is removed. Users coming from
+0.3 also need the [0.3 → 0.4 guide](https://github.com/Epsirom/braid/blob/v0.5.0/docs/compatibility.md#migrating-from-03-to-04)
+for print/JSON job draining and Pi SDK behavior. Users coming from 0.2 also need the
+[0.2 → 0.3 guide](https://github.com/Epsirom/braid/blob/v0.5.0/docs/compatibility.md#migrating-from-02-to-03),
 and users coming from 0.1 the
-[0.1 → 0.2 guide](https://github.com/Epsirom/braid/blob/v0.4.0/docs/compatibility.md#migrating-from-01-to-02).
+[0.1 → 0.2 guide](https://github.com/Epsirom/braid/blob/v0.5.0/docs/compatibility.md#migrating-from-01-to-02).
 For the previous release, use the
-[0.3.6 guide](https://github.com/Epsirom/braid/blob/v0.3.6/integrations/pi/README.md).
+[0.4.0 guide](https://github.com/Epsirom/braid/blob/v0.4.0/integrations/pi/README.md).
 
 It registers:
 
 - `braid` — submit a graph with optional bounded loops; receive a `jobId`
-  immediately in background mode (print/JSON runs wait for it before exiting), or
-  final results in deprecated blocking mode.
+  immediately (print/JSON runs wait for it before exiting).
 - `braid_status` — retrieve progress and results with `{ "jobId": "..." }`, or
   add `"executionId": "..."` for an exact invocation's full output/error.
   `"nodeId": "..."` selects that definition's latest invocation. Omit all IDs
@@ -108,39 +108,13 @@ after outstanding Braid jobs drain. Hosts that stay running and want reminders
 to start new runs after settling should bind with another mode, for example
 `session.bindExtensions({ mode: "rpc" })`.
 
-### Blocking mode (deprecated)
+### Migrating from blocking mode
 
-> **Deprecated:** `--braid-blocking` will be removed in 0.5.0. Print and JSON
-> runs now wait for background jobs (see above), which keeps `pauseAfter`,
-> reminders, and live updates, and `braid_finish` sets the exit status. To
-> migrate, drop `--braid-blocking` from the command line
-> ([#80](https://github.com/Epsirom/braid/issues/80)). Using it prints a one-time
-> warning: on stderr in print/JSON mode, or as a UI notice. The
-> `/braid:blocking` session command has already been removed.
-
-Until then, to make each `braid` call wait in the foreground, enable blocking when starting Pi:
-
-```sh
-pi --braid-blocking -p "Use Braid to review the changes and summarize the results."
-```
-
-With `@chrok/pi-braid` installed, `--braid-blocking` makes every `braid` tool call
-wait for the entire graph and workspace cleanup, then return final status, outputs,
-and usage directly. The parent can summarize those results before `pi -p` exits.
-It also works with `--mode json` for structured tool results. The flag applies
-for the whole session; it is a user control, not a model tool parameter, and the
-default remains background execution.
-For CI pass/fail decisions, inspect the returned job status: a failed graph does
-not by itself set Pi's process exit code.
-Blocking calls emit an initial progress update with the job handle while waiting.
-They suppress node/job completion reminders except for cancellation: stopping the
-foreground response cancels their work, waits for cleanup, and sends a reminder
-so the next turn can retrieve partial outputs and recovery checkpoints.
-Wait/result retrieval errors include the existing job handle and any terminal
-usage; retrieve that job with `braid_status` instead of submitting the graph again.
-`pauseAfter: true` is rejected before starting a blocking job because it requires
-a later resume call; `braid_pause` with `after: true` is rejected for the same reason. The interactive
-`/braid:review` command continues to use its background review workflow.
+Blocking mode, `--braid-blocking`, and `/braid:blocking` are removed in 0.5.0.
+Drop the flag or command. Print and JSON runs wait for background jobs before
+exiting, and `braid_finish` sets the run outcome. The parent submits the graph,
+ends its turn, and retrieves results with `braid_status` after the completion
+reminder. `pauseAfter`, reminders, and live updates remain available.
 
 Jobs live in memory for the current Pi session. Quitting, reloading extensions,
 or switching/forking sessions aborts outstanding work and suppresses its
@@ -344,8 +318,7 @@ long the execution ran, what it was doing, and what it can do next:
   `NODE_TIMEOUT`; its successors follow the usual failure rules.
 
 Resuming the whole job does not resume a timeout pause. Set
-`options.onNodeTimeout: "fail"` to fail on timeout instead. Deprecated blocking
-jobs always fail on timeout.
+`options.onNodeTimeout: "fail"` to fail on timeout instead.
 
 Users can pause and hold from the panel too (`p` and `h`, below). The parent is not woken for
 that: one notice with the latest state per execution or job is added to its next
@@ -763,9 +736,8 @@ fails that node cleanly and does not invoke another provider.
 
 The Pi extension has no node or graph time limit by default. Use `braid_cancel`
 or press `c` in the flow panel to abort running nodes and mark queued nodes
-`cancelled`. In the default background mode, Escape stops the foreground response
-or closes the panel without cancelling jobs. In blocking mode, stopping the
-foreground response also cancels its Braid job. To set a node or graph timeout,
+`cancelled`. Escape stops the foreground response or closes the panel without
+cancelling jobs. To set a node or graph timeout,
 supply milliseconds in the submission tool input under `options`; each omitted
 timeout remains unlimited:
 

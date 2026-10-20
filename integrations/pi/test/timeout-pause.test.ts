@@ -46,7 +46,8 @@ test("a node timeout pauses the execution, reports what it was doing, and resume
   assert.equal(pause.executionId, executionId);
   assert.equal(pause.nodeId, "a");
   assert.equal(pause.nodeTimeoutMs, 200);
-  assert.ok(pause.activeMs >= 200);
+  // Node timers truncate fractional delays and may fire a few milliseconds early.
+  assert.ok(pause.activeMs >= pause.nodeTimeoutMs - 5, `ran ${pause.activeMs}ms`);
   assert.match(pause.activity!, /^model for /, "it was waiting for the model when the timeout fired");
   assert.equal(requests.length, 1, "the interrupted request is not resent before resume");
 
@@ -98,7 +99,7 @@ test("braid_cancel with executionIds fails a timeout pause; a user cancellation 
   }
 });
 
-test("onNodeTimeout=fail keeps failing on timeout, and blocking jobs reject pause", { timeout: 10_000 }, async t => {
+test("onNodeTimeout=fail keeps failing on timeout", { timeout: 10_000 }, async t => {
   const { ctx } = slowFirstRequest();
   let paused = false;
   const jobs = new BraidJobs(undefined, undefined, undefined, () => { paused = true; });
@@ -108,7 +109,6 @@ test("onNodeTimeout=fail keeps failing on timeout, and blocking jobs reject paus
   await jobs.wait(handle);
   assert.equal(jobs.get(handle)!.result!.nodes.a!.error!.code, "NODE_TIMEOUT");
   assert.equal(paused, false);
-  assert.throws(() => jobs.start(input, { onNodeTimeout: "pause" }, ctx, true), /Blocking Braid jobs cannot use onNodeTimeout "pause"/);
 });
 
 test("a timeout pause wakes the parent, and x in /braid cancels the execution after confirmation", { timeout: 10_000 }, async () => {

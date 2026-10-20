@@ -633,13 +633,14 @@ and recursive Braid calls from model nodes.
 
 ## Releases and upgrades
 
-The 0.4 API is experimental. See the [changelog](CHANGELOG.md) for version changes
+The 0.5 API is experimental. See the [changelog](CHANGELOG.md) for version changes
 and [GitHub releases](https://github.com/Epsirom/braid/releases) for published releases.
 
-- Upgrading from 0.3: read the [0.3 → 0.4 migration guide](docs/compatibility.md#migrating-from-03-to-04).
+- Upgrading from 0.4: read the [0.4 → 0.5 migration guide](docs/compatibility.md#migrating-from-04-to-05).
+- Upgrading from 0.3: also follow the [0.3 → 0.4 migration guide](docs/compatibility.md#migrating-from-03-to-04).
 - Upgrading from 0.2: also follow the [0.2 → 0.3 migration guide](docs/compatibility.md#migrating-from-02-to-03).
 - Upgrading from 0.1: also follow the [0.1 → 0.2 guide](docs/compatibility.md#migrating-from-01-to-02).
-- Using the previous release: see the [0.3.6 documentation](https://github.com/Epsirom/braid/tree/v0.3.6).
+- Using the previous release: see the [0.4.0 documentation](https://github.com/Epsirom/braid/tree/v0.4.0).
 
 ## Contributing and project status
 

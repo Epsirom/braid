@@ -7,7 +7,7 @@
 | DSH package | Node.js 22.19+, DeepSeek Harness 0.2.0-rc.2 is the pinned developer-preview host target; native Web panel |
 | CI | Core minimum Node 22.0; all three packages on Node 22.19 and 24 on Linux, macOS, Windows |
 | OpenAI-compatible runner | Chat Completions text and function-tool calls; decisions and merge/integrate nodes require tool calling |
-| Browsers / CommonJS | No standalone core browser build or CommonJS entry point in 0.4; the DSH `./client` export is loaded by DSH's Web host |
+| Browsers / CommonJS | No standalone core browser build or CommonJS entry point in 0.5; the DSH `./client` export is loaded by DSH's Web host |
 
 The CI matrix describes configured checks; see actual workflow results for each
 commit. Offline HTTP fixtures validate the adapter contract. They do not prove
@@ -126,15 +126,32 @@ Version 0.4 changes how the Pi extension behaves in print and JSON modes:
   jobs and sets exit status 1. Resume or cancel paused executions before the
   parent finishes. `--braid-ci-timeout` and a final `braid_finish` failure also
   exit 1.
-- Blocking mode (`--braid-blocking`) still works but is deprecated and will be
-  removed in 0.5.0. Drop it: print and JSON runs now wait for background jobs
-  without blocking each tool call. The `/braid:blocking` session command was
-  removed after 0.4.0.
+- In 0.4, blocking mode (`--braid-blocking`, `/braid:blocking`) is deprecated
+  for removal in 0.5.0. Drop the flag or command: print and JSON runs wait for
+  background jobs without blocking each tool call.
 
 No graph field, result shape, or event schema migration is required, and DSH
 behavior is unchanged.
 
-## Pausing running executions (unreleased)
+## Migrating from 0.4 to 0.5
+
+Version 0.5 adds execution pause/resume, result holds, and timeout recovery.
+Before upgrading:
+
+- Set `onNodeTimeout: "fail"` on `startBraid` to preserve the previous timeout
+  behavior with interruptible runners, including the OpenAI-compatible adapter.
+  Otherwise, resume or cancel timed-out executions. Pi and DSH still default to
+  unlimited node timeouts, and `braid()` still fails on timeout.
+- Drop `--braid-blocking` and `/braid:blocking`; blocking mode is removed.
+  The Pi `braid` tool always returns a background job handle, and completion reminders lead
+  the parent to its results through `braid_status`. Print and JSON runs drain
+  background jobs before exiting; use `braid_finish` to report the outcome.
+  Stopping the foreground response leaves jobs running; use `braid_cancel`
+  or the panel to cancel them.
+- Update code that implements `BraidRun`, constructs `BraidSnapshot`, or handles
+  execution events exhaustively as described below.
+
+### Pausing running executions (0.5.0)
 
 Pausing running executions needs no graph or result migration. Runners that do
 not opt in keep working; their executions cannot be paused, and `pauseRun` only
@@ -165,7 +182,7 @@ optional (omit both to resume a paused job) and still requires the revision with
 IDs. In Pi print mode, a stalled run now also covers suspended executions and
 paused jobs, and its cancellation message reads "paused work was never resumed".
 
-## Pausing on node timeout (unreleased)
+### Pausing on node timeout (0.5.0)
 
 `startBraid` now pauses a timed-out execution instead of failing it when its
 runner is interruptible. This changes behavior in one case:
@@ -184,7 +201,7 @@ Nothing else changes by default:
   use `request.stepSignal()`. Runners that are only `pausable` are unaffected.
 - Pi and DSH keep an unlimited `nodeTimeoutMs` by default, so their jobs only
   pause when `options.nodeTimeoutMs` is set. Pass `options.onNodeTimeout: "fail"`
-  to fail instead. Deprecated Pi blocking jobs always fail on timeout.
+  to fail instead.
 - A runner that already returned its result keeps it under `"pause"`, even if
   the node budget ran out before the result was checked; under `"fail"` it still
   fails with `NODE_TIMEOUT`.

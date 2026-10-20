@@ -132,7 +132,7 @@ try {
       registerTool: t => tools.set(t.name, t), registerCommand: (name, options) => commands.set(name, options),
       on: (event, handler) => handlers.set(event, handler), sendMessage: message => { reminders++; finished(message); },
     });
-    assert.equal(flags.get('braid-blocking'), false);
+    assert.equal(flags.has('braid-blocking'), false);
     assert.ok(flags.has('braid-ci-timeout'));
     assert.equal(commands.has('braid:blocking'), false);
     assert.deepEqual([...tools.keys()].sort(), ['braid', 'braid_cancel', 'braid_finish', 'braid_pause', 'braid_resume', 'braid_status', 'braid_update']);
@@ -157,12 +157,10 @@ try {
       const final = await tools.get('braid_status').execute('status', { jobId: submitted.details.jobId });
       assert.equal(final.details.result.status, 'completed');
       assert.equal(final.details.result.terminalOutputs.a.output, 'PI PASS');
-      flags.set('braid-blocking', true);
-      const blocking = await tools.get('braid').execute('blocking', { goal: 'packed blocking', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] }, undefined, undefined, context);
-      assert.equal(blocking.details.status, 'completed');
-      assert.equal(blocking.details.result.terminalOutputs.a.output, 'PI PASS');
-      assert.equal(blocking.usage.totalTokens, 2);
-      assert.equal(reminders, 1, 'Blocking results must not send another completion reminder');
+      assert.equal(final.usage.totalTokens, 2);
+      const again = await tools.get('braid_status').execute('again', { jobId: submitted.details.jobId });
+      assert.equal(again.usage, undefined);
+      assert.equal(reminders, 1);
     } finally { clearTimeout(timer); handlers.get('session_shutdown')(); }
   `);
   await run([join(consumer, "check.mjs")], consumer);
@@ -235,7 +233,7 @@ try {
   await run(["check.mjs"], dshConsumer);
   writeFileSync(join(dshConsumer, "check.mts"), `import { apply, name, inject } from '@chrok/dsh-braid'; void apply; void name; void inject;`);
   await run([join(root, "node_modules/typescript/bin/tsc"), "--noEmit", "--strict", "--skipLibCheck", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "check.mts"], dshConsumer);
-  console.log(`Package smoke passed: ${core.id} (${core.entryCount} files), ${pi.id} (${pi.entryCount} files), ${dsh.id} (${dsh.entryCount} files). Public imports, types, Pi background/blocking jobs, DSH background jobs, and clean builds verified outside the checkout.`);
+  console.log(`Package smoke passed: ${core.id} (${core.entryCount} files), ${pi.id} (${pi.entryCount} files), ${dsh.id} (${dsh.entryCount} files). Public imports, types, Pi background jobs, DSH background jobs, and clean builds verified outside the checkout.`);
 } finally {
   if (registry) await new Promise((resolve, reject) => registry.close(error => error ? reject(error) : resolve()));
   rmSync(temp, { recursive: true, force: true });

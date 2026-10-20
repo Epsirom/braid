@@ -16,12 +16,27 @@ release returns plain-text Braid tool results and runs DSH workers on DSH's own
 file and shell tools. The 0.3.6 release adds experimental opt-in Pi blocking
 execution for single-shot runs, with CLI and session controls. The 0.4.0 release
 makes Pi print and JSON runs wait for background jobs, adds `braid_finish` for
-run outcomes, and deprecates blocking mode. Source availability
+run outcomes, and deprecates blocking mode. The 0.5 changes add running-execution
+pause/resume, result holds, timeout recovery, Pi model retries, and clearer loop
+handoffs, and remove deprecated Pi blocking mode. Source availability
 and npm availability are separate milestones. Check
 [GitHub releases](https://github.com/Epsirom/braid/releases),
 [@chrok/braid](https://www.npmjs.com/package/@chrok/braid),
 [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid), and
 [@chrok/dsh-braid](https://www.npmjs.com/package/@chrok/dsh-braid) for published versions.
+
+## 0.5 implemented changes
+
+- [x] Pause and resume running executions or whole jobs, preserving their work.
+- [x] Hold a running execution's result after it finishes, with Pi/DSH controls.
+- [x] Pause interruptible executions on node timeout, renew their budget on
+  resume, or cancel individual executions; retain `onNodeTimeout: "fail"`.
+- [x] Retry transient Pi model errors inside the same execution.
+- [x] Distinguish forward loop handoffs from retry edges in Pi charts.
+- [x] Remove Pi blocking mode, including its CLI flag and session command.
+
+Read the [0.4 → 0.5 migration guide](docs/compatibility.md#migrating-from-04-to-05)
+for timeout behavior and TypeScript interface changes.
 
 ## 0.4 implemented changes
 

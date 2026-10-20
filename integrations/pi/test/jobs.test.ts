@@ -8,150 +8,11 @@ import { context, deferred, input, response } from "./helpers.js";
 
 const bounds = { timeout: 2_000 };
 
-test("blocking waits for parallel branches and their join, returns outputs and claims usage once", bounds, async t => {
-  const rootsStarted = deferred<void>();
-  const firstFinished = deferred<void>();
-  const first = deferred<ReturnType<typeof response>>();
-  const second = deferred<ReturnType<typeof response>>();
-  const notifications: string[] = [];
-  const jobs = new BraidJobs(job => notifications.push(job.status), node => notifications.push(node.nodeId));
-  t.after(() => jobs.dispose());
-  const unsubscribe = jobs.subscribe(() => {
-    if (Object.values(jobs.get("job-1")?.live.nodes ?? {}).some(node => node.status === "completed")) firstFinished.resolve();
-  });
-  t.after(unsubscribe);
-  let calls = 0;
-  const ctx = context(async () => {
-    if (++calls === 1) return first.promise;
-    if (calls === 2) { rootsStarted.resolve(); return second.promise; }
-    return response("joined result");
-  });
-  const { braidTool, statusTool } = createBraidTools(jobs, () => true);
-  const updates: { handle: string | undefined; text: string }[] = [];
-  let returned = false;
-  const call = braidTool.execute("blocking", {
-    ...input,
-    nodes: ["a", "b", "join"].map(id => ({ type: "execute", id, prompt: "work", notifyOnCompletion: true })),
-    edges: [{ from: "a", to: "join" }, { from: "b", to: "join" }],
-  }, undefined, update => updates.push({ handle: update.details?.handle, text: JSON.stringify(update.content) }), ctx)
-    .then(result => { returned = true; return result; });
-  await rootsStarted.promise;
-  assert.equal(returned, false);
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0]!.handle, "job-1");
-  assert.match(updates[0]!.text, /Waiting for the graph and workspace cleanup/);
-  assert.doesNotMatch(updates[0]!.text, /runs asynchronously/);
-  first.resolve(response("first branch"));
-  await firstFinished.promise;
-  assert.equal(returned, false);
-  assert.equal(calls, 2);
-  second.resolve(response("second branch"));
-  const result = await call;
-  assert.equal(result.details!.status, "completed");
-  assert.equal(result.details!.result!.terminalOutputs.join!.output, "joined result");
-  assert.match(JSON.stringify(result.content), /joined result/);
-  assert.doesNotMatch(JSON.stringify(result.content), /runs asynchronously/);
-  assert.equal(result.usage!.totalTokens, 6);
-  const again = await statusTool.execute("again", { jobId: "job-1" }, undefined, undefined, ctx);
-  assert.equal(again.usage, undefined);
-  assert.deepEqual(notifications, []);
-});
-
-for (const phase of ["wait", "status"] as const) test(`blocking ${phase} errors retain the existing job and account only terminal usage`, bounds, async t => {
+test("pre-aborted submissions do not allocate a job", bounds, async t => {
   const jobs = new BraidJobs();
   t.after(() => jobs.dispose());
-  const { braidTool, statusTool } = createBraidTools(jobs, () => true);
-  const failure = phase === "wait"
-    ? t.mock.method(jobs, "wait", async () => { throw new Error("wait failed"); })
-    : t.mock.method(statusTool, "execute", async () => { throw new Error("status.txt write failed"); });
-  const ctx = context(async () => response("retained output"));
-  const result = await braidTool.execute("failure", input, undefined, undefined, ctx);
-  assert.equal(result.isError, true);
-  assert.equal(result.details!.handle, "job-1");
-  assert.equal(result.details!.status, phase === "wait" ? "running" : "completed");
-  assert.match(JSON.stringify(result.content), /Braid job job-1 was started/);
-  assert.match(JSON.stringify(result.content), /Do not resubmit/);
-  assert.match(JSON.stringify(result.content), /braid_status/);
-  assert.match(JSON.stringify(result.content), phase === "wait" ? /wait failed/ : /status\.txt write failed/);
-  assert.doesNotMatch(JSON.stringify(result.content), /Braid submission failed/);
-  assert.equal(result.usage?.totalTokens, phase === "wait" ? undefined : 2);
-  assert.equal(jobs.list().length, 1);
-  failure.mock.restore();
-  if (phase === "wait") jobs.cancel("job-1");
-  await jobs.wait("job-1");
-  if (phase === "status") {
-    const retried = await statusTool.execute("retry", { jobId: "job-1" }, undefined, undefined, ctx);
-    assert.equal(retried.details!.result!.terminalOutputs.a!.output, "retained output");
-    assert.equal(retried.usage, undefined);
-  }
-});
-
-for (const action of ["throw", "abort"] as const) test(`a progress callback can ${action} without orphaning the blocking job`, bounds, async t => {
-  const jobs = new BraidJobs();
-  t.after(() => jobs.dispose());
-  const controller = new AbortController();
-  let updates = 0;
-  const result = await createBraidTools(jobs, () => true).braidTool.execute("progress", input, controller.signal, () => {
-    updates++;
-    if (action === "abort") controller.abort();
-    else throw new Error("progress renderer failed");
-  }, context(async () => response()));
-  assert.equal(updates, 1);
-  assert.equal(result.details!.status, action === "abort" ? "cancelled" : "completed");
-  assert.notEqual(result.isError, true);
-});
-
-test("blocking returns required failures with successful partial outputs", bounds, async t => {
-  const jobs = new BraidJobs();
-  t.after(() => jobs.dispose());
-  let calls = 0;
-  const result = await createBraidTools(jobs, () => true).braidTool.execute("failure", {
-    ...input,
-    nodes: ["saved", "bad"].map(id => ({ type: "execute", id, prompt: "work", requireSuccess: true })),
-    options: { maxConcurrency: 1 },
-  }, undefined, undefined, context(async () => {
-    if (++calls === 1) return response("saved output");
-    throw new Error("provider failed");
-  }));
-  assert.equal(result.details!.status, "failed");
-  assert.equal(result.details!.result!.nodes.saved!.output, "saved output");
-  assert.match(JSON.stringify(result.content), /provider failed/);
-});
-
-test("foreground abort cancels blocking work and queued nodes before returning", bounds, async t => {
-  const started = deferred<void>();
-  let workerSignal!: AbortSignal;
-  const ctx = context(async signal => {
-    workerSignal = signal;
-    started.resolve();
-    return new Promise(() => {});
-  });
-  const jobs = new BraidJobs();
-  t.after(() => jobs.dispose());
-  const { braidTool } = createBraidTools(jobs, () => true);
-  const controller = new AbortController();
-  const call = braidTool.execute("cancel", {
-    ...input,
-    nodes: ["running", "queued"].map(id => ({ type: "execute", id, prompt: "work" })),
-    options: { maxConcurrency: 1 },
-  }, controller.signal, undefined, ctx);
-  await started.promise;
-  controller.abort();
-  const result = await call;
-  assert.equal(workerSignal.aborted, true);
-  assert.equal(result.details!.status, "cancelled");
-  assert.equal(result.details!.result!.nodes.queued!.skipReason, "cancelled");
-  assert.equal(result.details!.execution!.status, "failed");
-});
-
-test("blocking rejects pauses and pre-aborted calls before allocating a job", bounds, async t => {
-  const jobs = new BraidJobs();
-  t.after(() => jobs.dispose());
-  const { braidTool } = createBraidTools(jobs, () => true);
+  const { braidTool } = createBraidTools(jobs);
   const ctx = context(async () => { throw new Error("must not invoke provider"); });
-  await assert.rejects(braidTool.execute("pause", {
-    ...input, nodes: [{ ...input.nodes[0]!, pauseAfter: true }],
-  }, undefined, undefined, ctx), /cannot use pauseAfter/);
   await assert.rejects(braidTool.execute("aborted", input, AbortSignal.abort(), undefined, ctx), /abort/i);
   assert.deepEqual(jobs.list(), []);
 });
@@ -377,19 +238,17 @@ test(
   },
 );
 
-for (const blocking of [false, true]) test(
-  `large ${blocking ? "blocking" : "status"} results are saved in full and responses remain bounded`,
+test(
+  "large status results are saved in full and responses remain bounded",
   bounds,
   async (t) => {
     const jobs = new BraidJobs();
     t.after(() => jobs.dispose());
     const ctx = context(async () => response("x".repeat(100_000)));
-    const { braidTool, statusTool } = createBraidTools(jobs, () => blocking);
+    const { braidTool, statusTool } = createBraidTools(jobs);
     const submitted = await braidTool.execute("submit", input, undefined, undefined, ctx);
     await jobs.wait(submitted.details!.jobId);
-    const result = blocking
-      ? submitted
-      : await statusTool.execute("status", { jobId: submitted.details!.jobId }, undefined, undefined, ctx);
+    const result = await statusTool.execute("status", { jobId: submitted.details!.jobId }, undefined, undefined, ctx);
     const output = result.content
       .filter((item) => item.type === "text")
       .map((item) => item.text)
