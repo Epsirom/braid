@@ -511,20 +511,6 @@ test("registered submission renderer distinguishes pending, started, and startup
   await jobs.wait(submitted.details!.jobId);
 });
 
-test("blocking progress renders the submitted handle while the tool is still waiting", async t => {
-  const jobs = new BraidJobs();
-  t.after(() => jobs.dispose());
-  const { braidTool } = createBraidTools(jobs, () => true);
-  const updates: string[] = [];
-  await braidTool.execute("blocking", input, undefined, partial => {
-    updates.push(lines(braidTool.renderResult!(partial,
-      { expanded: false, isPartial: true }, theme, { isError: false } as never)));
-  }, context(async () => response()));
-  assert.equal(updates.length, 1);
-  assert.match(updates[0]!, /Braid job job-1 · running · \/braid to view/);
-  assert.doesNotMatch(updates[0]!, /submission pending|background job/);
-});
-
 test("terminal graph events update live state and clear pause indicators", () => {
   const completed = createLiveState();
   completed.pausedExecutionIds = ["held"];

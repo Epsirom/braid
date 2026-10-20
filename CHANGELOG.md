@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 — 2026-10-20
+
 ### Breaking changes
 
 - `startBraid` pauses an execution that exceeds `nodeTimeoutMs` instead of
@@ -11,12 +13,14 @@
   ends with `GRAPH_TIMEOUT`. Pass `onNodeTimeout: "fail"` to keep the old
   behavior. `braid()`, custom runners that are not interruptible, and Pi and DSH
   jobs without a `nodeTimeoutMs` are unchanged. See
-  [compatibility](docs/compatibility.md#pausing-on-node-timeout-unreleased)
-  ([#68](https://github.com/Epsirom/braid/issues/68)).
-- The deprecated Pi session command `/braid:blocking` is removed. Blocking mode
-  is still available through the deprecated `--braid-blocking` flag until 0.5.0;
-  print and JSON runs already wait for background jobs, so drop the command to
-  migrate.
+  [compatibility](docs/compatibility.md#pausing-on-node-timeout-050)
+  ([#99](https://github.com/Epsirom/braid/pull/99), closes
+  [#68](https://github.com/Epsirom/braid/issues/68)) — @Epsirom.
+- Remove Pi blocking mode, including `--braid-blocking`, the `/braid:blocking`
+  session command, foreground waiting/cancellation, and reminder suppression.
+  Drop the flag or command: print and JSON runs already wait for background
+  jobs, and `braid_finish` reports the run outcome. Session-command removal was
+  implemented in [#92](https://github.com/Epsirom/braid/pull/92) — @Epsirom.
 
 ### Features
 
@@ -43,8 +47,9 @@
   for a paused job. A pause by the user does not wake the parent; it gets a
   notice with its next turn, which asks it not to resume unless the user asks.
   In Pi print mode, a job held only by pauses is stalled: one warning, then
-  cancellation. See [compatibility](docs/compatibility.md#pausing-running-executions-unreleased)
-  for type-level changes such as new event types.
+  cancellation. See [compatibility](docs/compatibility.md#pausing-running-executions-050)
+  for type-level changes such as new event types
+  ([#96](https://github.com/Epsirom/braid/pull/96)) — @Epsirom.
 - The result of an execution that is already running can be held once it
   finishes, like `pauseAfter`, without cancelling it or editing edges
   ([#95](https://github.com/Epsirom/braid/issues/95)). `pauseAfter` is captured
@@ -56,7 +61,8 @@
   record changes. Pi and DSH add `after: true` to `braid_pause` (hold) and
   `braid_resume` (remove the hold), plus panel controls (Pi `/braid` key `h`;
   DSH **Hold result when finished** and **Remove hold**). Holds made by the user
-  reach the parent as notices, like pauses.
+  reach the parent as notices, like pauses
+  ([#98](https://github.com/Epsirom/braid/pull/98)) — @Epsirom.
 - A node timeout pauses the execution instead of failing it
   ([#68](https://github.com/Epsirom/braid/issues/68)). Core interrupts the
   current model request or tool call and suspends the execution with its
@@ -70,14 +76,34 @@
   parent with a reminder that says how long the execution ran, what it was
   doing, and how to resume or cancel it; `braid_cancel` takes `executionIds`,
   `braid_resume` takes `nodeTimeoutMs`, and the panels can cancel a single
-  execution (Pi `/braid` key `x`; DSH **Cancel this execution**).
+  execution (Pi `/braid` key `x`; DSH **Cancel this execution**)
+  ([#99](https://github.com/Epsirom/braid/pull/99)) — @Epsirom.
 
 ### Fixes
 
 - Pi loop charts draw forward handoffs opposite a retry edge dotted and keep
   the feedback edge solid, distinguishing the two directions in `/braid:review`
   and user-defined graphs with the same shape. All dependencies remain visible,
-  and runtime handoffs are unchanged.
+  and runtime handoffs are unchanged
+  ([#91](https://github.com/Epsirom/braid/pull/91)) — @powerfooI.
+
+### Maintenance
+
+- Bound suspension-test waits by elapsed time and widen Pi CLI test timeouts
+  for slower CI workers
+  ([#97](https://github.com/Epsirom/braid/pull/97),
+  [#88](https://github.com/Epsirom/braid/pull/88)) — @Epsirom.
+
+See the [0.4 → 0.5 migration guide](docs/compatibility.md#migrating-from-04-to-05)
+for the timeout policy, removed blocking mode, and TypeScript interface changes.
+Pi 1.2.0 and DSH 0.2.0-rc.2 remain the tested host versions; integrations require
+Node.js 22.19+.
+
+### New Contributors
+
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.4.0...v0.5.0).
 
 ## 0.4.0 — 2026-10-16
 

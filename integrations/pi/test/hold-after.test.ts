@@ -81,7 +81,7 @@ test("braid_resume after=true removes a pauseAfter hold from a running execution
   assert.deepEqual(reminders, [], "no pause reminder for a removed hold");
 });
 
-test("holds by the user notify the parent and blocking jobs reject holds", { timeout: 10_000 }, async t => {
+test("holds by the user notify the parent", { timeout: 10_000 }, async t => {
   const { ctx, graph, gate, calls } = chain();
   const notices: ControlNotice[] = [];
   const jobs = new BraidJobs(undefined, undefined, notice => { notices.push(notice); });
@@ -101,13 +101,6 @@ test("holds by the user notify the parent and blocking jobs reject holds", { tim
   gate.resolve();
   await jobs.wait(handle);
 
-  const blocked = chain();
-  const blocking = jobs.start(blocked.graph, {}, blocked.ctx, true).handle;
-  await until(() => blocked.calls() === 1);
-  const id = Object.keys(jobs.get(blocking)!.execution!.executions)[0]!;
-  assert.throws(() => jobs.holdAfter(blocking, [id], true, "agent"), /Blocking Braid jobs cannot hold results/);
-  blocked.gate.resolve();
-  await jobs.wait(blocking);
 });
 
 test("h in /braid holds, unholds, and releases the selected execution with one notice per change kind", { timeout: 10_000 }, async () => {

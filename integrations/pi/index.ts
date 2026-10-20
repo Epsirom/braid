@@ -54,8 +54,8 @@ const toolBudget = (unit: string) =>
 const commonNodeParameters = {
   id: text("Unique node definition ID; edges refer to this exact ID. This is not an executionId."),
   model: Type.Optional(text("Model override as provider/model-id; omit to use the parent model.")),
-  notifyOnCompletion: Type.Optional(Type.Boolean({ description: "In background mode, send an execution completion reminder; default false. Does not pause scheduling." })),
-  pauseAfter: Type.Optional(Type.Boolean({ description: "Background mode only: hold this execution's outgoing dependencies until braid_resume or an atomic braid_update with resume. Sends a pause reminder." })),
+  notifyOnCompletion: Type.Optional(Type.Boolean({ description: "Send an execution completion reminder; default false. Does not pause scheduling." })),
+  pauseAfter: Type.Optional(Type.Boolean({ description: "Hold this execution's outgoing dependencies until braid_resume or an atomic braid_update with resume. Sends a pause reminder." })),
   requireSuccess: Type.Optional(Type.Boolean({ description: "If true, failure aborts the entire job and cancels running siblings. Default false: unconditional successors can recover." })),
 };
 const workspace = Type.Optional(StringEnum(["read-only", "worktree"], {
@@ -117,7 +117,7 @@ const BRAID_FILESYSTEM_GUIDANCE =
 
 /** Lifecycle guidance shared by the system prompt and tool descriptions. */
 export const BRAID_ASYNC_GUIDANCE =
-  "By default, Braid is asynchronous: braid returns a jobId immediately and the job keeps running independently of the foreground response; ending your turn does not cancel it. " +
+  "Braid is asynchronous: braid returns a jobId immediately and the job keeps running independently of the foreground response; ending your turn does not cancel it. " +
   "Completion, failure, or cancellation sends a reminder: an idle agent is resumed automatically, and a running agent receives it at the next model step. " +
   "After submitting, continue useful independent work. If nothing else can proceed until the result arrives, end your turn and let the reminder resume the task. " +
   "Do not call sleep, run a shell sleep, use a timer, or enter a sleep/poll loop solely to wait for a Braid job; delays required by the user's actual task remain allowed. " +
@@ -128,19 +128,10 @@ export const BRAID_ASYNC_GUIDANCE =
   "The user can also pause and resume from /braid; you get a notice with your next turn. Do not resume work the user paused unless the user asks. " +
   "When an execution exceeds its nodeTimeoutMs it is paused, not failed, and you get a reminder: resume it with braid_resume (optionally a new nodeTimeoutMs), or fail only that execution with braid_cancel and executionIds.";
 
-export const BRAID_BLOCKING_DEPRECATION =
-  "Blocking mode (--braid-blocking) is deprecated and will be removed in 0.5.0. " +
-  "Print and JSON runs (pi -p) now wait for background Braid jobs; call braid_finish to report the outcome.";
-
 /** Short reminder repeated in every submission receipt. */
 export const BRAID_WAIT_REMINDER =
   "Braid runs asynchronously and notifies you when the job finishes. Continue independent work, or end your turn if you need the result before proceeding; the completion reminder will resume you. " +
   "Do not sleep or poll in a loop to wait for this job. Retrieve its results with braid_status after the reminder.";
-
-const BRAID_BLOCKING_GUIDANCE =
-  "In blocking mode (enabled by --braid-blocking), braid waits for the entire graph and workspace cleanup, then returns final status, outputs, and usage directly. " +
-  "Foreground cancellation cancels the submitted job and waits for cleanup. Completion reminders are suppressed unless the job is cancelled; cancellation reminders preserve its handle and access to partial results. " +
-  "Do not set pauseAfter=true or hold results with braid_pause after=true in blocking mode: both require a later resume call and are rejected. Use braid_status for focused reads, diagnosis, or retrieving an existing job after cancellation or a wait/result error.";
 
 const BRAID_USAGE_GUIDANCE = [
   "Braid is a proactive execution primitive, not only a user-requested command.",
@@ -176,7 +167,7 @@ async function boundedText(text: string, name: string): Promise<{ text: string; 
   return { text: `${preview.content}\n[Truncated. Full text: ${path}]`, path };
 }
 
-export function createBraidTools(jobs: BraidJobs, blocking: () => boolean = () => false) {
+export function createBraidTools(jobs: BraidJobs) {
   const braidTool = defineTool<typeof braidParameters, BraidStatusDetails | undefined>(
     {
       name: "braid",
@@ -233,9 +224,8 @@ export function createBraidTools(jobs: BraidJobs, blocking: () => boolean = () =
           0,
         );
       },
-      async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
         signal?.throwIfAborted();
-        const waitForCompletion = blocking();
         let job: JobSnapshot;
         try {
           job = jobs.start(
@@ -249,43 +239,17 @@ export function createBraidTools(jobs: BraidJobs, blocking: () => boolean = () =
             // StringEnum is typed as string; the schema has already checked the value.
             (params.options ?? {}) as JobOptions,
             ctx,
-            waitForCompletion,
           );
         } catch (error) {
           throw new Error(
             `Braid submission failed: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
-        if (!waitForCompletion) return {
+        return {
           content: [{ type: "text", text: formatReceipt(job,
             `${BRAID_WAIT_REMINDER} Humans can follow it live in /braid.`) }],
           details: job,
         };
-        const cancel = () => { jobs.cancel(job.jobId); };
-        signal?.addEventListener("abort", cancel, { once: true });
-        try {
-          try {
-            onUpdate?.({
-              content: [{ type: "text", text: formatReceipt(job,
-                "Waiting for the graph and workspace cleanup. Humans can follow it live in /braid.") }],
-              details: job,
-            });
-          } catch { /* Progress observers must not stop the foreground wait. */ }
-          await jobs.wait(job.jobId);
-          return await statusTool.execute(_toolCallId, { jobId: job.jobId }, signal, undefined, ctx);
-        } catch (error) {
-          const current = jobs.get(job.jobId)!;
-          const usage = current.status === "running" || signal?.aborted ? undefined : jobs.claimUsage(job.jobId);
-          return {
-            content: [{ type: "text", text:
-              `Braid job ${job.handle} was started and is ${current.status}. Could not wait for or retrieve its results: ${error instanceof Error ? error.message : String(error)}. Do not resubmit this graph: it may already have changed the checkout. Retrieve the existing job with braid_status(${JSON.stringify({ jobId: job.handle })}).` }],
-            details: current,
-            isError: true,
-            ...(usage ? { usage } : {}),
-          };
-        } finally {
-          signal?.removeEventListener("abort", cancel);
-        }
       },
     },
   );
@@ -513,20 +477,6 @@ export function formatControlNotice(notice: ControlNotice): string {
 }
 
 export default function braidExtension(pi: ExtensionAPI) {
-  pi.registerFlag("braid-blocking", {
-    description: "Deprecated, removed in 0.5.0: wait for braid tool calls to finish in the foreground. pi -p now waits for background jobs",
-    type: "boolean",
-    default: false,
-  });
-  const blocking = () => pi.getFlag("braid-blocking") === true;
-  let warnedBlocking = false;
-  const warnBlocking = (ctx: ExtensionContext): void => {
-    if (warnedBlocking) return;
-    warnedBlocking = true;
-    // Print and JSON runs have no UI; stderr keeps JSON stdout parseable.
-    if (ctx.hasUI) ctx.ui.notify(BRAID_BLOCKING_DEPRECATION, "warning");
-    else console.error(`Braid: ${BRAID_BLOCKING_DEPRECATION}`);
-  };
   const pending = new Map<string, Parameters<ExtensionAPI["sendMessage"]>[0]>();
   const remind = (message: Parameters<ExtensionAPI["sendMessage"]>[0]): void => {
     try {
@@ -602,7 +552,7 @@ export default function braidExtension(pi: ExtensionAPI) {
       for (const message of pending.values()) remind(message);
     }
   });
-  const { braidTool, statusTool, cancelTool, updateTool, resumeTool, pauseTool } = createBraidTools(jobs, blocking);
+  const { braidTool, statusTool, cancelTool, updateTool, resumeTool, pauseTool } = createBraidTools(jobs);
   registerDrain(pi, jobs, () => pending.size > 0);
   registerBraidCommand(pi, jobs);
   registerReviewCommand(pi, jobs);
@@ -620,9 +570,8 @@ export default function braidExtension(pi: ExtensionAPI) {
     disposeWidget();
   });
   pi.on("before_agent_start", (event, ctx) => {
-    if (blocking()) warnBlocking(ctx);
     return {
-      systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${blocking() ? "Blocking mode is enabled for this session. " + BRAID_BLOCKING_GUIDANCE : BRAID_ASYNC_GUIDANCE}${isSingleShot(ctx) ? `\n${BRAID_DRAIN_GUIDANCE}\n${BRAID_FINISH_GUIDANCE}` : ""}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
+      systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${BRAID_ASYNC_GUIDANCE}${isSingleShot(ctx) ? `\n${BRAID_DRAIN_GUIDANCE}\n${BRAID_FINISH_GUIDANCE}` : ""}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
     };
   });
 }

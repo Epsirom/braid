@@ -48,15 +48,13 @@ function extension(onSend?: (message: Parameters<ExtensionAPI["sendMessage"]>[0]
 
 test("extension registers background tools, a panel command, and guidance to wait for reminders", async () => {
   const fake = extension();
-  assert.equal(fake.flags.get("braid-blocking")?.type, "boolean");
-  assert.equal(fake.flags.get("braid-blocking")?.default, false);
+  assert.equal(fake.flags.has("braid-blocking"), false);
   assert.deepEqual(
     [...fake.tools.keys()],
     ["braid_finish", "braid", "braid_status", "braid_cancel", "braid_update", "braid_resume", "braid_pause"],
   );
   assert.ok(fake.commands.has("braid"));
   assert.equal(fake.commands.has("braid:blocking"), false);
-  assert.match(fake.flags.get("braid-blocking")!.description!, /^Deprecated, removed in 0\.5\.0/);
   assert.ok(fake.commands.has("braid:review"));
   assert.ok(fake.handlers.has("session_start"));
   assert.equal(fake.handlers.has("input"), false);
@@ -96,81 +94,6 @@ test("extension registers background tools, a panel command, and guidance to wai
     /Completion reminders refer to existing jobs/,
   );
   fake.handlers.get("session_shutdown")!({} as never, {} as never);
-});
-
-test("the manual flag enables blocking after extension registration and guides the parent", { timeout: 2_000 }, async t => {
-  const fake = extension();
-  fake.flagValues.set("braid-blocking", true);
-  const started = deferred<void>();
-  const completion = deferred<ReturnType<typeof response>>();
-  const ctx = context(async () => { started.resolve(); return completion.promise; });
-  ctx.ui = { notify() {} } as never;
-  t.after(() => fake.handlers.get("session_shutdown")!({} as never, ctx));
-  const prompt = fake.handlers.get("before_agent_start")!({ systemPrompt: "base" } as never, ctx) as { systemPrompt: string };
-  assert.match(prompt.systemPrompt, /Blocking mode is enabled/);
-  assert.doesNotMatch(prompt.systemPrompt, /end your turn and let the reminder resume/);
-  assert.doesNotMatch(prompt.systemPrompt, /Use pauseAfter=true|Set notifyOnCompletion=true|Use braid_status with the jobId to retrieve terminal outputs/);
-  const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
-  assert.equal("blocking" in tool.parameters.properties.options.properties, false);
-  let returned = false;
-  const call = tool.execute("call", input, undefined, undefined, ctx).then(result => { returned = true; return result; });
-  await started.promise;
-  assert.equal(returned, false);
-  completion.resolve(response("CI result"));
-  const result = await call;
-  assert.equal(result.details!.status, "completed");
-  assert.match(JSON.stringify(result.content), /CI result/);
-  assert.equal(fake.reminders(), 0);
-});
-
-test("cancelled blocking jobs send a reminder with their handle and retain partial outputs", { timeout: 2_000 }, async t => {
-  const fake = extension();
-  fake.flagValues.set("braid-blocking", true);
-  const started = deferred<void>();
-  let calls = 0;
-  const ctx = context(async () => {
-    if (++calls === 1) return response("retained partial output");
-    started.resolve();
-    return new Promise(() => {});
-  });
-  t.after(() => fake.handlers.get("session_shutdown")!({} as never, ctx));
-  const tool = fake.tools.get("braid") as ReturnType<typeof createBraidTools>["braidTool"];
-  const status = fake.tools.get("braid_status") as ReturnType<typeof createBraidTools>["statusTool"];
-  const controller = new AbortController();
-  const running = tool.execute("cancel", {
-    ...input,
-    nodes: ["saved", "running"].map(id => ({ type: "execute", id, prompt: "work" })),
-    options: { maxConcurrency: 1 },
-  }, controller.signal, undefined, ctx);
-  await started.promise;
-  controller.abort();
-  const cancelled = await running;
-  assert.equal(cancelled.usage, undefined);
-  const { message } = await fake.reminder.promise;
-  assert.equal(message.customType, "braid-completed");
-  assert.match(String(message.content), /job-1 finished with status cancelled/);
-  assert.match(String(message.content), /partial outputs/);
-  const read = await status.execute("retained", { jobId: "job-1" }, undefined, undefined, ctx);
-  assert.equal(read.details!.result!.nodes.saved!.output, "retained partial output");
-  assert.equal(read.usage!.totalTokens, 2);
-  const again = await status.execute("again", { jobId: "job-1" }, undefined, undefined, ctx);
-  assert.equal(again.usage, undefined);
-  assert.equal(fake.reminders(), 1);
-});
-
-test("blocking mode warns once that it is deprecated, only when used", async t => {
-  for (const flag of [false, true]) {
-    const fake = extension();
-    fake.flagValues.set("braid-blocking", flag);
-    const notices: [string, string | undefined][] = [];
-    const ctx = context(async () => response());
-    ctx.ui = { notify: (message: string, type?: string) => notices.push([message, type]) } as never;
-    t.after(() => fake.handlers.get("session_shutdown")!({} as never, ctx));
-    for (let turn = 0; turn < 2; turn++) fake.handlers.get("before_agent_start")!({ systemPrompt: "base" } as never, ctx);
-    const warnings = notices.filter(([, type]) => type === "warning");
-    assert.equal(warnings.length, flag ? 1 : 0, String(flag));
-    if (warnings.length) assert.match(warnings[0]![0], /deprecated and will be removed in 0\.5\.0.*pi -p.*braid_finish/);
-  }
 });
 
 for (const idle of [true, false]) {

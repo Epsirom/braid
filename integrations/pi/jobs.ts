@@ -58,7 +58,6 @@ export interface JobSnapshot {
 }
 
 interface Job extends JobSnapshot {
-  blocking: boolean;
   run?: BraidRun;
   controller: AbortController;
   done: Promise<void>;
@@ -183,17 +182,11 @@ export class BraidJobs {
     input: BraidInput,
     options: JobOptions,
     ctx: ExtensionContext,
-    blocking = false,
   ): JobSnapshot {
     if (this.disposed) throw new Error("Braid session has closed");
     validateGraph(input);
-    if (blocking && input.nodes.some(node => node.pauseAfter))
-      throw new Error("Blocking Braid jobs cannot use pauseAfter; remove it or start Pi without --braid-blocking.");
-    // Nothing can resume a blocking job's timeout pause while the foreground call waits for it.
-    if (blocking && options.onNodeTimeout === "pause")
-      throw new Error('Blocking Braid jobs cannot use onNodeTimeout "pause"; remove it or start Pi without --braid-blocking.');
     const snapshot = structuredClone(input);
-    const settings = { ...options, ...(blocking ? { onNodeTimeout: "fail" as const } : {}) };
+    const settings = { ...options };
     const model = ctx.model
       ? `${ctx.model.provider}/${ctx.model.id}`
       : undefined;
@@ -201,7 +194,6 @@ export class BraidJobs {
     const cwd = ctx.cwd;
     this.cwd = cwd;
     const job: Job = {
-      blocking,
       handle: `job-${this.nextHandle++}`,
       jobId: crypto.randomUUID(),
       goal: snapshot.goal,
@@ -343,7 +335,7 @@ export class BraidJobs {
           const shouldNotify = event.type === "execution_paused" ||
             ((event.type === "node_completed" || event.type === "node_failed") && instance?.node.notifyOnCompletion &&
               (!instance.holdAfter || state?.error));
-          if (!this.disposed && !job.blocking && shouldNotify && "nodeId" in event && instance) {
+          if (!this.disposed && shouldNotify && "nodeId" in event && instance) {
             try {
               void Promise.resolve(this.onNodeFinished({
                 jobId: job.jobId,
@@ -381,7 +373,7 @@ export class BraidJobs {
       if (reports.length) job.usage = sumPiUsage(reports);
     }
     this.changed();
-    if (!this.disposed && (!job.blocking || job.status === "cancelled")) {
+    if (!this.disposed) {
       try {
         this.onFinished(this.get(job.jobId)!);
       } catch {
@@ -403,7 +395,6 @@ export class BraidJobs {
     const job = this.lookup(jobId);
     if (!job) return undefined;
     const {
-      blocking: _blocking,
       run: _run,
       controller: _controller,
       done: _done,
@@ -526,7 +517,6 @@ export class BraidJobs {
     const job = this.lookup(jobId);
     if (!job) throw this.unknownJob(jobId);
     if (!job.run || job.status !== "running") throw new Error("Job is not accepting updates");
-    if (job.blocking) throw new Error("Blocking Braid jobs cannot hold results; start Pi without --braid-blocking.");
     job.run.holdAfter(executionIds, hold, { source });
     this.notify(job, hold ? "held" : "unheld", source, executionIds);
     this.changed();
