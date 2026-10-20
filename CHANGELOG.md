@@ -20,7 +20,8 @@
   session command, foreground waiting/cancellation, and reminder suppression.
   Drop the flag or command: print and JSON runs already wait for background
   jobs, and `braid_finish` reports the run outcome. Session-command removal was
-  implemented in [#92](https://github.com/Epsirom/braid/pull/92) — @Epsirom.
+  implemented in [#92](https://github.com/Epsirom/braid/pull/92); the remaining
+  mode is removed in [#100](https://github.com/Epsirom/braid/pull/100) — @Epsirom.
 
 ### Features
 
