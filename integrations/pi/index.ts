@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { BraidInput, ExecutionActivity, GraphUpdate, NodeResult } from "@chrok/braid";
 import { Text } from "@earendil-works/pi-tui";
+import { assertCoreVersion } from "./core-version.js";
 import { BraidJobs, type ControlNotice, type JobOptions, type JobSnapshot } from "./jobs.js";
 import { registerBraidCommand, registerBraidWidget } from "./command.js";
 import { registerReviewCommand } from "./review.js";
@@ -477,6 +478,7 @@ export function formatControlNotice(notice: ControlNotice): string {
 }
 
 export default function braidExtension(pi: ExtensionAPI) {
+  assertCoreVersion();
   const pending = new Map<string, Parameters<ExtensionAPI["sendMessage"]>[0]>();
   const remind = (message: Parameters<ExtensionAPI["sendMessage"]>[0]): void => {
     try {

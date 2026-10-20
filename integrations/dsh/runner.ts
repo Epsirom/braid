@@ -8,6 +8,7 @@ import {
   mergeInstructions, parseGitToolArguments, parseFinishMergeArguments,
   type ExecutionActivityTracker, type GitResult, type ModelRunner,
 } from "@chrok/braid";
+import { assertCoreVersion } from "./core-version.js";
 import { createWorkerTools } from "./worker-tools.js";
 
 export interface NodeProgress {
@@ -54,6 +55,7 @@ export function formatGitResult(result: GitResult): string {
 export type DshLlm = Pick<LlmRuntime, "stream"> & Partial<Pick<LlmRuntime, "resolveModelInfo">>;
 
 export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunner {
+  assertCoreVersion();
   validateBudgets({ maxToolRounds: options.maxToolRounds, maxToolCalls: options.maxToolCalls });
   const runner = async (request: Parameters<ModelRunner>[0]) => {
     const route = request.model;
