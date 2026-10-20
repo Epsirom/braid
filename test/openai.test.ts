@@ -481,3 +481,50 @@ test("the adapter is pausable and passes the checkpoint before each request", as
   assert.equal(result.output, "chose left");
   assert.deepEqual(order, ["checkpoint", "request", "checkpoint", "request"]);
 });
+
+test("an interrupted request is sent again after the checkpoint, and the rest of a merge batch is not run", async () => {
+  const order: string[] = [];
+  let step = new AbortController();
+  const responses = [
+    completion(null, [toolCall('{"command":"status","args":[]}', "git"), toolCall('{"command":"log","args":[]}', "git")]),
+    completion("merged"),
+  ];
+  const gitCalls: string[][] = [];
+  const bodies: WireRequest[] = [];
+  const runner = createOpenAICompatibleRunner({
+    defaultModel: "fake",
+    fetch: async (_url, init) => {
+      order.push("request");
+      bodies.push(JSON.parse(String(init!.body)) as WireRequest);
+      // The first request hangs until the node timeout interrupts it.
+      if (order.filter(value => value === "request").length === 1) {
+        step.abort(new Error("interrupted"));
+        init!.signal!.throwIfAborted();
+      }
+      return new Response(JSON.stringify(responses.shift()));
+    },
+  });
+  assert.equal(runner.interruptible, true);
+  const signal = new AbortController().signal;
+  const result = await runner({
+    goal: "g", node: { type: "merge", id: "merge" }, predecessors: [], execution: { runId: "r", rootRunId: "r" }, signal,
+    stepSignal: () => AbortSignal.any([signal, step.signal]),
+    checkpoint: async () => {
+      order.push("checkpoint");
+      // Core replaces the step signal once the runner reaches a checkpoint.
+      if (step.signal.aborted) step = new AbortController();
+    },
+    git: async args => {
+      gitCalls.push(args);
+      // The node timeout fires while the first Git call runs.
+      step.abort(new Error("interrupted"));
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+    merge: { sources: [], finish: async () => {} },
+  });
+  assert.equal(result.output, "merged");
+  // The interrupted request is sent again; after the interrupted Git call, the next request passes a checkpoint first.
+  assert.deepEqual(order, ["checkpoint", "request", "checkpoint", "request", "checkpoint", "request"]);
+  assert.deepEqual(gitCalls, [["status"]], "the second call never started");
+  assert.match(bodies.at(-1)!.messages.at(-1)!.content!, /^Not run: the node timeout paused this execution/);
+});

@@ -158,6 +158,24 @@ test("a pause from the panel never wakes the parent; it is injected as context o
   } finally { release(); await ctx.fiber.dispose(); }
 });
 
+test("a node timeout pause wakes the parent with a reminder", async () => {
+  let requests = 0;
+  const { ctx, agent, invoke } = await harness(async options => {
+    // The first request runs until the node timeout interrupts it.
+    if (requests++ === 0) await new Promise((_, reject) => options.signal!.addEventListener("abort", () => reject(options.signal!.reason), { once: true }));
+    return answer();
+  });
+  try {
+    const a = await agent("timeout-owner");
+    const receipt = (await invoke(a.agent, "braid", { ...input, options: { nodeTimeoutMs: 100 } })).value as { jobId: string };
+    await until(() => a.messages.length === 1);
+    const text = (a.messages[0]!.content[0] as { text: string }).text;
+    assert.ok(text.startsWith(`[system-reminder] Braid job ${receipt.jobId} node "a" execution `), text);
+    assert.match(text, /was paused because it exceeded its node timeout/);
+    assert.equal(a.injected.length, 0, "a reminder, not a background notice");
+  } finally { await ctx.fiber.dispose(); }
+});
+
 test("unloading the plugin aborts work and suppresses reminders after cleanup", async () => {
   let entered = false, cleaned = false;
   const { ctx, fiber, agent, invoke } = await harness(async options => {

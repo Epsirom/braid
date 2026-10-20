@@ -3,6 +3,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   ExecutionActivityTracker,
+  formatActivityStatus,
   startBraid,
   type BraidRun,
   type ExecutionActivity,
@@ -15,6 +16,7 @@ import {
   type ExecutionError,
   type NodeResult,
   type NodeWorkspace as PiNodeWorkspace,
+  type ResumeOptions,
 } from "@chrok/braid";
 import {
   applyEvent,
@@ -32,6 +34,8 @@ export interface JobOptions {
   maxExecutions?: number;
   nodeTimeoutMs?: number;
   graphTimeoutMs?: number;
+  /** Default "pause": a node timeout suspends the execution and wakes the parent. */
+  onNodeTimeout?: "pause" | "fail";
   maxToolRounds?: number;
   maxToolCalls?: number;
   maxModelRetries?: number;
@@ -62,6 +66,8 @@ interface Job extends JobSnapshot {
   nodeResults: Map<string, NodeResult>;
   runningExecutions: Map<string, string>;
   suspendedExecutions: Map<string, string>;
+  /** What each execution was doing when its node timeout fired, for the reminder. */
+  timeoutActivity: Map<string, string>;
   /** Kept outside snapshots: histories are read one execution at a time. */
   activity: ExecutionActivityTracker;
   transcripts: PiTranscripts;
@@ -81,12 +87,29 @@ export interface NodeCompletion {
   errorCode?: ExecutionError["code"];
 }
 
-/** A pause, resume, or hold change someone other than the parent agent made, such as the user in /braid. */
+/** An execution the node timeout paused; the parent decides what happens next. */
+export interface TimeoutPause {
+  jobId: string;
+  handle: string;
+  nodeId: string;
+  executionId: string;
+  iteration?: number;
+  /** The node time budget that ran out. */
+  nodeTimeoutMs: number;
+  /** Time the execution ran, excluding earlier suspensions. */
+  activeMs: number;
+  /** Observed activity when the timeout fired. */
+  activity?: string;
+  /** Identifies this pause within the job; a later timeout of the same execution is a new one. */
+  eventSequence: number;
+}
+
+/** A pause, resume, hold change, or cancellation someone other than the parent agent made, such as the user in /braid. */
 export interface ControlNotice {
   jobId: string;
   handle: string;
   /** held/unheld: a hold on running executions' results was added or removed. */
-  action: "paused" | "resumed" | "held" | "unheld";
+  action: "paused" | "resumed" | "held" | "unheld" | "cancelled";
   /** Omitted for the whole job. */
   executions?: { executionId: string; nodeId: string }[];
   source: string;
@@ -99,8 +122,15 @@ export interface OutstandingJob {
   revision?: number;
   pausedExecutionIds: string[];
   suspendedExecutionIds: string[];
+  /** Suspended executions their node timeout paused; they wait for the parent. */
+  timedOutExecutionIds?: string[];
   /** The whole job is paused and admits no new executions. */
   paused?: boolean;
+}
+
+function timedOut(state: BraidSnapshot | undefined): Pick<OutstandingJob, "timedOutExecutionIds"> {
+  const ids = (state?.suspendedExecutionIds ?? []).filter(id => state!.executions[id]?.suspension?.source === "node_timeout");
+  return ids.length ? { timedOutExecutionIds: ids } : {};
 }
 
 /** Jobs belong to one extension/session lifetime, independently of foreground turns. */
@@ -117,6 +147,7 @@ export class BraidJobs {
     private readonly onFinished: (job: JobSnapshot) => void = () => {},
     private readonly onNodeFinished: (completion: NodeCompletion) => void = () => {},
     private readonly onControl: (notice: ControlNotice) => void = () => {},
+    private readonly onTimeoutPause: (pause: TimeoutPause) => void = () => {},
   ) {}
 
   /** The parent made the change itself; anyone else's change becomes a notice for it. */
@@ -158,8 +189,11 @@ export class BraidJobs {
     validateGraph(input);
     if (blocking && input.nodes.some(node => node.pauseAfter))
       throw new Error("Blocking Braid jobs cannot use pauseAfter; remove it or start Pi without --braid-blocking.");
+    // Nothing can resume a blocking job's timeout pause while the foreground call waits for it.
+    if (blocking && options.onNodeTimeout === "pause")
+      throw new Error('Blocking Braid jobs cannot use onNodeTimeout "pause"; remove it or start Pi without --braid-blocking.');
     const snapshot = structuredClone(input);
-    const settings = { ...options };
+    const settings = { ...options, ...(blocking ? { onNodeTimeout: "fail" as const } : {}) };
     const model = ctx.model
       ? `${ctx.model.provider}/${ctx.model.id}`
       : undefined;
@@ -179,6 +213,7 @@ export class BraidJobs {
       usageClaimed: false,
       runningExecutions: new Map(),
       suspendedExecutions: new Map(),
+      timeoutActivity: new Map(),
       activity: new ExecutionActivityTracker({ onChange: () => this.changed() }),
       transcripts: new PiTranscripts(() => this.changed()),
       humanInputs: new PiHumanInputs(() => this.changed()),
@@ -242,9 +277,14 @@ export class BraidJobs {
               job.transcripts.finish(request.execution.executionId,
                 request.signal.aborted ? "Execution was stopped before this step finished" : undefined);
             }
-          }, { pausable: invoke.pausable === true });
+          }, { pausable: invoke.pausable === true, interruptible: invoke.interruptible === true });
         })(),
         onEvent: (event) => {
+          // Capture what the worker was doing before the interruption changes it.
+          if (event.type === "execution_suspending" && event.source === "node_timeout" && event.executionId) {
+            const activity = job.activity.get(event.executionId);
+            if (activity) job.timeoutActivity.set(event.executionId, formatActivityStatus(activity, event.timestamp));
+          }
           job.activity.observe(event);
           if (event.type === "workspace_updated") {
             job.workspaces ??= {};
@@ -280,6 +320,23 @@ export class BraidJobs {
             });
           }
           this.changed();
+          if (event.type === "execution_suspended" && event.source === "node_timeout" && event.executionId) {
+            const instance = job.run?.snapshot().executions[event.executionId];
+            const timeout = instance?.suspension?.timeout;
+            const activity = job.timeoutActivity.get(event.executionId);
+            job.timeoutActivity.delete(event.executionId);
+            // A timeout pause always wakes the parent, which must resume or cancel it.
+            if (!this.disposed && instance && timeout) {
+              try {
+                void Promise.resolve(this.onTimeoutPause({
+                  jobId: job.jobId, handle: job.handle, nodeId: event.nodeId, executionId: event.executionId,
+                  ...(instance.iteration ? { iteration: instance.iteration } : {}),
+                  nodeTimeoutMs: timeout.nodeTimeoutMs, activeMs: timeout.activeMs,
+                  ...(activity ? { activity } : {}), eventSequence: event.sequence,
+                })).catch(() => {});
+              } catch { /* Notification failures must not affect scheduling. */ }
+            }
+          }
           const terminal = event.type === "execution_paused" || event.type === "node_completed" || event.type === "node_failed";
           const state = terminal ? job.run?.snapshot() : undefined;
           const instance = event.executionId ? state?.executions[event.executionId] : undefined;
@@ -436,11 +493,11 @@ export class BraidJobs {
   }
 
   /** Release held executions or resume paused ones. */
-  resume(jobId: string, executionIds: readonly string[], expectedRevision: number, source = "agent"): JobSnapshot {
+  resume(jobId: string, executionIds: readonly string[], expectedRevision: number, source = "agent", options?: ResumeOptions): JobSnapshot {
     const job = this.lookup(jobId);
     if (!job) throw this.unknownJob(jobId);
     if (!job.run) throw new Error("Job is not accepting updates");
-    job.run.resume(executionIds, expectedRevision);
+    job.run.resume(executionIds, expectedRevision, options);
     this.notify(job, "resumed", source, executionIds);
     this.changed();
     return this.get(jobId)!;
@@ -515,6 +572,7 @@ export class BraidJobs {
         ...(state ? { revision: state.revision } : {}),
         pausedExecutionIds: state?.pausedExecutionIds ?? [],
         suspendedExecutionIds: state?.suspendedExecutionIds ?? [],
+        ...timedOut(state),
         ...(state?.pause ? { paused: true } : {}),
       };
     });
@@ -548,6 +606,17 @@ export class BraidJobs {
     if (job.status !== "running") return false;
     job.controller.abort();
     return true;
+  }
+
+  /** Fail running or paused executions only; their successors follow the usual failure semantics. */
+  cancelExecutions(jobId: string, executionIds: readonly string[], source: string): JobSnapshot {
+    const job = this.lookup(jobId);
+    if (!job) throw this.unknownJob(jobId);
+    if (!job.run || job.status !== "running") throw new Error("Job is not accepting updates");
+    job.run.cancelExecutions(executionIds, { source });
+    this.notify(job, "cancelled", source, executionIds);
+    this.changed();
+    return this.get(jobId)!;
   }
 
   /** Pi accounts usage only once, on the first retrieval of a terminal result. */

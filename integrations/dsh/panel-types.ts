@@ -28,7 +28,7 @@ export interface PanelExecution {
   /** Present while running; detail returns history for any execution. */
   activity?: PanelActivity;
   /** Present while a pause of this running execution is requested or active. */
-  suspension?: { state: string; source: string; suspendedAt?: number };
+  suspension?: { state: string; source: string; suspendedAt?: number; timeout?: { nodeTimeoutMs: number; activeMs: number } };
   /** Present when this execution will be held, or was held, after it settles. */
   holdAfter?: { source: string };
 }

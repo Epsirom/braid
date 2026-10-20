@@ -9,6 +9,7 @@ import type {
   Edge,
   ExecutionError,
   ExecutionEvent,
+  ExecutionSuspension,
   ModelRequest,
   ModelResponse,
   NodeOutput,
@@ -16,6 +17,8 @@ import type {
   NodeWorkspace,
   PauseOptions,
   PredecessorOutput,
+  ResumeOptions,
+  CancelExecutionsOptions,
 } from "./types.js";
 import { compileGraph, type Graph } from "./validate.js";
 import { GitWorkspaces, WorkspaceInputError, WorkspaceCheckpointError } from "./workspaces.js";
@@ -70,6 +73,8 @@ function validateOptions(options: BraidOptions): void {
   }
   if (!Number.isSafeInteger(options.maxExecutions ?? 1000) || (options.maxExecutions ?? 1000) < 1)
     throw new TypeError("maxExecutions must be a positive integer");
+  if (options.onNodeTimeout !== undefined && options.onNodeTimeout !== "pause" && options.onNodeTimeout !== "fail")
+    throw new TypeError('onNodeTimeout must be "pause" or "fail"');
   for (const key of ["nodeTimeoutMs", "graphTimeoutMs"] as const) {
     const value = options[key];
     if (
@@ -179,10 +184,25 @@ function checkResponse(response: ModelResponse): void {
   }
 }
 
+/** How long an interrupted runner has to reach its next checkpoint before the execution fails. */
+const INTERRUPT_GRACE_MS = 10_000;
+
+/** What the scheduler can do to one running invocation. */
+interface InvocationHandle {
+  /** Replace the remaining node time budget, starting when the execution next passes a checkpoint. */
+  renew(nodeTimeoutMs: number): void;
+  /** Fail this execution only. */
+  abort(error: RunError): void;
+}
+
 /** Scheduler hooks for one execution's suspension. */
 interface SuspensionControl {
+  /** Called once the invocation can be controlled. */
+  attach(handle: InvocationHandle): void;
   /** At a checkpoint: undefined to continue, or a promise that resolves once resumed with a slot. */
   suspend(): Promise<void> | undefined;
+  /** The node timeout ran out under the pause policy: request a timeout pause. */
+  timedOut(timeout: NonNullable<ExecutionSuspension["timeout"]>): void;
   /** The runner has returned or thrown; drop any suspension state. */
   finished(): void;
 }
@@ -198,22 +218,37 @@ async function runNode(
   workspaces: GitWorkspaces,
   fail: (error: ExecutionError, infrastructure?: boolean) => void,
   suspension: SuspensionControl,
+  onNodeTimeout: "pause" | "fail",
 ): Promise<void> {
   result.status = "running";
   result.startedAt = Date.now();
   const started = performance.now();
   // Time spent suspended does not count toward the node timeout.
   let suspendedMs = 0;
+  const activeMs = () => performance.now() - started - suspendedMs;
+  // The node budget in active time; a resume may renew it.
+  let windowMs = timeoutMs;
+  let limitMs = timeoutMs;
+  let renewal: number | undefined;
   const controller = new AbortController();
   const signal = AbortSignal.any([graphSignal, controller.signal]);
-  const nodeTimeout = new RunError(
-    "NODE_TIMEOUT",
-    `Node '${result.id}' exceeded ${timeoutMs}ms`,
-  );
-  const startTimer = (ms: number) => Number.isFinite(timeoutMs)
-    ? setTimeout(() => controller.abort(nodeTimeout), Math.max(0, ms))
+  const pauseOnTimeout = onNodeTimeout === "pause" && runner.interruptible === true;
+  const nodeTimeout = () => new RunError("NODE_TIMEOUT", `Node '${result.id}' exceeded ${windowMs}ms`);
+  const startTimer = (ms: number) => Number.isFinite(ms)
+    ? setTimeout(() => {
+      if (pauseOnTimeout) requestTimeoutPause();
+      else controller.abort(nodeTimeout());
+    }, Math.max(0, ms))
     : undefined;
   let timer = startTimer(timeoutMs);
+  // Aborted to interrupt the current step; replaced once the runner reaches a checkpoint.
+  let step = new AbortController();
+  let interrupted = false;
+  let grace: ReturnType<typeof setTimeout> | undefined;
+  suspension.attach({
+    renew(ms) { renewal = ms; },
+    abort(error) { controller.abort(error); },
+  });
   let onAbort: () => void;
   const aborted = new Promise<never>((_, reject) => {
     onAbort = () => reject(signal.reason);
@@ -259,19 +294,33 @@ async function runNode(
     };
   }
   let acceptingCheckpoints = true;
+  invocation.stepSignal = () => AbortSignal.any([signal, step.signal]);
   invocation.checkpoint = async () => {
     checkDeadline();
-    const resumed = acceptingCheckpoints ? suspension.suspend() : undefined;
-    if (!resumed) return;
-    clearTimeout(timer);
-    const since = performance.now();
-    try { await Promise.race([aborted, resumed]); }
-    finally {
-      suspendedMs += performance.now() - since;
-      // Mutate in place: runners may hold a reference to the request's deadlines.
-      if (invocation.deadlines?.node !== undefined) invocation.deadlines.node = started + suspendedMs + timeoutMs;
-      if (!signal.aborted) timer = startTimer(timeoutMs - (performance.now() - started - suspendedMs));
+    if (interrupted) {
+      // The runner recorded the interrupted step; later steps get a fresh signal.
+      interrupted = false;
+      clearTimeout(grace);
+      step = new AbortController();
     }
+    if (writes.size) await Promise.allSettled([...writes]);
+    const resumed = acceptingCheckpoints ? suspension.suspend() : undefined;
+    if (resumed) {
+      clearTimeout(timer);
+      const since = performance.now();
+      try { await Promise.race([aborted, resumed]); }
+      finally { suspendedMs += performance.now() - since; }
+    }
+    if (renewal !== undefined) {
+      windowMs = renewal;
+      limitMs = activeMs() + renewal;
+      renewal = undefined;
+    } else if (!resumed) return;
+    // Mutate in place: runners may hold a reference to the request's deadlines.
+    if (Number.isFinite(limitMs)) (invocation.deadlines ??= {}).node = started + suspendedMs + limitMs;
+    else if (invocation.deadlines) delete invocation.deadlines.node;
+    clearTimeout(timer);
+    timer = signal.aborted ? undefined : startTimer(limitMs - activeMs());
     checkDeadline();
   };
   if (choices) {
@@ -302,16 +351,29 @@ async function runNode(
   function checkDeadline(): void {
     signal.throwIfAborted();
     const now = performance.now();
-    const error =
-      now >= graphDeadline
-        ? new RunError("GRAPH_TIMEOUT", "Graph deadline exceeded")
-        : now - started - suspendedMs >= timeoutMs
-          ? nodeTimeout
-          : undefined;
+    let error: RunError | undefined;
+    if (now >= graphDeadline) error = new RunError("GRAPH_TIMEOUT", "Graph deadline exceeded");
+    else if (now - started - suspendedMs >= limitMs) {
+      // Under the pause policy a finished runner keeps its result.
+      if (!pauseOnTimeout) error = nodeTimeout();
+      else requestTimeoutPause();
+    }
     if (error) {
       controller.abort(error);
       throw error;
     }
+  }
+
+  /** Interrupt the current step and suspend at the runner's next checkpoint. */
+  function requestTimeoutPause(): void {
+    if (interrupted || !acceptingCheckpoints || signal.aborted) return;
+    interrupted = true;
+    clearTimeout(timer);
+    timer = undefined;
+    suspension.timedOut({ nodeTimeoutMs: windowMs, activeMs: Math.round(activeMs()) });
+    step.abort(new RunError("NODE_TIMEOUT", `Node '${result.id}' exceeded ${windowMs}ms; pausing`));
+    // A timeout is always enforced: a runner that never reaches a checkpoint fails.
+    grace = setTimeout(() => controller.abort(nodeTimeout()), INTERRUPT_GRACE_MS);
   }
 
   try {
@@ -359,6 +421,7 @@ async function runNode(
     ]);
     acceptingDecisions = false;
     acceptingHumanInput = false;
+    acceptingCheckpoints = false;
     checkDeadline();
     checkResponse(response);
     result.output = response.output;
@@ -403,6 +466,7 @@ async function runNode(
     }
     if (decision !== undefined) result.decision = decision;
     clearTimeout(timer);
+    clearTimeout(grace);
     signal.removeEventListener("abort", onAbort!);
     result.finishedAt = Date.now();
     result.latencyMs = performance.now() - started;
@@ -434,7 +498,9 @@ const edgeKey = (edge: Edge) => JSON.stringify([edge.from, edge.to, edge.choice,
 
 /** Execute a graph to completion. Use startBraid for live edits and pause/resume. */
 export async function braid(input: BraidInput, options: BraidOptions): Promise<BraidResult> {
-  return startBraid(input, options).result;
+  // Nothing can resume a paused execution without the run handle.
+  if (options?.onNodeTimeout === "pause") throw new TypeError('braid() cannot resume executions; use startBraid() for onNodeTimeout: "pause"');
+  return startBraid(input, { ...options, onNodeTimeout: "fail" }).result;
 }
 
 /** Definitions are mutable; each admitted execution captures its definition and inputs. */
@@ -448,6 +514,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   const maxExecutions = options.maxExecutions ?? 1000;
   const nodeTimeoutMs = options.nodeTimeoutMs ?? 60_000;
   const graphTimeoutMs = options.graphTimeoutMs ?? 300_000;
+  const onNodeTimeout = options.onNodeTimeout ?? "pause";
   const startedAt = Date.now();
   const started = performance.now();
   const graphDeadline = started + graphTimeoutMs;
@@ -463,6 +530,9 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   const suspended = new Set<string>();
   const resumeQueue: string[] = [];
   const resumers = new Map<string, () => void>();
+  const invocations = new Map<string, InvocationHandle>();
+  // Cancellations requested before the invocation attached.
+  const pendingAborts = new Map<string, RunError>();
   // Executions that pauseRun paused; resumeRun resumes only these.
   const pausedByRun = new Set<string>();
   let runPause: BraidSnapshot["pause"];
@@ -512,16 +582,25 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     const state = executions.get(id)?.suspension?.state;
     return paused.has(id) || state === "pausing" || state === "suspended";
   }
-  function validateResume(ids: readonly string[]) {
+  function validateResume(ids: readonly string[], options?: ResumeOptions) {
     if (!Array.isArray(ids) || new Set(ids).size !== ids.length || ids.some(id => !resumable(id)))
       throw new Error("resume must contain unique held or paused execution IDs");
+    if (options === undefined) return;
+    if (!options || typeof options !== "object" || Object.keys(options).some(key => key !== "nodeTimeoutMs"))
+      throw new TypeError("Unknown resume option");
+    const value = options.nodeTimeoutMs;
+    if (value !== undefined && value !== Infinity && (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 2_147_483_647))
+      throw new TypeError("nodeTimeoutMs must be Infinity or a positive number no greater than 2147483647");
   }
   /** Commit resume state without events; returns the executions that continue immediately. */
-  function stageResume(ids: readonly string[]): string[] {
+  function stageResume(ids: readonly string[], options?: ResumeOptions): string[] {
     const continued: string[] = [];
     for (const id of ids) {
       const record = executions.get(id)!;
       pausedByRun.delete(id);
+      // A timeout pause gets a full new window unless the caller chose one.
+      const budget = options?.nodeTimeoutMs ?? (record.suspension?.source === "node_timeout" ? nodeTimeoutMs : undefined);
+      if (record.suspension && budget !== undefined) invocations.get(id)?.renew(budget);
       if (paused.delete(id)) continued.push(id);
       else if (record.suspension?.state === "pausing") { delete record.suspension; continued.push(id); }
       else if (record.suspension?.state === "suspended") { record.suspension.state = "resuming"; resumeQueue.push(id); }
@@ -547,8 +626,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       resumers.delete(id);
     }
   }
-  function release(ids: readonly string[]) {
-    const continued = stageResume(ids);
+  function release(ids: readonly string[], options?: ResumeOptions) {
+    const continued = stageResume(ids, options);
     status = "running";
     announceResumed(continued);
     grantSlots();
@@ -569,10 +648,30 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     record.suspension = { state: "pausing", source, requestedAt: Date.now() };
     log.emit({ type: "execution_suspending", nodeId: record.id, source, ...context(record) });
   }
-  function pauseSource(options: PauseOptions | undefined): string {
+  function controlSource(options: PauseOptions | CancelExecutionsOptions | undefined, action: string): string {
     const source = options?.source ?? "caller";
-    if (typeof source !== "string" || !source.trim()) throw new TypeError("pause source must be a non-empty string");
+    if (typeof source !== "string" || !source.trim()) throw new TypeError(`${action} source must be a non-empty string`);
     return source;
+  }
+  const pauseSource = (options: PauseOptions | undefined) => controlSource(options, "pause");
+  function cancelExecutions(ids: readonly string[], options?: CancelExecutionsOptions): BraidSnapshot {
+    assertActive();
+    const source = controlSource(options, "cancel");
+    if (!Array.isArray(ids) || !ids.length || new Set(ids).size !== ids.length ||
+        ids.some(id => !running.has(id) || settled(executions.get(id)!)))
+      throw new Error("cancelExecutions must contain unique running execution IDs");
+    for (const id of ids) {
+      const record = executions.get(id)!;
+      const timeout = record.suspension?.source === "node_timeout" ? record.suspension.timeout : undefined;
+      // Cancelling a timeout pause gives the same result as onNodeTimeout: "fail".
+      const error = timeout
+        ? new RunError("NODE_TIMEOUT", `Node '${record.id}' exceeded ${timeout.nodeTimeoutMs}ms; cancelled by ${source} while paused`)
+        : new RunError("CANCELLED", `Execution cancelled by ${source}`);
+      const invocation = invocations.get(id);
+      if (invocation) invocation.abort(error);
+      else pendingAborts.set(id, error);
+    }
+    return snapshot();
   }
   function pause(ids: readonly string[], options?: PauseOptions): BraidSnapshot {
     assertActive();
@@ -631,6 +730,22 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   function suspensionControl(record: NodeExecution): SuspensionControl {
     const id = record.executionId;
     return {
+      attach(handle) {
+        invocations.set(id, handle);
+        const error = pendingAborts.get(id);
+        if (error) { pendingAborts.delete(id); handle.abort(error); }
+      },
+      timedOut(timeout) {
+        if (controller.signal.aborted) return;
+        const suspension = record.suspension;
+        // The timer stops while suspended or resuming, so only a pending pause can be replaced.
+        if (suspension && suspension.state !== "pausing") return;
+        // The parent decides about a timeout pause; resumeRun leaves it alone.
+        pausedByRun.delete(id);
+        if (suspension) Object.assign(suspension, { source: "node_timeout", timeout });
+        else record.suspension = { state: "pausing", source: "node_timeout", requestedAt: Date.now(), timeout };
+        log.emit({ type: "execution_suspending", nodeId: record.id, source: "node_timeout", ...context(record) });
+      },
       suspend() {
         const suspension = record.suspension;
         if (suspension?.state !== "pausing" || controller.signal.aborted) return undefined;
@@ -650,6 +765,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
         suspended.delete(id);
         resumers.delete(id);
         pausedByRun.delete(id);
+        invocations.delete(id);
+        pendingAborts.delete(id);
         delete record.suspension;
       },
     };
@@ -688,7 +805,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
 
   function update(patch: GraphUpdate): BraidSnapshot {
     assertMutable(patch.expectedRevision);
-    const allowed = ["expectedRevision", "upsertNodes", "removeNodeIds", "addEdges", "removeEdges", "promptTemplates", "loops", "resume"];
+    const allowed = ["expectedRevision", "upsertNodes", "removeNodeIds", "addEdges", "removeEdges", "promptTemplates", "loops", "resume", "resumeOptions"];
     if (Object.keys(patch).some(key => !allowed.includes(key))) throw new TypeError("Unknown graph update field");
     for (const key of ["upsertNodes", "removeNodeIds", "addEdges", "removeEdges", "loops", "resume"] as const)
       if (patch[key] !== undefined && !Array.isArray(patch[key])) throw new TypeError(`${key} must be an array`);
@@ -698,7 +815,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
           Object.entries(edge).some(([key, value]) => !["from", "to", "choice", "feedback", "executionId"].includes(key) || typeof value !== "string" || !value.trim()))
         throw new TypeError("removeEdges must contain complete edge identities");
     }
-    validateResume(patch.resume ?? []);
+    if (patch.resumeOptions !== undefined && !patch.resume?.length) throw new TypeError("resumeOptions requires resume");
+    validateResume(patch.resume ?? [], patch.resumeOptions);
     const removed = new Set(patch.removeNodeIds ?? []);
     const nodes = new Map(definition.nodes.filter(node => !removed.has(node.id)).map(node => [node.id, node]));
     for (const node of patch.upsertNodes ?? []) nodes.set(node.id, node);
@@ -721,7 +839,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     revision++;
     reconcileLoops(previousGraph);
     // Commit all state before publishing callbacks, which may themselves submit an update.
-    const continued = stageResume(patch.resume ?? []);
+    const continued = stageResume(patch.resume ?? [], patch.resumeOptions);
     status = "running";
     log.emit({ type: "graph_updated", graph: definition, revision });
     for (const [id, loop] of graph.loops) if (!previousGraph.loops.has(id))
@@ -791,7 +909,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       await runNode(request, record, runner, nodeTimeoutMs, controller.signal, graphDeadline, scopedLog, workspaces, (error, infrastructure) => {
         if (infrastructure) controller.abort(new RunError(error.code, error.message));
         else if (record.node.requireSuccess) controller.abort(new RunError("REQUIRED_NODE_FAILED", `Required node '${record.id}' (${record.executionId}) failed: ${error.message}`));
-      }, suspensionControl(record));
+      }, suspensionControl(record), onNodeTimeout);
       if (record.holdAfter && !controller.signal.aborted) {
         paused.add(record.executionId);
         scopedLog.emit({ type: "execution_paused", nodeId: record.id });
@@ -909,6 +1027,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     result.events = Object.freeze(log.events);
     return result;
   }
-  return { runId, result: Promise.resolve().then(execute), snapshot, update, cancel, pause, holdAfter, pauseRun, resumeRun,
-    resume(ids, expectedRevision) { assertMutable(expectedRevision); validateResume(ids); release(ids); wake(); return snapshot(); } };
+  return { runId, result: Promise.resolve().then(execute), snapshot, update, cancel, cancelExecutions, pause, holdAfter, pauseRun, resumeRun,
+    resume(ids, expectedRevision, options) {
+      assertMutable(expectedRevision); validateResume(ids, options); release(ids, options); wake(); return snapshot();
+    } };
 }

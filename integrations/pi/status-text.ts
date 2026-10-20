@@ -1,8 +1,8 @@
 import type {
-  BraidInput, BraidInputNode, BraidSnapshot, ExecutionActivity, ExecutionError, ExecutionHold, NodeExecution, NodeResult, NodeWorkspace,
+  BraidInput, BraidInputNode, BraidSnapshot, ExecutionActivity, ExecutionError, ExecutionHold, ExecutionSuspension, NodeExecution, NodeResult, NodeWorkspace,
 } from "@chrok/braid";
 import type { Usage } from "@earendil-works/pi-ai";
-import type { JobSnapshot } from "./jobs.js";
+import type { JobSnapshot, TimeoutPause } from "./jobs.js";
 
 /** Model-facing text documents for the parent Braid tools. */
 
@@ -54,11 +54,20 @@ function workspaceLine(workspace: NodeWorkspace): string {
   return parts.join(" · ");
 }
 
+/** Who paused an execution; a node timeout pause also says how long it ran. */
+export function pausedBy(suspension: ExecutionSuspension): string {
+  if (suspension.source !== "node_timeout") return `paused by ${suspension.source}`;
+  return suspension.timeout ? `paused by node timeout after ${duration(suspension.timeout.activeMs)} (budget ${duration(suspension.timeout.nodeTimeoutMs)})` : "paused by node timeout";
+}
+
+/** A node timeout pause waits for the parent's decision. */
+const TIMEOUT_PAUSE_NOTE = "Its node timeout ran out. Resume it with braid_resume (optionally with nodeTimeoutMs; the default is the job's nodeTimeoutMs again), or fail only this execution with braid_cancel and executionIds. Its successors wait until then.";
+
 function executionLine(execution: NodeResult & Partial<Pick<NodeExecution, "iteration" | "node">>): string {
   const parts = [execution.executionId ?? "(no execution)", `node ${execution.id}`];
   if (execution.iteration) parts.push(`iteration ${execution.iteration}`);
   parts.push(execution.skipReason ? `${execution.status} (${execution.skipReason})` : execution.status);
-  if (execution.suspension) parts.push(`${execution.suspension.state}, paused by ${execution.suspension.source}`);
+  if (execution.suspension) parts.push(`${execution.suspension.state}, ${pausedBy(execution.suspension)}`);
   if (pendingHold(execution)) parts.push(`holds when finished, set by ${holdSource(execution.holdAfter!)}`);
   if (execution.latencyMs !== undefined) parts.push(duration(execution.latencyMs));
   if (execution.decision) parts.push(`decision ${execution.decision}`);
@@ -179,7 +188,7 @@ export interface NodeStatus {
 /** A focused read: the current control state, then one execution in full. */
 export function formatNodeStatus({ job, node, activity, now }: NodeStatus): string {
   const lines = [`Braid job ${job.handle} · ${job.status} · ${control(job.execution)}`,
-    ...node.suspension ? [`Execution is ${node.suspension.state}, paused by ${node.suspension.source}${node.suspension.suspendedAt !== undefined ? ` since ${iso(node.suspension.suspendedAt)}` : ""}.${node.suspension.source === "user" ? ` ${USER_PAUSE_NOTE}` : ""}`] : [],
+    ...node.suspension ? [`Execution is ${node.suspension.state}, ${pausedBy(node.suspension)}${node.suspension.suspendedAt !== undefined ? ` since ${iso(node.suspension.suspendedAt)}` : ""}.${node.suspension.source === "user" ? ` ${USER_PAUSE_NOTE}` : node.suspension.source === "node_timeout" ? ` ${TIMEOUT_PAUSE_NOTE}` : ""}`] : [],
     ...pendingHold(node) ? [`Its result will be held when it finishes (set by ${holdSource(node.holdAfter!)}).${node.holdAfter!.source === "user" ? ` ${USER_HOLD_NOTE}` : ""}`] : [],
     `Execution ${node.executionId ?? "(none yet)"} · node ${node.id}${node.node ? ` (${node.node.type})` : ""}${node.iteration ? ` · iteration ${node.iteration}` : ""} · ${node.skipReason ? `${node.status} (${node.skipReason})` : node.status}`];
   const timing = [node.startedAt !== undefined && `started ${iso(node.startedAt)}`, node.latencyMs !== undefined && `took ${duration(node.latencyMs)}`,
@@ -222,4 +231,27 @@ export function formatJobStatus(job: JobSnapshot, now: number): string {
   if (workspaces.length) sections.push(["Workspaces:", ...workspaces.map(execution => `- ${execution.executionId}: ${workspaceLine(execution.workspace!)}`)].join("\n"));
   if (job.execution) sections.push(`Current graph (revision ${job.execution.revision}):\n${formatGraph(job.execution.graph)}`);
   return sections.join("\n\n");
+}
+
+/** The waking reminder for an execution its node timeout paused. */
+export function formatTimeoutPause(pause: TimeoutPause): string {
+  const execution = `${pause.executionId}${pause.iteration ? ` (iteration ${pause.iteration})` : ""}`;
+  return [
+    `Braid job ${pause.handle} node ${JSON.stringify(pause.nodeId)} execution ${execution} was paused because it exceeded its node timeout:`,
+    `it ran ${duration(pause.activeMs)} against a budget of ${duration(pause.nodeTimeoutMs)}.`,
+    pause.activity ? `When the timeout fired it was: ${pause.activity}.` : "",
+    "Its conversation, workspace, and tool budgets are kept; the step that was interrupted is reported to it after resume.",
+    "Its successors wait until you decide. Check it with",
+    `braid_status(${JSON.stringify({ jobId: pause.handle, executionId: pause.executionId })}), then either`,
+    `resume it with braid_resume({"jobId":"${pause.handle}","executionIds":["${pause.executionId}"],"expectedRevision":<current>}) — it gets the job's nodeTimeoutMs again, or pass nodeTimeoutMs —`,
+    "or resume it in braid_update with resume and resumeOptions together with graph changes,",
+    `or fail only this execution with braid_cancel({"jobId":"${pause.handle}","executionIds":["${pause.executionId}"]}).`,
+    "The graph timeout keeps running while it is paused.",
+  ].filter(Boolean).join(" ");
+}
+
+/** The result of braid_cancel with executionIds. */
+export function formatCancelExecutions(job: JobSnapshot, executionIds: readonly string[]): string {
+  return [`Braid job ${job.handle}: cancellation requested for ${ids(executionIds)}. They fail; their successors follow the usual failure rules.`,
+    control(job.execution)].join("\n");
 }

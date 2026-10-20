@@ -8,7 +8,7 @@ import type {} from "@deepseek-ai/dsh-jobs";
 import type { BraidInput } from "@chrok/braid";
 import { BraidJobs, type ControlNotice, type JobOptions, type JobSnapshot } from "./jobs.js";
 import { createBraidTools } from "./tools.js";
-import { formatControlNotice, formatJobList, formatReceipt } from "./status-text.js";
+import { formatControlNotice, formatJobList, formatReceipt, formatTimeoutPause } from "./status-text.js";
 import { BRAID_USAGE_GUIDANCE, BRAID_WAIT_REMINDER } from "./schema.js";
 import { renderPanel } from "./display.js";
 import { BraidPanel } from "./panel.js";
@@ -51,7 +51,7 @@ export function apply(ctx: Context): void {
     state.notices.clear();
     try {
       agent.inject(createUserMessage({
-        source: { kind: "braid", reminderId: JSON.stringify(["control", Date.now()]), form: "notice", summary: "Braid: paused or resumed outside this conversation" },
+        source: { kind: "braid", reminderId: JSON.stringify(["control", Date.now()]), form: "notice", summary: "Braid: paused, resumed, or cancelled outside this conversation" },
         content: [{ type: "text", text: `[system-reminder] ${lines.join(" ")} [/system-reminder]` }],
       }));
     } catch { /* Notices are advisory; braid_status still shows who paused. */ }
@@ -79,7 +79,15 @@ export function apply(ctx: Context): void {
         content: [{ type: "text", text: `[system-reminder] ${summary}. Retrieve results with braid_status(${lookup}) and continue the original task. Failed or cancelled jobs may contain successful partial results. ${paused ? "Outgoing scheduling was paused. Inspect CURRENT execution.revision and pausedExecutionIds before braid_update with resume or braid_resume. Deadlines continue; finalized jobs cannot resume." : "This reminder does not pause scheduling."} [/system-reminder]` }],
       });
       pending.set(reminderId, message); send(agent, message);
-    }, notice => { noteControl(agent, notice); });
+    }, notice => { noteControl(agent, notice); }, pause => {
+      // Unlike other pauses, a timeout pause wakes the parent: only it can decide what happens next.
+      const reminderId = JSON.stringify([pause.jobId, "timeout", pause.executionId, pause.sequence]);
+      const message = createUserMessage({
+        source: { kind: "braid", reminderId, form: "notice", summary: `Braid ${pause.handle} / ${pause.nodeId}: paused by node timeout`.slice(0, 120) },
+        content: [{ type: "text", text: `[system-reminder] ${formatTimeoutPause(pause)} [/system-reminder]` }],
+      });
+      pending.set(reminderId, message); send(agent, message);
+    });
     const value = { jobs, pending, queued: new Set<string>(), notices: new Map<string, ControlNotice>(), release: () => jobs.dispose() };
     sessions.set(agent, value);
     const off = jobs.subscribe(changed);

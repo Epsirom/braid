@@ -48,7 +48,7 @@ export function toolNavigation(toolName: string, props: ToolCallPhaseProps): Bra
   const target: BraidNavigation = { jobId };
   const node = record(result.node);
   const executionId = id(args.executionId) ?? id(node.executionId)
-    ?? ((toolName === "braid_resume" || toolName === "braid_pause") && Array.isArray(args.executionIds) && args.executionIds.length === 1 ? id(args.executionIds[0]) : undefined);
+    ?? ((toolName === "braid_resume" || toolName === "braid_pause" || toolName === "braid_cancel") && Array.isArray(args.executionIds) && args.executionIds.length === 1 ? id(args.executionIds[0]) : undefined);
   const nodeId = id(args.nodeId) ?? id(node.id);
   if (executionId) target.executionId = executionId;
   if (nodeId) target.nodeId = nodeId;
@@ -104,7 +104,11 @@ export function toolPresentation(toolName: string, props: ToolCallPhaseProps): T
     if (Array.isArray(execution.pausedExecutionIds)) model.changes.push(`${execution.pausedExecutionIds.length} still paused · ${revision(execution.revision)}`);
     if (Array.isArray(execution.suspendedExecutionIds) && execution.suspendedExecutionIds.length) model.changes.push(`${execution.suspendedExecutionIds.length} suspended`);
   } else if (toolName === "braid_cancel") {
-    model.summary = failed ? "Cancellation failed" : !settled ? "Requesting cancellation" : result.cancelled === false ? "Job already finished" : "Cancellation requested";
+    // With execution IDs, only those executions fail and the job keeps running.
+    const executions = array(args.executionIds);
+    model.summary = failed ? "Cancellation failed" : !settled ? "Requesting cancellation" : result.cancelled === false ? "Job already finished"
+      : executions.length ? `Cancellation requested for ${executions.length} execution(s)` : "Cancellation requested";
+    const ids = names(executions); if (ids) model.changes.push(ids);
   } else if (toolName === "braid_status" && Array.isArray(result.jobs)) {
     model.summary = `${result.jobs.length} job(s) at this call`;
     model.jobs = result.jobs.flatMap(value => {

@@ -35,14 +35,15 @@ export function parseDuration(value: string): number {
 
 const waitingOn = (job: OutstandingJob) => [
   job.pausedExecutionIds.length ? `paused executions ${JSON.stringify(job.pausedExecutionIds)}` : "",
-  job.suspendedExecutionIds.length ? `suspended executions ${JSON.stringify(job.suspendedExecutionIds)}` : "",
+  job.suspendedExecutionIds.length ? `suspended executions ${JSON.stringify(job.suspendedExecutionIds)}` +
+    (job.timedOutExecutionIds?.length ? ` (paused by their node timeout: ${JSON.stringify(job.timedOutExecutionIds)})` : "") : "",
   job.paused ? "its job pause" : "",
 ].filter(Boolean).join(" and ") || "paused work";
 
 const stalledReminder = (jobs: OutstandingJob[]) =>
   `[system-reminder] This single-shot run cannot end while Braid jobs are outstanding, and nothing can progress: ` +
   jobs.map(job => `${job.handle} is waiting on ${waitingOn(job)} at revision ${job.revision}`).join("; ") +
-  `. Resume executions with braid_resume or braid_update with resume, resume a paused job with braid_resume({jobId}), or cancel the job with braid_cancel, then continue the original task. ` +
+  `. Resume executions with braid_resume or braid_update with resume, resume a paused job with braid_resume({jobId}), fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel, then continue the original task. ` +
   `If you end your turn again without doing so, Braid cancels these jobs and the run exits with a failure status. [/system-reminder]`;
 
 /**

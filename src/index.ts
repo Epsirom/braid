@@ -4,6 +4,7 @@ export type {
   BraidInput,
   BraidRun,
   BraidSnapshot,
+  CancelExecutionsOptions,
   GraphUpdate,
   LoopDefinition,
   NodeExecution,
@@ -38,12 +39,14 @@ export type {
   PauseOptions,
   PredecessorOutput,
   PromptTemplateReference,
+  ResumeOptions,
   TokenUsage,
 } from "./types.js";
 
 // Shared helpers for model adapters, including the Pi integration.
 export { formatBudgetReminder } from "./budgets.js";
-export { ExecutionActivityTracker, formatActivityStatus } from "./activity.js";
+export { isStepInterrupted, interruptedToolResult, notRunToolResult } from "./interruption.js";
+export { ExecutionActivityTracker, formatActivityStatus, formatPauseSource } from "./activity.js";
 export type {
   ExecutionActivity,
   ExecutionActivityEntry,

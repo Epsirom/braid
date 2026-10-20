@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import type { Context, ToolCall } from "@earendil-works/pi-ai";
 import type { MergeSource, SourceCheckoutStatus } from "@chrok/braid";
 import { createPiRunner } from "../runner.js";
-import { braid, type NodeWorkspace as PiNodeWorkspace } from "@chrok/braid";
+import { braid, startBraid, type NodeWorkspace as PiNodeWorkspace } from "@chrok/braid";
 import { createWorktreeWriteTools } from "../write-tools.js";
 import { BraidJobs } from "../jobs.js";
 import { createBraidTools } from "../index.js";
@@ -155,6 +155,42 @@ test("cancelling a shell call drains it before checkpointing partial work and re
   assert.equal(await git(fixture.root, "show", `${saved.checkpointRef}:partial.txt`), "partial");
   await assert.rejects(git(fixture.root, "show", `${saved.checkpointRef}:ignored.txt`));
   await assert.rejects(readFile(join(saved.worktreeRoot!, "partial.txt")), { code: "ENOENT" });
+});
+
+test("a node timeout interrupts a shell call, keeps its partial work, and does not run the rest of the batch", { timeout: 20_000 }, async t => {
+  const fixture = await repository(t);
+  const contexts: Context[] = [];
+  const ctx = context(async () => response());
+  (ctx.modelRegistry as unknown as { complete: (model: unknown, worker: Context) => Promise<unknown> }).complete = async (_model, worker) => {
+    contexts.push(structuredClone(worker));
+    return contexts.length === 1
+      ? toolResponse(
+        { type: "toolCall", id: "shell", name: "bash", arguments: { command: "printf partial > partial.txt; echo started; sleep 30" } },
+        { type: "toolCall", id: "later", name: "bash", arguments: { command: "printf later > later.txt" } })
+      : response("resumed");
+  };
+  let workspace: PiNodeWorkspace | undefined;
+  const run = startBraid({ goal: "Run a long command", nodes: [{ type: "execute", id: "work", prompt: "Run" }], edges: [] }, {
+    cwd: fixture.root, defaultModel: "fake/model", nodeTimeoutMs: 1_500,
+    runner: createPiRunner(ctx.modelRegistry, { cwd: fixture.root, onWorkspace: value => { fixture.onWorkspace(value); workspace = value; } }),
+  });
+  const deadline = Date.now() + 10_000;
+  while (!run.snapshot().suspendedExecutionIds.length) {
+    assert.ok(Date.now() < deadline, "the execution never suspended");
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  const executionId = run.snapshot().suspendedExecutionIds[0]!;
+  assert.equal(await readFile(join(workspace!.worktreeRoot!, "partial.txt"), "utf8"), "partial", "the worktree is kept");
+  await assert.rejects(readFile(join(workspace!.worktreeRoot!, "later.txt")), { code: "ENOENT" });
+  run.resume([executionId], 0);
+  const result = await run.result;
+  assert.equal(result.nodes.work!.status, "completed", JSON.stringify(result.nodes.work!.error));
+  const results = contexts[1]!.messages.filter(message => message.role === "toolResult");
+  const textOf = (index: number) => JSON.stringify(results[index]!.content);
+  assert.match(textOf(0), /Interrupted: the node timeout paused this execution before this call finished/);
+  assert.match(textOf(0), /started/, "partial output is kept");
+  assert.match(textOf(1), /Not run: the node timeout paused this execution before this call started/);
+  assert.equal(await git(fixture.root, "show", `${result.nodes.work!.workspace!.checkpointRef}:partial.txt`), "partial");
 });
 
 test("Pi braid tool submits read-only review and decision nodes with Git inspection but no write tools", async t => {

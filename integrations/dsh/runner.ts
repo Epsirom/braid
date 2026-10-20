@@ -4,7 +4,7 @@ import {
   type ContentBlock, type LlmRuntime, type RequestMessage, type TokenUsage,
 } from "@deepseek-ai/dsh-llm";
 import {
-  formatBudgetReminder, gitToolDefinition, finishMergeToolDefinition,
+  formatBudgetReminder, interruptedToolResult, isStepInterrupted, notRunToolResult, gitToolDefinition, finishMergeToolDefinition,
   mergeInstructions, parseGitToolArguments, parseFinishMergeArguments,
   type ExecutionActivityTracker, type GitResult, type ModelRunner,
 } from "@chrok/braid";
@@ -120,10 +120,12 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
         progress("model");
         const assembler = new BlockAssembler();
         let finished = false;
+        // A node timeout pause interrupts only this request; it is sent again after resume.
+        const step = request.stepSignal?.() ?? request.signal;
         activity?.modelRequest();
         try {
-          for await (const chunk of llm.stream({ provider, model, messages, system: prompt, tools: activeTools, signal: request.signal })) {
-            request.signal.throwIfAborted();
+          for await (const chunk of llm.stream({ provider, model, messages, system: prompt, tools: activeTools, signal: step })) {
+            step.throwIfAborted();
             assembler.push(chunk);
             if (chunk.type === "finish") finished = true;
             else if (chunk.type === "text-delta") activity?.modelStream("text", chunk.text);
@@ -131,6 +133,10 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
             else if (chunk.type === "tool-call-delta") activity?.modelStream("tool_call", chunk.argumentsDelta, chunk.name);
           }
         } catch (error) {
+          if (isStepInterrupted(request, step)) {
+            activity?.modelError("Model request interrupted by the node timeout");
+            continue;
+          }
           activity?.modelError(error instanceof Error ? error.message : String(error));
           throw error;
         } finally {
@@ -144,6 +150,8 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
           }
         }
         request.signal.throwIfAborted();
+        // The partial response never enters the context.
+        if (isStepInterrupted(request, step)) continue;
         const finish = assembler.finish;
         const failure = !finished ? "DSH model stream ended without a finish event"
           : finish.kind !== "stop" && finish.kind !== "tool-calls"
@@ -173,7 +181,13 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
         messages.push(response);
         for (const call of calls) {
           request.signal.throwIfAborted();
-          let content: ContentBlock[] | undefined, text = "", isError = false;
+          const step = request.stepSignal?.() ?? request.signal;
+          // After an interruption the rest of the batch is not run, but every call still gets a result.
+          if (isStepInterrupted(request, step)) {
+            messages.push(createToolResultMessage({ callId: call.id, content: [{ type: "text", text: notRunToolResult() }], isError: true }));
+            continue;
+          }
+          let content: ContentBlock[] | undefined, text = "", isError = false, partial = "";
           activity?.toolStart(call.id, call.name, call.arguments);
           try {
             const args: unknown = JSON.parse(call.arguments);
@@ -191,17 +205,20 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
               await request.merge.finish(parseFinishMergeArguments(args, request.merge.sources.map(source => source.executionId!)));
               text = "Merge dispositions recorded. Return your final answer.";
             } else {
-              const invoke = () => files.execute({ id: call.id, name: call.name, arguments: args }, request.signal,
-                output => activity?.toolOutput(call.id, output));
+              const invoke = () => files.execute({ id: call.id, name: call.name, arguments: args }, step, output => {
+                partial = (partial + output).slice(-4000);
+                activity?.toolOutput(call.id, output);
+              });
               const result = files.writes(call.name) && request.withWorkspaceWrite ? await request.withWorkspaceWrite(invoke) : await invoke();
               request.signal.throwIfAborted();
               ({ content, isError } = result);
               text = content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n");
+              if (isStepInterrupted(request, step)) { content = undefined; isError = true; text = interruptedToolResult(partial); }
             }
           } catch (error) {
             request.signal.throwIfAborted();
             isError = true;
-            text = error instanceof Error ? error.message : String(error);
+            text = isStepInterrupted(request, step) ? interruptedToolResult(partial) : error instanceof Error ? error.message : String(error);
             // Invalid or duplicate decisions are terminal, matching core's exactly-once contract.
             if (call.name === "decide" && request.decide) { activity?.toolEnd(call.id, text, true); throw error; }
           }
@@ -217,7 +234,7 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
       } };
     } finally { await files.dispose(); }
   };
-  return Object.assign(runner, { pausable: true });
+  return Object.assign(runner, { pausable: true, interruptible: true });
 }
 
 export function sumUsage(reports: readonly TokenUsage[]): TokenUsage {

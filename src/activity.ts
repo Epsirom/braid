@@ -205,7 +205,9 @@ export class ExecutionActivityTracker {
         if (suspended) this.phase(record, "suspended", event.timestamp);
         this.add(record, {
           kind: "lifecycle",
-          summary: suspended ? `Suspended · paused by ${event.source}` : `Pause requested by ${event.source} · stops before the next model request`,
+          summary: suspended ? `Suspended · paused by ${formatPauseSource(event.source)}`
+            : event.source === "node_timeout" ? "Node timeout · interrupting the current step to pause"
+              : `Pause requested by ${event.source} · stops before the next model request`,
         }, event.timestamp);
       } else if (event.type === "execution_hold_added" || event.type === "execution_hold_removed") {
         const record = this.ensure(event.executionId, event.nodeId, event.timestamp);
@@ -455,4 +457,9 @@ export function formatActivityStatus(activity: ExecutionActivity, now: number): 
   if (activity.finishedAt === undefined) parts.push(`last activity ${seconds(Math.max(0, now - activity.lastActivityAt))} ago`);
   parts.push(`total ${seconds(Math.max(0, end - activity.startedAt))}`);
   return parts.join(" · ");
+}
+
+/** Who paused an execution, in words: core's "node_timeout" reads as "node timeout". */
+export function formatPauseSource(source: string): string {
+  return source === "node_timeout" ? "node timeout" : source;
 }

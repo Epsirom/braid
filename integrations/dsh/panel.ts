@@ -27,7 +27,8 @@ export function panelJob(job: JobSnapshot, activity: (executionId: string) => Ex
       ...(e.latencyMs === undefined ? {} : { latencyMs: e.latencyMs }),
       ...(job.progress[e.executionId] ? { progress: job.progress[e.executionId]! } : {}),
       ...(e.suspension ? { suspension: { state: e.suspension.state, source: clip(e.suspension.source, 100),
-        ...(e.suspension.suspendedAt === undefined ? {} : { suspendedAt: e.suspension.suspendedAt }) } } : {}),
+        ...(e.suspension.suspendedAt === undefined ? {} : { suspendedAt: e.suspension.suspendedAt }),
+        ...(e.suspension.timeout ? { timeout: { ...e.suspension.timeout } } : {}) } } : {}),
       ...(e.holdAfter ? { holdAfter: { source: clip(e.holdAfter.source, 100) } } : {}),
       ...(() => {
         const live = e.status === "running" ? activity(e.executionId) : undefined;
@@ -103,7 +104,8 @@ export class BraidPanel extends TypertRemoteService {
       else if (request.action === "resume") {
         if (executionIds) jobs.resume(request.jobId, executionIds, request.revision, "user");
         else jobs.resumeJob(request.jobId, "user");
-      } else jobs.cancel(request.jobId);
+      } else if (executionIds) jobs.cancelExecutions(request.jobId, executionIds, "user");
+      else jobs.cancel(request.jobId);
       return this.snapshot(request);
     } catch (error) { throw this.failure(request, error); }
   }

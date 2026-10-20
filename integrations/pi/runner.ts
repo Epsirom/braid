@@ -18,6 +18,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   formatBudgetReminder,
+  interruptedToolResult,
+  isStepInterrupted,
+  notRunToolResult,
   gitToolDefinition,
   finishMergeToolDefinition,
   mergeInstructions,
@@ -323,21 +326,23 @@ export function createPiRunner(
     };
 
     const complete = async (): Promise<AssistantMessage> => {
-      // The registry resolves stored API keys, OAuth, custom headers and endpoints.
-      // complete() is stream().result(); streaming only adds observation.
-      // pi-ai retries rejected requests before a response starts, honoring Retry-After.
-      const requestOptions = {
-        signal: request.signal,
-        sessionId,
-        cacheRetention: "none" as const,
-        transport: "sse" as const,
-        maxRetries: maxModelRetries,
-        maxRetryDelayMs: MAX_MODEL_RETRY_DELAY_MS,
-      };
       let retries = 0;
       while (true) {
         // Retries pass the checkpoint too, so a pause during backoff stops before the resend.
         await prepareRequest();
+        // A node timeout pause interrupts only this step; the request is sent again after resume.
+        const step = request.stepSignal?.() ?? request.signal;
+        // The registry resolves stored API keys, OAuth, custom headers and endpoints.
+        // complete() is stream().result(); streaming only adds observation.
+        // pi-ai retries rejected requests before a response starts, honoring Retry-After.
+        const requestOptions = {
+          signal: step,
+          sessionId,
+          cacheRetention: "none" as const,
+          transport: "sse" as const,
+          maxRetries: maxModelRetries,
+          maxRetryDelayMs: MAX_MODEL_RETRY_DELAY_MS,
+        };
         activity?.modelRequest();
         let response: AssistantMessage;
         // Without a stream we cannot tell where a request failed, so Braid may retry it too.
@@ -361,6 +366,10 @@ export function createPiRunner(
             response = await registry.complete(model, context, requestOptions);
           }
         } catch (error) {
+          if (isStepInterrupted(request, step)) {
+            activity?.modelError("Model request interrupted by the node timeout");
+            continue;
+          }
           activity?.modelError(error instanceof Error ? error.message : String(error));
           throw error;
         }
@@ -402,6 +411,8 @@ export function createPiRunner(
           response.usage.cacheWrite;
         usage.outputTokens += response.usage.output;
         request.signal.throwIfAborted();
+        // The partial response never enters the context.
+        if (isStepInterrupted(request, step)) continue;
         // A stream that failed after it started is restarted from the same context. Tools run
         // only after a complete response, so nothing from the failed attempt has executed.
         if (response.stopReason === "error" && started && retries < maxModelRetries && isRetryableAssistantError(response)) {
@@ -411,7 +422,8 @@ export function createPiRunner(
           if (performance.now() + delayMs < deadline) {
             retries++;
             activity?.modelError(`Retrying model request in ${Math.ceil(delayMs / 1000)}s (${retries}/${maxModelRetries})`);
-            await abortableDelay(delayMs, request.signal);
+            try { await abortableDelay(delayMs, step); }
+            catch (error) { if (!isStepInterrupted(request, step)) throw error; }
             continue;
           }
         }
@@ -440,6 +452,7 @@ export function createPiRunner(
 
     const executeFileTool = async (
       call: ToolCall,
+      signal: AbortSignal,
     ): Promise<ToolResultMessage> => {
       const tool = toolByName.get(call.name);
       if (!tool && !(call.name === "git" && request.git) && !(call.name === "finish_merge" && request.merge)) {
@@ -449,6 +462,7 @@ export function createPiRunner(
           true,
         );
       }
+      let partialOutput = "";
       try {
         request.signal.throwIfAborted();
         if (call.name === "git" && request.git) {
@@ -465,11 +479,11 @@ export function createPiRunner(
         const execute = () => tool!.execute(
           call.id,
           args,
-          request.signal,
+          signal,
           // Bash sends cumulative, throttled output snapshots.
           (partial) => {
-            activity?.toolOutput(call.id, partial.content
-              .flatMap(block => block.type === "text" ? [block.text] : []).join(""), "replace");
+            partialOutput = partial.content.flatMap(block => block.type === "text" ? [block.text] : []).join("");
+            activity?.toolOutput(call.id, partialOutput, "replace");
             transcripts?.toolUpdate(executionId!, call.id, { content: partial.content, details: partial.details });
           },
         );
@@ -477,6 +491,7 @@ export function createPiRunner(
           ? await request.withWorkspaceWrite(execute)
           : await execute();
         request.signal.throwIfAborted();
+        if (isStepInterrupted(request, signal)) return toolResult(call, interruptedToolResult(partialOutput), true);
         return {
           role: "toolResult",
           toolCallId: call.id,
@@ -488,6 +503,7 @@ export function createPiRunner(
         };
       } catch (error) {
         request.signal.throwIfAborted();
+        if (isStepInterrupted(request, signal)) return toolResult(call, interruptedToolResult(partialOutput), true);
         return toolResult(
           call,
           error instanceof Error ? error.message : String(error),
@@ -496,8 +512,8 @@ export function createPiRunner(
       }
     };
 
-    const executeCall = async (call: ToolCall): Promise<ToolResultMessage> => {
-      if (call.name !== "decide") return executeFileTool(call);
+    const executeCall = async (call: ToolCall, signal: AbortSignal): Promise<ToolResultMessage> => {
+      if (call.name !== "decide") return executeFileTool(call, signal);
       if (request.node.type !== "decision") {
         return toolResult(call, "decide is available only on decision nodes", true);
       }
@@ -565,11 +581,19 @@ export function createPiRunner(
       const results: ToolResultMessage[] = [];
       for (const call of calls) {
         request.signal.throwIfAborted();
+        const step = request.stepSignal?.() ?? request.signal;
+        // After an interruption the rest of the batch is not run, but every call still gets a result.
+        if (isStepInterrupted(request, step)) {
+          const result = toolResult(call, notRunToolResult(), true);
+          transcripts?.toolResult(executionId!, result);
+          results.push(result);
+          continue;
+        }
         activity?.toolStart(call.id, call.name, call.arguments);
         transcripts?.toolStart(executionId!, call.id);
         let result: ToolResultMessage;
         try {
-          result = await executeCall(call);
+          result = await executeCall(call, step);
         } catch (error) {
           activity?.toolEnd(call.id, error instanceof Error ? error.message : String(error), true);
           throw error;
@@ -594,7 +618,7 @@ export function createPiRunner(
       usage,
     };
   };
-  return Object.assign(runner, { pausable: true });
+  return Object.assign(runner, { pausable: true, interruptible: true });
 }
 
 /** Includes cache/cost fields for Pi's tool-usage accounting, separate from core token totals. */

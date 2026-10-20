@@ -205,6 +205,14 @@ export interface ModelRequest {
    * after resume. Rejects when the execution is aborted.
    */
   checkpoint?: () => Promise<void>;
+  /**
+   * Interruptible runners call this at the start of each model request, retry
+   * backoff, and tool call, and pass the result to that step instead of `signal`.
+   * The signal aborts with the execution, or when core interrupts the current
+   * step (a node timeout pause). An aborted step signal while `signal` is not
+   * aborted means the step was interrupted: record that and await checkpoint().
+   */
+  stepSignal?: () => AbortSignal;
   workspace?: NodeWorkspace;
   /** Rejects read-only writes; adapters must wrap mutating file tools so cleanup waits for in-flight writes. */
   withWorkspaceWrite?: <T>(operation: () => Promise<T>) => Promise<T>;
@@ -238,6 +246,12 @@ export interface ModelRunner {
   (request: ModelRequest): Promise<ModelResponse>;
   /** True when the runner awaits request.checkpoint() before each model request. Required for pause. */
   readonly pausable?: boolean;
+  /**
+   * True when the runner passes request.stepSignal() to each step and, when a step
+   * is interrupted, records it and continues to its next checkpoint. Implies
+   * pausable. Required for onNodeTimeout: "pause"; other runners fail on timeout.
+   */
+  readonly interruptible?: boolean;
 }
 
 /** A requested or active suspension of a running execution. */
@@ -248,10 +262,17 @@ export interface ExecutionSuspension {
    * resuming: resumed and waiting for a free concurrency slot.
    */
   state: "pausing" | "suspended" | "resuming";
-  /** Who asked: a caller-supplied label such as "agent" or "user". */
+  /** Who asked: a caller-supplied label such as "agent" or "user", or "node_timeout" from core. */
   source: string;
   requestedAt: number;
   suspendedAt?: number;
+  /** Present when the node timeout paused the execution. */
+  timeout?: {
+    /** The node time budget that ran out. */
+    nodeTimeoutMs: number;
+    /** Time the execution ran before the timeout, excluding earlier suspensions. */
+    activeMs: number;
+  };
 }
 
 /** A hold on an execution's outgoing scheduling, applied once it settles. */
@@ -340,6 +361,13 @@ export interface BraidOptions {
   nodeTimeoutMs?: number;
   /** Includes queueing, pauses, and execution of the entire graph. Default: 5 minutes. Infinity disables it. */
   graphTimeoutMs?: number;
+  /**
+   * What a node timeout does. "pause" interrupts the current step and suspends the
+   * execution until it is resumed or cancelled; it needs an interruptible runner,
+   * and other runners fail as with "fail". Default: "pause" for startBraid, and
+   * "fail" for braid(), which cannot resume executions.
+   */
+  onNodeTimeout?: "pause" | "fail";
   /** Caller cancellation, independent of node and graph deadlines. */
   signal?: AbortSignal;
   /** Live observer. Throws/rejections are ignored; returned work is not awaited. */
@@ -437,10 +465,27 @@ export interface GraphUpdate {
   loops?: readonly LoopDefinition[];
   /** Resume these held or paused executions atomically with this update. */
   resume?: readonly string[];
+  /** Applies to the paused executions in `resume`. Requires `resume`. */
+  resumeOptions?: ResumeOptions;
 }
 
 export interface PauseOptions {
   /** Recorded on the suspension or hold and its events. Default: "caller". */
+  source?: string;
+}
+
+export interface ResumeOptions {
+  /**
+   * New node time budget for each resumed pausing or suspended execution, counted
+   * in active time from when it gets a slot. Infinity removes the node timeout.
+   * Without it, a node timeout pause gets the run's nodeTimeoutMs again, and other
+   * pauses keep their remaining budget. Held executions have settled and ignore it.
+   */
+  nodeTimeoutMs?: number;
+}
+
+export interface CancelExecutionsOptions {
+  /** Recorded in the error message. Default: "caller". */
   source?: string;
 }
 
@@ -468,7 +513,7 @@ export interface BraidRun {
   snapshot(): BraidSnapshot;
   update(update: GraphUpdate): BraidSnapshot;
   /** Release held executions, or resume paused ones. Resuming a still-pausing execution withdraws the request. */
-  resume(executionIds: readonly string[], expectedRevision: number): BraidSnapshot;
+  resume(executionIds: readonly string[], expectedRevision: number, options?: ResumeOptions): BraidSnapshot;
   /** Suspend running executions at their runner's next checkpoint. Requires a pausable runner. */
   pause(executionIds: readonly string[], options?: PauseOptions): BraidSnapshot;
   /**
@@ -480,5 +525,12 @@ export interface BraidRun {
   pauseRun(options?: PauseOptions): BraidSnapshot;
   /** Admit executions again and resume the executions that pauseRun paused. */
   resumeRun(): BraidSnapshot;
+  /** Cancel the whole run. */
   cancel(): void;
+  /**
+   * Fail running executions, including paused ones, without cancelling the run.
+   * Successors follow the usual failure semantics. A node timeout pause fails with
+   * NODE_TIMEOUT, anything else with CANCELLED.
+   */
+  cancelExecutions(executionIds: readonly string[], options?: CancelExecutionsOptions): BraidSnapshot;
 }

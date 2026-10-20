@@ -4,6 +4,15 @@
 
 ### Breaking changes
 
+- `startBraid` pauses an execution that exceeds `nodeTimeoutMs` instead of
+  failing it, when its runner is interruptible. This includes the
+  OpenAI-compatible adapter, so with core's default 60-second node timeout a
+  slow execution now waits to be resumed or cancelled, and a run that never does
+  ends with `GRAPH_TIMEOUT`. Pass `onNodeTimeout: "fail"` to keep the old
+  behavior. `braid()`, custom runners that are not interruptible, and Pi and DSH
+  jobs without a `nodeTimeoutMs` are unchanged. See
+  [compatibility](docs/compatibility.md#pausing-on-node-timeout-unreleased)
+  ([#68](https://github.com/Epsirom/braid/issues/68)).
 - The deprecated Pi session command `/braid:blocking` is removed. Blocking mode
   is still available through the deprecated `--braid-blocking` flag until 0.5.0;
   print and JSON runs already wait for background jobs, so drop the command to
@@ -48,6 +57,20 @@
   `braid_resume` (remove the hold), plus panel controls (Pi `/braid` key `h`;
   DSH **Hold result when finished** and **Remove hold**). Holds made by the user
   reach the parent as notices, like pauses.
+- A node timeout pauses the execution instead of failing it
+  ([#68](https://github.com/Epsirom/braid/issues/68)). Core interrupts the
+  current model request or tool call and suspends the execution with its
+  conversation, workspace, and tool budgets; the interrupted step is recorded in
+  the conversation. Resume it with a new time budget
+  (`resume(ids, revision, { nodeTimeoutMs })` or `update({ resume, resumeOptions })`;
+  by default it gets `nodeTimeoutMs` again), or fail only that execution with the
+  new `BraidRun.cancelExecutions`. Set `onNodeTimeout: "fail"` to fail instead.
+  Runners opt in with `interruptible: true` and `request.stepSignal()`; the Pi,
+  DSH, and OpenAI-compatible runners do. In Pi and DSH, a timeout pause wakes the
+  parent with a reminder that says how long the execution ran, what it was
+  doing, and how to resume or cancel it; `braid_cancel` takes `executionIds`,
+  `braid_resume` takes `nodeTimeoutMs`, and the panels can cancel a single
+  execution (Pi `/braid` key `x`; DSH **Cancel this execution**).
 
 ### Fixes
 
