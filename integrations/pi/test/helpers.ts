@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { initTheme, type ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,7 +44,7 @@ export function response(output = "done"): AssistantMessage {
 }
 
 export function context(
-  complete: (signal: AbortSignal) => Promise<AssistantMessage>,
+  complete: (signal: AbortSignal, request: Context) => Promise<AssistantMessage>,
 ): ExtensionToolContext {
   const model = { provider: "fake", id: "model", contextWindow: 100_000 };
   return {
@@ -60,9 +60,9 @@ export function context(
       find: () => model,
       complete: (
         _model: unknown,
-        _context: unknown,
+        request: Context,
         options: { signal: AbortSignal },
-      ) => complete(options.signal),
+      ) => complete(options.signal, request),
     },
   } as unknown as ExtensionToolContext;
 }

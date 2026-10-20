@@ -83,6 +83,22 @@ export interface Completion {
   iteration?: number;
   paused?: boolean;
   sequence?: number;
+  /** The execution asked for a replan; its result is held for the parent. */
+  replanRequested?: boolean;
+}
+
+/** A running execution asked the parent to replan; its result will be held when it finishes. */
+export interface ReplanNotice {
+  jobId: string;
+  handle: string;
+  nodeId: string;
+  executionId: string;
+  iteration?: number;
+  reason: string;
+  /** The node suggested a graph edit, readable with braid_status. */
+  suggested: boolean;
+  /** Identifies this request within the job; a repeated request is a new one. */
+  sequence: number;
 }
 
 /** One manager per live DSH agent; foreground cancellation never owns these runs. */
@@ -98,6 +114,7 @@ export class BraidJobs {
     private notify: (completion: Completion) => void = () => {},
     private onControl: (notice: ControlNotice) => void = () => {},
     private onTimeoutPause: (pause: TimeoutPause) => void = () => {},
+    private onReplanRequested: (notice: ReplanNotice) => void = () => {},
   ) {}
 
   /** The parent made the change itself; anyone else's change becomes a notice for it. */
@@ -182,6 +199,15 @@ export class BraidJobs {
   }
 
   private onEvent(jobId: string, handle: string, event: ExecutionEvent): void {
+    // A replan request wakes the parent now, while the node keeps working.
+    if (event.type === "replan_requested" && event.executionId && !this.disposed) {
+      try {
+        this.onReplanRequested({ jobId, handle, nodeId: event.nodeId, executionId: event.executionId,
+          ...(event.iteration === undefined ? {} : { iteration: event.iteration }),
+          reason: event.reason, suggested: event.suggestion !== undefined, sequence: event.sequence });
+      } catch { /* Notification failures cannot fail jobs. */ }
+      return;
+    }
     if (!["execution_paused", "node_completed", "node_failed"].includes(event.type) || !event.executionId) return;
     const state = this.jobs.get(jobId)?.run.snapshot();
     const node = state?.executions[event.executionId];
@@ -189,7 +215,8 @@ export class BraidJobs {
     const paused = event.type === "execution_paused";
     if (!paused && (!node.node.notifyOnCompletion || (node.holdAfter && !state?.error))) return;
     this.remind({ jobId, handle, status: node.status, executionId: node.executionId, nodeId: node.id,
-      ...(node.iteration === undefined ? {} : { iteration: node.iteration }), paused, sequence: event.sequence });
+      ...(node.iteration === undefined ? {} : { iteration: node.iteration }), paused, sequence: event.sequence,
+      ...(node.replan ? { replanRequested: true } : {}) });
   }
 
   /** A timeout pause always wakes the parent, which must resume or cancel it. */

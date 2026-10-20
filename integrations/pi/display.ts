@@ -396,6 +396,7 @@ function eventText(event: ExecutionEvent): string {
     case "execution_suspended": return `suspended · ${compact(event.nodeId, 40)} · by ${compact(formatPauseSource(event.source), 20)}`;
     case "execution_hold_added": return `hold added · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
     case "execution_hold_removed": return `hold removed · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
+    case "replan_requested": return `replan requested · ${compact(event.nodeId, 40)}: ${compact(event.reason, 64)}`;
     case "graph_paused": return `job paused · by ${compact(event.source, 20)}`;
     case "graph_resumed": return "job resumed";
     case "loop_started": return `loop ${compact(event.loopId, 40)} · iteration ${event.iteration}`;

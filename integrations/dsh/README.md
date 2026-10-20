@@ -265,6 +265,16 @@ released with the usual `braid_resume` or `braid_update` `resume`. The panel's
 **Hold result when finished** and **Remove hold** buttons do the same for the
 user, with the same notices to the parent.
 
+Execute and decision nodes have a `request_replan` tool. A node calls it when
+its findings make the planned work wrong, unnecessary, or insufficient, with a
+reason and optionally a suggested graph edit (`upsertNodes`, `removeNodeIds`,
+`addEdges`, `removeEdges`) that core checks against the current graph. Nodes
+cannot change the graph themselves. The parent gets a waking reminder at once;
+the node keeps working, and its result is held when it finishes, like
+`pauseAfter`. `braid_status` shows the reason and suggestion. The parent can stop
+other branches with `braid_pause`, then change the graph and release the node
+with `braid_update` and `resume`, keep the plan with `braid_resume`, or cancel.
+
 When an execution exceeds `options.nodeTimeoutMs`, it is paused instead of
 failed. Its current model request or shell command is stopped; the interrupted
 call, with any output it produced, and any calls after it in the same batch are

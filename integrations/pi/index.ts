@@ -16,7 +16,7 @@ import { registerBraidCommand, registerBraidWidget } from "./command.js";
 import { registerReviewCommand } from "./review.js";
 import { BRAID_DRAIN_GUIDANCE, BRAID_FINISH_GUIDANCE, isSingleShot, registerDrain } from "./drain.js";
 import { renderGraphCall, renderGraphResult, renderNodeResult } from "./display.js";
-import { formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatReceipt, formatResume, formatTimeoutPause, formatUpdate } from "./status-text.js";
+import { formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatReceipt, formatReplanRequest, formatResume, formatTimeoutPause, formatUpdate } from "./status-text.js";
 
 const text = (description?: string) => Type.String({ minLength: 1, pattern: "\\S", ...(description ? { description } : {}) });
 const prompt = () => Type.Union([
@@ -127,7 +127,8 @@ export const BRAID_ASYNC_GUIDANCE =
   "Use braid_pause to stop running executions temporarily (each stops before its next model request and keeps its conversation and workspace), or the whole job; send them a message or adjust the graph, then resume. " +
   "pauseAfter is captured when an execution starts; to review a running execution's result before downstream work starts, use braid_pause({jobId, executionIds, after: true}) instead, and braid_resume({jobId, executionIds, after: true}) removes that hold. " +
   "The user can also pause and resume from /braid; you get a notice with your next turn. Do not resume work the user paused unless the user asks. " +
-  "When an execution exceeds its nodeTimeoutMs it is paused, not failed, and you get a reminder: resume it with braid_resume (optionally a new nodeTimeoutMs), or fail only that execution with braid_cancel and executionIds.";
+  "When an execution exceeds its nodeTimeoutMs it is paused, not failed, and you get a reminder: resume it with braid_resume (optionally a new nodeTimeoutMs), or fail only that execution with braid_cancel and executionIds. " +
+  "Execute and decision nodes can call request_replan when their findings make the planned work wrong, unnecessary, or insufficient. You get a reminder at once; the node keeps working and its result is held when it finishes. Change the graph and release it with braid_update and resume, keep the plan with braid_resume, or cancel; until then the job waits.";
 
 /** Short reminder repeated in every submission receipt. */
 export const BRAID_WAIT_REMINDER =
@@ -195,7 +196,7 @@ export function createBraidTools(jobs: BraidJobs) {
         "Use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. The user does not need to mention Braid or design the graph.",
         "Do not use braid for simple one-step answers or trivial direct edits. Let writable nodes run shell commands and tests for their work; use merge nodes to combine and validate snapshots before explicit integration.",
         BRAID_FILESYSTEM_GUIDANCE,
-        "Decision nodes additionally receive decide. Nodes cannot call recursive Braid.",
+        "Decision nodes additionally receive decide. Execute and decision nodes can call request_replan to ask you to change the plan; they cannot change the graph themselves. Nodes cannot call recursive Braid.",
         "Leave maxToolRounds, maxToolCalls, nodeTimeoutMs, graphTimeoutMs, and onNodeTimeout unset unless the user asks for limits: tool and time budgets are unlimited by default, which suits background work. When limits are set, nodes receive system reminders of their remaining budgets before each model call, and a node timeout pauses the execution and sends you a reminder to resume it with more time or cancel it.",
       ],
       parameters: braidParameters,
@@ -517,13 +518,13 @@ export default function braidExtension(pi: ExtensionAPI) {
     pending.set(reminderId, message);
     remind(message);
   }, (completion) => {
-    const { jobId, handle, nodeId, executionId, status, eventSequence, errorCode, paused, iteration } = completion;
+    const { jobId, handle, nodeId, executionId, status, eventSequence, errorCode, paused, iteration, replanRequested } = completion;
     const reminderId = JSON.stringify([jobId, "execution", executionId, eventSequence]);
     const lookup = JSON.stringify({ jobId: handle, executionId });
     const message = {
       customType: "braid-node-completed",
       display: true,
-      content: `[system-reminder] Braid job ${handle} node ${JSON.stringify(nodeId)} execution ${executionId}${iteration ? ` (iteration ${iteration})` : ""} finished with status ${status}${errorCode ? ` (${errorCode})` : ""}. Retrieve its output or error with braid_status(${lookup}) and continue the original task. ${paused ? "Outgoing scheduling was paused at completion. Inspect the current status, revision, and pausedExecutionIds; if this execution is still paused, use braid_update with resume or braid_resume to continue. Independent branches may still be running. A finalized job cannot be resumed." : "This execution reminder does not pause downstream scheduling; the job may still be running."} [/system-reminder]`,
+      content: `[system-reminder] Braid job ${handle} node ${JSON.stringify(nodeId)} execution ${executionId}${iteration ? ` (iteration ${iteration})` : ""} finished with status ${status}${errorCode ? ` (${errorCode})` : ""}.${replanRequested ? " It asked you to replan; braid_status shows its request." : ""} Retrieve its output or error with braid_status(${lookup}) and continue the original task. ${paused ? "Outgoing scheduling was paused at completion. Inspect the current status, revision, and pausedExecutionIds; if this execution is still paused, use braid_update with resume or braid_resume to continue. Independent branches may still be running. A finalized job cannot be resumed." : "This execution reminder does not pause downstream scheduling; the job may still be running."} [/system-reminder]`,
       details: { ...completion, reminderId },
     };
     pending.set(reminderId, message);
@@ -538,13 +539,23 @@ export default function braidExtension(pi: ExtensionAPI) {
     };
     pending.set(reminderId, message);
     remind(message);
+  }, (notice) => {
+    const reminderId = JSON.stringify([notice.jobId, "replan", notice.executionId, notice.eventSequence]);
+    const message = {
+      customType: "braid-replan-requested",
+      display: true,
+      content: `[system-reminder] ${formatReplanRequest(notice)} [/system-reminder]`,
+      details: { ...notice, reminderId },
+    };
+    pending.set(reminderId, message);
+    remind(message);
   });
   // Foreground cancellation can discard queued steering. Retry only reminders
   // that never entered context, once Pi has settled and emptied its queues.
   pi.on("message_start", (event) => {
     const message = event.message;
     if (message.role === "custom" &&
-        (message.customType === "braid-completed" || message.customType === "braid-node-completed" || message.customType === "braid-node-timeout")) {
+        ["braid-completed", "braid-node-completed", "braid-node-timeout", "braid-replan-requested"].includes(message.customType)) {
       const details = message.details as { reminderId?: string } | undefined;
       if (details?.reminderId) pending.delete(details.reminderId);
     }

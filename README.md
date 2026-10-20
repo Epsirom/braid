@@ -342,7 +342,9 @@ Nodes are mutable definitions; execution instances retain captured prompts and
 inputs. `startBraid` exposes revision-checked `update`, `resume`, `snapshot`, and
 `cancel`, plus `pause`/`pauseRun`/`resumeRun` to suspend running executions at
 their next model request without losing their work, and `holdAfter` to hold a
-running execution's result once it settles. Updates can change running nodes, completed nodes, edges, templates, and
+running execution's result once it settles. Execute and decision nodes can call
+`request.requestReplan` to ask the graph owner to change the plan; it holds their
+result and never edits the graph itself. Updates can change running nodes, completed nodes, edges, templates, and
 loop topology at any time before finalization. Completion uses the latest graph.
 See [loops and live updates](docs/execution-control.md) for schemas and examples.
 
@@ -364,7 +366,8 @@ human message to a running worker. Instance events carry `executionId`, admissio
 
 `loop_started`/`loop_completed` report rounds. `execution_paused` and
 `execution_resumed` report gates, and `execution_hold_added`/`execution_hold_removed`
-changes to a running execution's hold; `execution_suspending`/`execution_suspended`
+changes to a running execution's hold; `replan_requested` reports a node asking
+its graph owner to replan; `execution_suspending`/`execution_suspended`
 report pauses of running executions, and `graph_paused`/`graph_resumed` pauses
 of the whole run. `graph_completed` or `graph_failed` terminates
 the log. Completion/failure is published after checkpointing. Node events repeat

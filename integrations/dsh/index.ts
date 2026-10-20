@@ -9,7 +9,7 @@ import type { BraidInput } from "@chrok/braid";
 import { assertCoreVersion } from "./core-version.js";
 import { BraidJobs, type ControlNotice, type JobOptions, type JobSnapshot } from "./jobs.js";
 import { createBraidTools } from "./tools.js";
-import { formatControlNotice, formatJobList, formatReceipt, formatTimeoutPause } from "./status-text.js";
+import { formatControlNotice, formatJobList, formatReceipt, formatReplanRequest, formatTimeoutPause } from "./status-text.js";
 import { BRAID_USAGE_GUIDANCE, BRAID_WAIT_REMINDER } from "./schema.js";
 import { renderPanel } from "./display.js";
 import { BraidPanel } from "./panel.js";
@@ -72,13 +72,13 @@ export function apply(ctx: Context): void {
     if (existing) return existing;
     const pending = new Map<string, UserMessage>();
     const jobs = new BraidJobs(ctx.llm, completion => {
-      const { jobId, handle, status, executionId, nodeId, paused, sequence } = completion;
+      const { jobId, handle, status, executionId, nodeId, paused, sequence, replanRequested } = completion;
       const reminderId = JSON.stringify([jobId, executionId ?? "job", sequence ?? 0]);
       const lookup = JSON.stringify({ jobId: handle, ...(executionId ? { executionId } : {}) });
       const summary = `Braid ${handle}${nodeId ? ` / ${nodeId}` : ""}: ${paused ? "paused" : status}`.slice(0, 120);
       const message = createUserMessage({
         source: { kind: "braid", reminderId, form: "notice", summary },
-        content: [{ type: "text", text: `[system-reminder] ${summary}. Retrieve results with braid_status(${lookup}) and continue the original task. Failed or cancelled jobs may contain successful partial results. ${paused ? "Outgoing scheduling was paused. Inspect CURRENT execution.revision and pausedExecutionIds before braid_update with resume or braid_resume. Deadlines continue; finalized jobs cannot resume." : "This reminder does not pause scheduling."} [/system-reminder]` }],
+        content: [{ type: "text", text: `[system-reminder] ${summary}.${replanRequested ? " It asked you to replan; braid_status shows its request." : ""} Retrieve results with braid_status(${lookup}) and continue the original task. Failed or cancelled jobs may contain successful partial results. ${paused ? "Outgoing scheduling was paused. Inspect CURRENT execution.revision and pausedExecutionIds before braid_update with resume or braid_resume. Deadlines continue; finalized jobs cannot resume." : "This reminder does not pause scheduling."} [/system-reminder]` }],
       });
       pending.set(reminderId, message); send(agent, message);
     }, notice => { noteControl(agent, notice); }, pause => {
@@ -87,6 +87,14 @@ export function apply(ctx: Context): void {
       const message = createUserMessage({
         source: { kind: "braid", reminderId, form: "notice", summary: `Braid ${pause.handle} / ${pause.nodeId}: paused by node timeout`.slice(0, 120) },
         content: [{ type: "text", text: `[system-reminder] ${formatTimeoutPause(pause)} [/system-reminder]` }],
+      });
+      pending.set(reminderId, message); send(agent, message);
+    }, notice => {
+      // Like a timeout pause, a replan request wakes the parent: only it can change the plan.
+      const reminderId = JSON.stringify([notice.jobId, "replan", notice.executionId, notice.sequence]);
+      const message = createUserMessage({
+        source: { kind: "braid", reminderId, form: "notice", summary: `Braid ${notice.handle} / ${notice.nodeId}: replan requested`.slice(0, 120) },
+        content: [{ type: "text", text: `[system-reminder] ${formatReplanRequest(notice)} [/system-reminder]` }],
       });
       pending.set(reminderId, message); send(agent, message);
     });

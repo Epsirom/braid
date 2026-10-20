@@ -258,6 +258,16 @@ Pause reminders describe the event when it occurred: check current status and
 paused IDs before attempting an update/resume, since the job can time out or be
 cancelled before the parent handles the reminder.
 
+Execute and decision nodes have a `request_replan` tool. A node calls it when
+its findings make the planned work wrong, unnecessary, or insufficient, with a
+reason and optionally a suggested graph edit (`upsertNodes`, `removeNodeIds`,
+`addEdges`, `removeEdges`) that core checks against the current graph. Nodes
+cannot change the graph themselves. The parent gets a waking reminder at once;
+the node keeps working, and its result is held when it finishes, like
+`pauseAfter`. `braid_status` shows the reason and suggestion. The parent can stop
+other branches with `braid_pause`, then change the graph and release the node
+with `braid_update` and `resume`, keep the plan with `braid_resume`, or cancel.
+
 Focused `braid_status` reads also start with the current control fields: graph
 status, revision, and paused execution IDs. Use that current revision for
 updates even when inspecting an older invocation.

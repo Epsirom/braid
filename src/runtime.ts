@@ -17,6 +17,8 @@ import type {
   NodeWorkspace,
   PauseOptions,
   PredecessorOutput,
+  ReplanInput,
+  ReplanSuggestion,
   ResumeOptions,
   CancelExecutionsOptions,
 } from "./types.js";
@@ -219,6 +221,7 @@ async function runNode(
   fail: (error: ExecutionError, infrastructure?: boolean) => void,
   suspension: SuspensionControl,
   onNodeTimeout: "pause" | "fail",
+  requestReplan: ((request: ReplanInput) => void) | undefined,
 ): Promise<void> {
   result.status = "running";
   result.startedAt = Date.now();
@@ -263,6 +266,7 @@ async function runNode(
   let merge: Awaited<ReturnType<GitWorkspaces["beginMerge"]>> | undefined;
   let acceptingDecisions = true;
   let acceptingHumanInput = true;
+  let acceptingReplans = true;
   let decision: string | undefined;
   let decisionError: RunError | undefined;
   // Capture choices separately: the runner cannot change the declared tool enum.
@@ -287,6 +291,12 @@ async function runNode(
     (result.humanInputs ??= []).push({ text, timestamp: Date.now() });
     log.emit({ type: "human_input", nodeId: result.id, text });
   };
+  if (requestReplan) {
+    invocation.requestReplan = request => {
+      if (!acceptingReplans || signal.aborted) throw new Error("Node has finished; a replan can no longer be requested");
+      requestReplan(request);
+    };
+  }
   if (Number.isFinite(timeoutMs) || Number.isFinite(graphDeadline)) {
     invocation.deadlines = {
       ...(Number.isFinite(timeoutMs) ? { node: started + timeoutMs } : {}),
@@ -421,6 +431,7 @@ async function runNode(
     ]);
     acceptingDecisions = false;
     acceptingHumanInput = false;
+    acceptingReplans = false;
     acceptingCheckpoints = false;
     checkDeadline();
     checkResponse(response);
@@ -442,6 +453,7 @@ async function runNode(
   } finally {
     acceptingDecisions = false;
     acceptingHumanInput = false;
+    acceptingReplans = false;
     acceptingWrites = false;
     acceptingCheckpoints = false;
     suspension.finished();
@@ -771,6 +783,31 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       },
     };
   }
+  const suggestionFields = ["upsertNodes", "removeNodeIds", "addEdges", "removeEdges"];
+  /** Record a node's request to replan and hold its result for the graph owner. */
+  function requestReplan(record: NodeExecution, request: ReplanInput) {
+    assertActive();
+    if (!request || typeof request !== "object" || Object.keys(request).some(key => key !== "reason" && key !== "suggestion"))
+      throw new TypeError("A replan request has only reason and an optional suggestion");
+    if (typeof request.reason !== "string" || !request.reason.trim()) throw new TypeError("Replan reason must be a non-empty string");
+    const suggestion = request.suggestion === undefined ? undefined : structuredClone(request.suggestion);
+    if (suggestion !== undefined) {
+      if (!suggestion || typeof suggestion !== "object" || Array.isArray(suggestion) || !Object.keys(suggestion).length ||
+          Object.keys(suggestion).some(key => !suggestionFields.includes(key)))
+        throw new TypeError(`A replan suggestion needs at least one of ${suggestionFields.join(", ")}, and nothing else`);
+      try { candidateGraph(suggestion); }
+      catch (error) { throw new TypeError(`Invalid replan suggestion at revision ${revision}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    const requestedAt = Date.now();
+    record.replan = { reason: request.reason, ...(suggestion ? { suggestion } : {}), revision, requestedAt };
+    // A hold the parent already placed, or the definition's pauseAfter, keeps its source.
+    if (!record.holdAfter) {
+      record.holdAfter = { source: "replan", requestedAt };
+      log.emit({ type: "execution_hold_added", nodeId: record.id, source: "replan", ...context(record) });
+    }
+    log.emit({ type: "replan_requested", nodeId: record.id, reason: request.reason,
+      ...(suggestion ? { suggestion: structuredClone(suggestion) } : {}), ...context(record) });
+  }
   function reconcileLoops(previousGraph?: Graph) {
     // Preserve the already admitted activation when an edit moves a definition
     // between scopes. Keep removed members until their original round drains.
@@ -803,28 +840,25 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   }
   reconcileLoops();
 
-  function update(patch: GraphUpdate): BraidSnapshot {
-    assertMutable(patch.expectedRevision);
-    const allowed = ["expectedRevision", "upsertNodes", "removeNodeIds", "addEdges", "removeEdges", "promptTemplates", "loops", "resume", "resumeOptions"];
-    if (Object.keys(patch).some(key => !allowed.includes(key))) throw new TypeError("Unknown graph update field");
-    for (const key of ["upsertNodes", "removeNodeIds", "addEdges", "removeEdges", "loops", "resume"] as const)
-      if (patch[key] !== undefined && !Array.isArray(patch[key])) throw new TypeError(`${key} must be an array`);
+  /** Validate a graph edit against the current graph without applying it. */
+  function candidateGraph(patch: GraphUpdate | ReplanSuggestion): { candidate: BraidInput; compiled: Graph } {
+    const edit = patch as GraphUpdate;
+    for (const key of ["upsertNodes", "removeNodeIds", "addEdges", "removeEdges", "loops"] as const)
+      if (edit[key] !== undefined && !Array.isArray(edit[key])) throw new TypeError(`${key} must be an array`);
     if (patch.removeNodeIds?.some(id => typeof id !== "string" || !id.trim())) throw new TypeError("removeNodeIds must contain non-empty node IDs");
     for (const edge of patch.removeEdges ?? []) {
       if (!edge || typeof edge !== "object" || !edge.from || !edge.to ||
           Object.entries(edge).some(([key, value]) => !["from", "to", "choice", "feedback", "executionId"].includes(key) || typeof value !== "string" || !value.trim()))
         throw new TypeError("removeEdges must contain complete edge identities");
     }
-    if (patch.resumeOptions !== undefined && !patch.resume?.length) throw new TypeError("resumeOptions requires resume");
-    validateResume(patch.resume ?? [], patch.resumeOptions);
     const removed = new Set(patch.removeNodeIds ?? []);
     const nodes = new Map(definition.nodes.filter(node => !removed.has(node.id)).map(node => [node.id, node]));
     for (const node of patch.upsertNodes ?? []) nodes.set(node.id, node);
     const removedEdges = new Set((patch.removeEdges ?? []).map(edgeKey));
     const edges = definition.edges.filter(edge => !removed.has(edge.from) && !removed.has(edge.to) && !removedEdges.has(edgeKey(edge)));
     const candidate: BraidInput = structuredClone({ ...definition, nodes: [...nodes.values()], edges: [...edges, ...(patch.addEdges ?? [])],
-      ...(patch.promptTemplates !== undefined ? { promptTemplates: patch.promptTemplates } : {}),
-      ...(patch.loops !== undefined ? { loops: patch.loops } : {}) });
+      ...(edit.promptTemplates !== undefined ? { promptTemplates: edit.promptTemplates } : {}),
+      ...(edit.loops !== undefined ? { loops: edit.loops } : {}) });
     const compiled = compileGraph(candidate);
     for (const edge of compiled.edges) {
       if (!edge.executionId) continue;
@@ -833,6 +867,17 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       if (edge.choice && (record.node.type !== "decision" || !record.node.choices.includes(edge.choice)))
         throw new TypeError(`Invalid choice for execution '${edge.executionId}'`);
     }
+    return { candidate, compiled };
+  }
+
+  function update(patch: GraphUpdate): BraidSnapshot {
+    assertMutable(patch.expectedRevision);
+    const allowed = ["expectedRevision", "upsertNodes", "removeNodeIds", "addEdges", "removeEdges", "promptTemplates", "loops", "resume", "resumeOptions"];
+    if (Object.keys(patch).some(key => !allowed.includes(key))) throw new TypeError("Unknown graph update field");
+    if (patch.resume !== undefined && !Array.isArray(patch.resume)) throw new TypeError("resume must be an array");
+    if (patch.resumeOptions !== undefined && !patch.resume?.length) throw new TypeError("resumeOptions requires resume");
+    validateResume(patch.resume ?? [], patch.resumeOptions);
+    const { candidate, compiled } = candidateGraph(patch);
     const previousGraph = graph;
     definition = candidate;
     graph = compiled;
@@ -909,7 +954,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       await runNode(request, record, runner, nodeTimeoutMs, controller.signal, graphDeadline, scopedLog, workspaces, (error, infrastructure) => {
         if (infrastructure) controller.abort(new RunError(error.code, error.message));
         else if (record.node.requireSuccess) controller.abort(new RunError("REQUIRED_NODE_FAILED", `Required node '${record.id}' (${record.executionId}) failed: ${error.message}`));
-      }, suspensionControl(record), onNodeTimeout);
+      }, suspensionControl(record), onNodeTimeout,
+      record.node.type === "execute" || record.node.type === "decision" ? request => requestReplan(record, request) : undefined);
       if (record.holdAfter && !controller.signal.aborted) {
         paused.add(record.executionId);
         scopedLog.emit({ type: "execution_paused", nodeId: record.id });

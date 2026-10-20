@@ -132,6 +132,46 @@ current state changes nothing; otherwise `execution_hold_added` or
 suspension are independent: resuming a suspended execution keeps its hold, so a
 held result still needs a second resume once it settles.
 
+### Replan requests from a node
+
+A running node may learn that the plan around it is wrong: a sibling branch is
+unnecessary, two planned fixes share one root cause, or the approach does not
+work. Execute and decision nodes can ask the graph owner to replan. A node cannot
+change the graph itself; global changes stay with the owner, which sees the whole
+graph and the user's intent.
+
+```ts
+request.requestReplan!({
+  reason: "Both failures come from the cache key; fix-b is unnecessary",
+  suggestion: { removeNodeIds: ["fix-b"] }, // optional
+});
+```
+
+The call returns at once and the execution keeps running. Core records the
+request on the execution as `replan: { reason, suggestion?, revision, requestedAt }`
+and holds its result like `pauseAfter`: if the execution has no hold yet, it gets
+one with source `"replan"` (and an `execution_hold_added` event); an existing
+hold keeps its source. `replan_requested` carries the reason and suggestion.
+Calling again replaces the request without adding a second hold, and adds the
+hold again if the owner removed it.
+
+`suggestion` takes the graph-edit fields of a `GraphUpdate`: `upsertNodes`,
+`removeNodeIds`, `addEdges`, and `removeEdges`. Core validates it against the
+current graph, as `update` would, and throws the reason if it is invalid, so the
+node can fix or drop it. Nothing is applied: the owner applies a suggestion, as
+is or adapted, with an ordinary revision-checked `update`. A suggestion goes
+stale if the graph changes first; `update` then rejects the old revision as
+usual.
+
+The owner then decides with the usual controls. It can stop other branches with
+`pause` or `holdAfter`, change the graph and release the execution in one
+`update` with `resume`, keep the plan with `resume`, remove the hold early with
+`holdAfter(..., false)`, or cancel. Until then the run waits, as with any other
+hold. `requestReplan` is not offered to merge and integrate nodes, and it throws
+once the invocation has ended. The Pi and DSH workers expose it as the
+`request_replan` tool, and their parent agent gets a waking reminder as soon as
+a node calls it.
+
 ## Pausing running executions
 
 `pauseAfter` holds an execution after it finishes. To stop an execution while it
