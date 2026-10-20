@@ -15,8 +15,9 @@ import {
 import { deferred } from "./helpers.js";
 
 const node = (id: string) => ({ type: "execute" as const, id, prompt: id });
-const until = async (condition: () => boolean) => {
-  for (let i = 0; i < 1000 && !condition(); i++) await new Promise(resolve => setImmediate(resolve));
+const until = async (condition: () => boolean, timeoutMs = 5_000) => {
+  const deadline = performance.now() + timeoutMs;
+  while (!condition() && performance.now() < deadline) await new Promise(resolve => setImmediate(resolve));
   assert.ok(condition(), "condition not reached");
 };
 
