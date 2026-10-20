@@ -165,6 +165,45 @@ optional (omit both to resume a paused job) and still requires the revision with
 IDs. In Pi print mode, a stalled run now also covers suspended executions and
 paused jobs, and its cancellation message reads "paused work was never resumed".
 
+## Pausing on node timeout (unreleased)
+
+`startBraid` now pauses a timed-out execution instead of failing it when its
+runner is interruptible. This changes behavior in one case:
+
+- **`startBraid` with the OpenAI-compatible adapter.** Core's default
+  `nodeTimeoutMs` is 60 seconds, so a slow execution now pauses and waits to be
+  resumed or cancelled. A run that never resumes it ends with `GRAPH_TIMEOUT`
+  (5 minutes by default) instead of continuing past an optional `NODE_TIMEOUT`
+  failure; with an unlimited `graphTimeoutMs` it waits until it is resumed or
+  cancelled. To keep the old behavior, pass `onNodeTimeout: "fail"`.
+
+Nothing else changes by default:
+
+- `braid()` still fails on timeout, and rejects `onNodeTimeout: "pause"`.
+- Custom runners still fail on timeout until they set `interruptible: true` and
+  use `request.stepSignal()`. Runners that are only `pausable` are unaffected.
+- Pi and DSH keep an unlimited `nodeTimeoutMs` by default, so their jobs only
+  pause when `options.nodeTimeoutMs` is set. Pass `options.onNodeTimeout: "fail"`
+  to fail instead. Deprecated Pi blocking jobs always fail on timeout.
+- A runner that already returned its result keeps it under `"pause"`, even if
+  the node budget ran out before the result was checked; under `"fail"` it still
+  fails with `NODE_TIMEOUT`.
+
+TypeScript consumers may need small changes:
+
+- `BraidRun` adds `cancelExecutions`, and `resume` takes an optional third
+  `ResumeOptions` argument. Code that implements `BraidRun`, such as test fakes,
+  must supply the new method.
+- New optional members: `BraidOptions.onNodeTimeout`, `ModelRunner.interruptible`,
+  `ModelRequest.stepSignal`, `ExecutionSuspension.timeout`, and
+  `GraphUpdate.resumeOptions`. `execution_suspending` and `execution_suspended`
+  events can now carry `source: "node_timeout"`.
+
+In Pi and DSH, `braid_cancel` accepts optional `executionIds`, `braid_resume`
+accepts `nodeTimeoutMs`, `braid_update` accepts `resumeOptions`, and submissions
+accept `options.onNodeTimeout`. The `BraidJobs` constructors take a fourth
+callback for timeout pauses, and `ControlNotice.action` adds `"cancelled"`.
+
 ## Versioning
 
 Core, Pi, and DSH release together with matching versions. During 0.x, patch releases

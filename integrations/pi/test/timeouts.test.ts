@@ -16,7 +16,8 @@ for (const scenario of [
   },
   {
     name: "explicit node timeout applies",
-    options: { nodeTimeoutMs: 1_000 },
+    // Under "pause" a late result is kept; the pause path is covered in suspension.test.ts.
+    options: { nodeTimeoutMs: 1_000, onNodeTimeout: "fail" },
     error: "NODE_TIMEOUT",
   },
   {

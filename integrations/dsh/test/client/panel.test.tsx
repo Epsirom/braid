@@ -206,3 +206,23 @@ test("panel holds a running execution's result and removes the hold", async () =
     assert.deepEqual(h.controls[1], { sessionId: "owner-held", jobId: "uuid-a", action: "unhold", executionIds: ["review@1"], revision: 4 });
   } finally { await h.close(); fixture.job = saved; }
 });
+
+test("panel cancels one execution after confirmation and labels a node timeout pause", async () => {
+  const saved = structuredClone(fixture.job);
+  const job = fixture.job!;
+  job.pausedExecutionIds = [];
+  job.suspendedExecutionIds = ["review@1"];
+  job.executions = [{ id: "review", executionId: "review@1", revision: 3, status: "running", type: "execute",
+    suspension: { state: "suspended", source: "node_timeout", suspendedAt: 0, timeout: { nodeTimeoutMs: 60_000, activeMs: 61_200 } } }];
+  const h = await setup();
+  try {
+    await h.render();
+    assert.match(document.body.textContent!, /Suspended · paused by node timeout after 61.2s \(budget 60s\)/);
+    await h.click("Cancel this execution");
+    assert.equal(h.controls.length, 0, "the first click only asks for confirmation");
+    await h.click("Keep it");
+    await h.click("Cancel this execution");
+    await h.click("Confirm: cancel this execution");
+    assert.deepEqual(h.controls[0], { sessionId: "owner", jobId: "uuid-a", action: "cancel", executionIds: ["review@1"], revision: 4 });
+  } finally { await h.close(); fixture.job = saved; }
+});

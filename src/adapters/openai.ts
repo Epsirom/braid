@@ -1,5 +1,6 @@
 import type { GitResult, ModelResponse, ModelRunner, TokenUsage } from "../types.js";
 import { formatBudgetReminder } from "../budgets.js";
+import { isStepInterrupted, notRunToolResult } from "../interruption.js";
 import { gitToolDefinition, finishMergeToolDefinition, mergeInstructions, parseGitToolArguments, parseFinishMergeArguments } from "../merge-tools.js";
 
 export interface OpenAICompatibleOptions {
@@ -168,8 +169,18 @@ export function createOpenAICompatibleRunner(
     const systemPrompt = messages[0]!.content as string;
     let usage: TokenUsage | undefined;
     const complete = async (withTool: boolean): Promise<Completion> => {
-      // A pause takes effect here, between requests.
-      await request.checkpoint?.();
+      while (true) {
+        // A pause takes effect here, between requests.
+        await request.checkpoint?.();
+        const step = request.stepSignal?.() ?? request.signal;
+        try { return await attempt(withTool, step); }
+        catch (error) {
+          // A node timeout pause interrupted the request: send it again after the checkpoint.
+          if (!isStepInterrupted(request, step)) throw error;
+        }
+      }
+    };
+    const attempt = async (withTool: boolean, signal: AbortSignal): Promise<Completion> => {
       messages[0]!.content = systemPrompt + formatBudgetReminder(request);
       const response = await fetchImpl(url, {
         method: "POST",
@@ -177,7 +188,7 @@ export function createOpenAICompatibleRunner(
           "Content-Type": "application/json",
           ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         },
-        signal: request.signal,
+        signal,
         body: JSON.stringify({
           model,
           messages,
@@ -213,6 +224,12 @@ export function createOpenAICompatibleRunner(
         for (const call of last.toolCalls) {
           request.signal.throwIfAborted();
           let content: string;
+          // Git calls cannot be interrupted; once the step is interrupted, the rest of the batch is not run.
+          const step = request.stepSignal?.();
+          if (step && isStepInterrupted(request, step)) {
+            messages.push({ role: "tool", tool_call_id: call.id, content: notRunToolResult() });
+            continue;
+          }
           try {
             const args = JSON.parse(call.function.arguments) as Record<string, unknown>;
             if (call.function.name === "git" && request.git) {
@@ -290,5 +307,5 @@ export function createOpenAICompatibleRunner(
       ...(usage ? { usage } : {}),
     };
   };
-  return Object.assign(runner, { pausable: true });
+  return Object.assign(runner, { pausable: true, interruptible: true });
 }

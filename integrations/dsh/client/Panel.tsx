@@ -151,6 +151,13 @@ function ExecutionDetail({ api, sessionId, job, execution }: { api: PanelApi; se
   </>;
 }
 
+/** Who paused an execution; a node timeout pause also says how long it ran. */
+function pausedBy(suspension: NonNullable<PanelExecution["suspension"]>): string {
+  if (suspension.source !== "node_timeout") return `paused by ${suspension.source}`;
+  const seconds = (ms: number) => `${Math.round(ms / 100) / 10}s`;
+  return suspension.timeout ? `paused by node timeout after ${seconds(suspension.timeout.activeMs)} (budget ${seconds(suspension.timeout.nodeTimeoutMs)})` : "paused by node timeout";
+}
+
 function JobView({ job, api, sessionId, connected, act, busy, target }: { job: PanelJob; api: PanelApi; sessionId: string; connected: boolean; act: (action: "cancel" | "resume" | "pause" | "hold" | "unhold", ids: string[]) => void; busy: boolean; target: BraidNavigation | undefined }) {
   const [selected, setSelected] = useState(() => job.executions.find(e => e.executionId === target?.executionId)?.id
     ?? target?.nodeId ?? (target?.executionId ? "" : job.nodes[0]?.id ?? ""));
@@ -162,6 +169,8 @@ function JobView({ job, api, sessionId, connected, act, busy, target }: { job: P
   // pausing and suspended can be resumed; resuming is already waiting for a slot.
   const suspended = execution?.suspension && execution.suspension.state !== "resuming";
   const live = connected && !busy && job.status === "running";
+  // Cancelling one execution takes a second click on the same execution.
+  const [confirmCancel, setConfirmCancel] = useState("");
   return <>
     <div className="br-stats"><div><strong>{job.executions.filter(e => e.status === "completed").length}/{job.executions.length}</strong><span>Executions complete</span></div><div><strong>{number(job.usage.inputTokens)}</strong><span>Input tokens</span></div><div><strong>{number(job.usage.outputTokens)}</strong><span>Output tokens</span></div><div><strong>{number(job.usage.cacheReadTokens + job.usage.cacheWriteTokens)}</strong><span>Cache tokens</span></div></div>
     {job.error && <div className="br-notice" role="alert">{job.error}</div>}
@@ -173,7 +182,9 @@ function JobView({ job, api, sessionId, connected, act, busy, target }: { job: P
       {chosenExecution && !execution && <p role="status">The requested execution ({chosenExecution}) is no longer available. Select a node to inspect its current history.</p>}
       {executions.length > 0 ? <label><span className="br-muted">Execution history</span><select className="br-select" aria-label="Execution history" value={execution?.executionId ?? ""} onChange={e => setChosenExecution(e.target.value)}>{executions.map(e => <option key={e.executionId} value={e.executionId}>{e.executionId} · {e.status}{e.iteration === undefined ? "" : ` · iteration ${e.iteration}`}</option>)}</select></label> : <p className="br-muted">This node has not run yet.</p>}
       {paused && <button className="br-primary" disabled={!connected || busy || job.status !== "running"} onClick={() => act("resume", [execution!.executionId])}>Resume this execution</button>}
-      {execution?.suspension && <p className="br-note" role="status">{execution.suspension.state === "pausing" ? "Pausing: stops before its next model request; a running tool finishes first." : execution.suspension.state === "resuming" ? "Resumed; waiting for a free concurrency slot." : "Suspended"} · paused by {execution.suspension.source}</p>}
+      {execution?.suspension && <p className="br-note" role="status">{execution.suspension.state === "pausing"
+        ? execution.suspension.source === "node_timeout" ? "Node timeout: interrupting the current step, then pausing." : "Pausing: stops before its next model request; a running tool finishes first."
+        : execution.suspension.state === "resuming" ? "Resumed; waiting for a free concurrency slot." : "Suspended"} · {pausedBy(execution.suspension)}</p>}
       {execution?.status === "running" && (suspended
         ? <button className="br-primary" disabled={!live} onClick={() => act("resume", [execution.executionId])}>Resume this execution</button>
         : !execution.suspension && <button disabled={!live} onClick={() => act("pause", [execution.executionId])}>Pause this execution</button>)}
@@ -181,6 +192,9 @@ function JobView({ job, api, sessionId, connected, act, busy, target }: { job: P
       {execution?.status === "running" && (execution.holdAfter
         ? <button disabled={!live} onClick={() => act("unhold", [execution.executionId])}>Remove hold</button>
         : <button disabled={!live} onClick={() => act("hold", [execution.executionId])}>Hold result when finished</button>)}
+      {execution?.status === "running" && (confirmCancel === execution.executionId
+        ? <><button className="br-danger" disabled={!live} onClick={() => { setConfirmCancel(""); act("cancel", [execution.executionId]); }}>Confirm: cancel this execution</button><button disabled={!live} onClick={() => setConfirmCancel("")}>Keep it</button><p className="br-note">Only this execution fails; its successors follow the failure rules.</p></>
+        : <button className="br-danger" disabled={!live} onClick={() => setConfirmCancel(execution.executionId)}>Cancel this execution</button>)}
       <div className="br-tabs"><button aria-pressed={tab === "output"} onClick={() => setTab("output")}>Output & details</button><button aria-pressed={tab === "events"} onClick={() => setTab("events")}>Event log ({job.events.length})</button></div>
       {tab === "output" && execution && <ExecutionDetail key={execution.executionId} api={api} sessionId={sessionId} job={job} execution={execution}/>}
       {tab === "events" && <><p className="br-note">Latest 80 lifecycle events. Full results remain available through braid_status.</p><ol className="br-events">{[...job.events].reverse().map(event => <li key={event.sequence}><time>{new Date(event.timestamp).toLocaleTimeString([], { hour12: false })}</time><div><p>{event.message}</p><small>#{event.sequence}{event.nodeId ? ` · ${event.nodeId}` : ""}{event.executionId ? ` · ${event.executionId}` : ""}</small></div></li>)}</ol></>}

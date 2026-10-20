@@ -36,8 +36,8 @@ export function llm(respond: (options: GenerateOptions, index: number) => Stream
 export function payload(options: GenerateOptions) {
   return JSON.parse((options.messages[0]!.content[0] as { text: string }).text);
 }
-export async function until(check: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5000;
+export async function until(check: () => boolean, ms = 5000): Promise<void> {
+  const deadline = Date.now() + ms;
   while (!check()) {
     if (Date.now() > deadline) throw new Error("Test condition timed out");
     await new Promise(resolve => setTimeout(resolve, 5));

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { ExecutionActivityTracker, startBraid, validateGraph, type BraidInput, type ExecutionActivity, type ExecutionActivityPage, type BraidRun, type BraidResult, type BraidSnapshot, type GraphUpdate, type ExecutionEvent, type NodeResult } from "@chrok/braid";
+import { ExecutionActivityTracker, formatActivityStatus, startBraid, validateGraph, type BraidInput, type ExecutionActivity, type ExecutionActivityPage, type BraidRun, type BraidResult, type BraidSnapshot, type GraphUpdate, type ExecutionEvent, type NodeResult, type ResumeOptions } from "@chrok/braid";
 import type { TokenUsage } from "@deepseek-ai/dsh-llm";
 import { createDshRunner, sumUsage, validateBudgets, type NodeProgress, type DshLlm } from "./runner.js";
 
@@ -9,6 +9,8 @@ export interface JobOptions {
   maxExecutions?: number;
   nodeTimeoutMs?: number;
   graphTimeoutMs?: number;
+  /** Default "pause": a node timeout suspends the execution and wakes the parent. */
+  onNodeTimeout?: "pause" | "fail";
   maxToolRounds?: number;
   maxToolCalls?: number;
 }
@@ -44,12 +46,29 @@ interface Job {
   activity: ExecutionActivityTracker;
 }
 
-/** A pause, resume, or hold change someone other than the parent agent made, such as the user in the panel. */
+/** An execution the node timeout paused; the parent decides what happens next. */
+export interface TimeoutPause {
+  jobId: string;
+  handle: string;
+  nodeId: string;
+  executionId: string;
+  iteration?: number;
+  /** The node time budget that ran out. */
+  nodeTimeoutMs: number;
+  /** Time the execution ran, excluding earlier suspensions. */
+  activeMs: number;
+  /** Observed activity when the timeout fired. */
+  activity?: string;
+  /** Identifies this pause within the job; a later timeout of the same execution is a new one. */
+  sequence: number;
+}
+
+/** A pause, resume, hold change, or cancellation someone other than the parent agent made, such as the user in the panel. */
 export interface ControlNotice {
   jobId: string;
   handle: string;
   /** held/unheld: a hold on running executions' results was added or removed. */
-  action: "paused" | "resumed" | "held" | "unheld";
+  action: "paused" | "resumed" | "held" | "unheld" | "cancelled";
   /** Omitted for the whole job. */
   executions?: { executionId: string; nodeId: string }[];
   source: string;
@@ -78,6 +97,7 @@ export class BraidJobs {
     private llm: DshLlm,
     private notify: (completion: Completion) => void = () => {},
     private onControl: (notice: ControlNotice) => void = () => {},
+    private onTimeoutPause: (pause: TimeoutPause) => void = () => {},
   ) {}
 
   /** The parent made the change itself; anyone else's change becomes a notice for it. */
@@ -108,6 +128,8 @@ export class BraidJobs {
     const events: ExecutionEvent[] = [];
     const progress: Record<string, NodeProgress> = Object.create(null);
     const activity = new ExecutionActivityTracker({ onChange: () => this.changed() });
+    // What each execution was doing when its node timeout fired, for the reminder.
+    const timeoutActivity = new Map<string, string>();
     const invoke = createDshRunner(this.llm, { cwd: context.cwd, activity,
       ...(options.maxToolRounds === undefined ? {} : { maxToolRounds: options.maxToolRounds }),
       ...(options.maxToolCalls === undefined ? {} : { maxToolCalls: options.maxToolCalls }),
@@ -122,12 +144,22 @@ export class BraidJobs {
       runner: Object.assign(async (request: Parameters<typeof invoke>[0]) => {
         try { await nextTurn(); return await invoke(request); }
         finally { activity.workerFinished(request.execution.executionId); }
-      }, { pausable: invoke.pausable === true }),
+      }, { pausable: invoke.pausable === true, interruptible: invoke.interruptible === true }),
       onEvent: event => {
+        // Capture what the worker was doing before the interruption changes it.
+        if (event.type === "execution_suspending" && event.source === "node_timeout" && event.executionId) {
+          const current = activity.get(event.executionId);
+          if (current) timeoutActivity.set(event.executionId, formatActivityStatus(current, event.timestamp));
+        }
         activity.observe(event);
         events.push(structuredClone(event));
         if (events.length > 80) events.shift();
         this.changed();
+        if (event.type === "execution_suspended" && event.source === "node_timeout" && event.executionId) {
+          const doing = timeoutActivity.get(event.executionId);
+          timeoutActivity.delete(event.executionId);
+          this.timedOut(jobId, handle, event, doing);
+        }
         this.onEvent(jobId, handle, event);
       },
     });
@@ -158,6 +190,18 @@ export class BraidJobs {
     if (!paused && (!node.node.notifyOnCompletion || (node.holdAfter && !state?.error))) return;
     this.remind({ jobId, handle, status: node.status, executionId: node.executionId, nodeId: node.id,
       ...(node.iteration === undefined ? {} : { iteration: node.iteration }), paused, sequence: event.sequence });
+  }
+
+  /** A timeout pause always wakes the parent, which must resume or cancel it. */
+  private timedOut(jobId: string, handle: string, event: ExecutionEvent & { type: "execution_suspended" }, activity: string | undefined): void {
+    const node = this.jobs.get(jobId)?.run.snapshot().executions[event.executionId!];
+    const timeout = node?.suspension?.timeout;
+    if (this.disposed || !node || !timeout) return;
+    try {
+      this.onTimeoutPause({ jobId, handle, nodeId: node.id, executionId: node.executionId,
+        ...(node.iteration === undefined ? {} : { iteration: node.iteration }),
+        nodeTimeoutMs: timeout.nodeTimeoutMs, activeMs: timeout.activeMs, ...(activity ? { activity } : {}), sequence: event.sequence });
+    } catch { /* Notification failures cannot fail jobs. */ }
   }
 
   private remind(completion: Completion): void {
@@ -199,9 +243,9 @@ export class BraidJobs {
   }
 
   /** Release held executions or resume paused ones. */
-  resume(id: string, executionIds: readonly string[], expectedRevision: number, source = "agent"): JobSnapshot {
+  resume(id: string, executionIds: readonly string[], expectedRevision: number, source = "agent", options?: ResumeOptions): JobSnapshot {
     const job = this.lookup(id);
-    job.run.resume(executionIds, expectedRevision);
+    job.run.resume(executionIds, expectedRevision, options);
     this.control(job, "resumed", source, executionIds);
     this.changed(); return this.get(id);
   }
@@ -237,6 +281,15 @@ export class BraidJobs {
     const job = this.lookup(id);
     if (job.status !== "running") return false;
     job.run.cancel(); return true;
+  }
+
+  /** Fail running or paused executions only; their successors follow the usual failure semantics. */
+  cancelExecutions(id: string, executionIds: readonly string[], source: string): JobSnapshot {
+    const job = this.lookup(id);
+    if (job.status !== "running") throw new Error("This run is no longer accepting updates");
+    job.run.cancelExecutions(executionIds, { source });
+    this.control(job, "cancelled", source, executionIds);
+    this.changed(); return this.get(id);
   }
 
   async wait(id: string): Promise<void> { await this.lookup(id).done; }

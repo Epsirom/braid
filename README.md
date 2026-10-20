@@ -286,6 +286,7 @@ length or token cap (see [resource limits](docs/resource-limits.md)).
 | `maxConcurrency` | `4` | Maximum simultaneous runtime-managed node invocations; positive integer |
 | `nodeTimeoutMs` | `60_000` | Separate deadline for each node, starting when it runs (not while queued or suspended) |
 | `graphTimeoutMs` | `300_000` | Whole execution deadline, including node queueing, paused gates, and suspensions; starts after validation |
+| `onNodeTimeout` | `"pause"` (`"fail"` in `braid()`) | `"pause"` suspends a timed-out execution with its work until it is resumed or cancelled (needs an interruptible runner); `"fail"` fails it with `NODE_TIMEOUT` |
 | `signal` | None | Caller cancellation signal; aborts running nodes and marks queued nodes cancelled |
 | `onEvent` | None | Live observer for graph/node creation, readiness, starts, handoffs, completions, skips, failures, and graph completion |
 
@@ -558,8 +559,13 @@ remain 60 seconds per node and 5 minutes per graph.
   timeout or provider error may leave billable usage unavailable.
 - `error`: one representative error when failed; `nodes` retains all errors.
 
-A node timeout marks the running node `failed: NODE_TIMEOUT`; unconditional
-successors can consume its error and partial workspace. A graph timeout marks running nodes `failed: GRAPH_TIMEOUT`,
+With `startBraid` and an interruptible runner (Pi, DSH, and the OpenAI-compatible
+adapter are), a node timeout pauses the execution instead: it keeps its work and
+its successors wait until it is resumed, with a new time budget, or cancelled with
+`cancelExecutions`. See [pausing on node timeout](docs/execution-control.md#pausing-on-node-timeout).
+Otherwise, and always with `braid()` or `onNodeTimeout: "fail"`, a node timeout
+marks the running node `failed: NODE_TIMEOUT`; unconditional successors can
+consume its error and partial workspace. A graph timeout marks running nodes `failed: GRAPH_TIMEOUT`,
 skips queued/pending nodes with `graph_timeout`, and retains already completed
 terminal outputs. Timers are cleared when no longer needed.
 

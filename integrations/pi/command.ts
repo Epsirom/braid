@@ -57,8 +57,10 @@ export class BraidPanel implements Component {
   private chatOffset = 0;
   private chatMaxOffset = 0;
   private chatScope: string | undefined;
-  /** The outcome of the last pause or resume key, until the next key. */
+  /** The outcome of the last pause, resume, or cancel key, until the next key. */
   private notice: string | undefined;
+  /** An execution x was pressed for once; a second x cancels it. */
+  private cancelling: string | undefined;
   private readonly input: Input;
   private readonly session: NodeSessionView;
   private readonly chat: NodeSessionView;
@@ -198,10 +200,10 @@ export class BraidPanel implements Component {
       ? ["Enter send   Esc stop or hide   Tab hide   PgUp/PgDn or wheel scroll   ctrl+c close",
         "Enter send · Esc hide · Tab hide", "Enter send · Tab hide"]
       : this.focus
-      ? [`${tab}Esc back   ←/→ executions   ↑/↓ scroll   End follow   ctrl+o tools   p pause   h hold   c cancel   q close`,
+      ? [`${tab}Esc back   ←/→ executions   ↑/↓ scroll   End follow   ctrl+o tools   p pause   h hold   x cancel execution   c cancel job   q close`,
         "Esc back · ←/→ executions · p pause · q close", "Esc back · q close"]
       : this.choosing !== undefined
-      ? [`${tab}↑/↓/←/→ choose node   Enter open session   p pause   h hold   Esc back   PgUp/PgDn page   q close`,
+      ? [`${tab}↑/↓/←/→ choose node   Enter open session   p pause   h hold   x cancel execution   Esc back   PgUp/PgDn page   q close`,
         "↑/↓ choose · Enter open · p pause · Esc back", "Enter open · Esc back"]
       : [`${tab}v select node   ←/→ jobs   ↑/↓ scroll   p pause job   c cancel   Esc close`,
         "v select node · ←/→ jobs · p pause job · Esc close", "v select · Esc close"];
@@ -443,6 +445,8 @@ export class BraidPanel implements Component {
     );
     const job = this.selected ? this.jobs.get(this.selected) : undefined;
     this.notice = undefined;
+    const confirming = this.cancelling;
+    this.cancelling = undefined;
     if (data === "p" && job) {
       this.togglePause(job);
       this.refresh();
@@ -450,6 +454,11 @@ export class BraidPanel implements Component {
     }
     if (data === "h" && job && (this.focus || this.choosing !== undefined)) {
       this.toggleHold(job);
+      this.refresh();
+      return;
+    }
+    if (data === "x" && job && (this.focus || this.choosing !== undefined)) {
+      this.cancelExecution(job, confirming);
       this.refresh();
       return;
     }
@@ -478,9 +487,7 @@ export class BraidPanel implements Component {
     const execution = job.execution;
     try {
       if (!execution || job.status !== "running") throw new Error("Only a running job can be paused");
-      const executionId = this.focus
-        ? "executionId" in this.focus ? this.focus.executionId : this.executionsOf(job, this.focus.nodeId).at(-1)
-        : this.choosing !== undefined ? this.executionsOf(job, this.choosing).at(-1) : undefined;
+      const executionId = this.executionInView(job);
       if (!this.focus && this.choosing === undefined) {
         if (execution.pause) { this.jobs.resumeJob(job.jobId, "user"); this.notice = "Job resumed"; }
         else { this.jobs.pause(job.jobId, undefined, "user"); this.notice = "Job paused · no new executions start; running ones stop before their next model request"; }
@@ -524,6 +531,34 @@ export class BraidPanel implements Component {
       }
     } catch (error) {
       this.notice = `Cannot hold or release: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  /** The open execution, or the selected node's latest one. */
+  private executionInView(job: JobSnapshot): string | undefined {
+    return this.focus
+      ? "executionId" in this.focus ? this.focus.executionId : this.executionsOf(job, this.focus.nodeId).at(-1)
+      : this.choosing !== undefined ? this.executionsOf(job, this.choosing).at(-1) : undefined;
+  }
+
+  /**
+   * x cancels the execution in view after a second x: only it fails, and its
+   * successors follow the usual failure rules. The parent agent gets a notice.
+   */
+  private cancelExecution(job: JobSnapshot, confirming: string | undefined): void {
+    try {
+      if (!job.execution || job.status !== "running") throw new Error("The job is not running");
+      const executionId = this.executionInView(job);
+      if (!executionId) throw new Error("This node has not run yet");
+      if (confirming !== executionId) {
+        this.cancelling = executionId;
+        this.notice = "Press x again to cancel this execution · it fails and its successors follow the failure rules";
+        return;
+      }
+      this.jobs.cancelExecutions(job.jobId, [executionId], "user");
+      this.notice = "Execution cancelled";
+    } catch (error) {
+      this.notice = `Cannot cancel: ${error instanceof Error ? error.message : String(error)}`;
     }
   }
 

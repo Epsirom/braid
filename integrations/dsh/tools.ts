@@ -4,10 +4,11 @@ import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { GraphUpdate } from "@chrok/braid";
 import { BRAID_ASYNC_GUIDANCE, braidParameters, nodeParameters, updateEdgeParameters, loopParameters } from "./schema.js";
 import type { BraidJobs, JobSnapshot } from "./jobs.js";
-import { boundedText, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUpdate } from "./status-text.js";
+import { boundedText, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUpdate } from "./status-text.js";
 
 const id = Type.String({ minLength: 1, pattern: "\\S" });
 const revision = Type.Integer({ minimum: 0 });
+const nodeTimeoutMs = Type.Number({ exclusiveMinimum: 0, maximum: 2_147_483_647, description: "New node time budget in milliseconds for the suspended executions, counted from when each continues. Default: a node timeout pause gets the job's nodeTimeoutMs again; other pauses keep their remaining budget." });
 /** Focused reads return the latest activity entries; activityBefore pages earlier ones. */
 export const STATUS_ACTIVITY_ENTRIES = 40;
 
@@ -89,8 +90,15 @@ export function createBraidTools(
       return { ...control(job), node: { id: node.id, executionId: node.executionId, status: node.status },
         ...await bounded(formatNodeStatus({ job, node, ...(activity ? { activity } : {}), now: Date.now() }), "node.txt") };
     }),
-    tool("braid_cancel", "Cancel a background job. Foreground cancellation does not stop Braid jobs.", Type.Object({ jobId: id }, { additionalProperties: false }), (args, context) => {
-      const jobs = getJobs(context), job = jobs.get(args.jobId);
+    tool("braid_cancel", "Cancel a background job. Foreground cancellation does not stop Braid jobs. With executionIds, fail only those running or paused executions and keep the job running: their successors follow the usual failure rules (unconditional edges receive the error; requireSuccess aborts the job). A node timeout pause fails with NODE_TIMEOUT, anything else with CANCELLED.", Type.Object({
+      jobId: id, executionIds: Type.Optional(Type.Array(id, { minItems: 1, uniqueItems: true })),
+    }, { additionalProperties: false }), (args, context) => {
+      const jobs = getJobs(context);
+      if (args.executionIds) {
+        const job = jobs.cancelExecutions(args.jobId, args.executionIds, "agent");
+        return { text: formatCancelExecutions(job, args.executionIds), ...control(job) };
+      }
+      const job = jobs.get(args.jobId);
       const cancelled = jobs.cancel(args.jobId);
       return { text: cancelled ? "Cancellation requested." : "Job has already finished.", jobId: job.handle, canonicalJobId: job.jobId, cancelled };
     }),
@@ -100,6 +108,7 @@ export function createBraidTools(
       addEdges: Type.Optional(Type.Array(updateEdgeParameters)), removeEdges: Type.Optional(Type.Array(updateEdgeParameters)),
       promptTemplates: Type.Optional(Type.Record(Type.String(), id)), loops: Type.Optional(Type.Array(loopParameters)),
       resume: Type.Optional(Type.Array(id, { uniqueItems: true })),
+      resumeOptions: Type.Optional(Type.Object({ nodeTimeoutMs: Type.Optional(nodeTimeoutMs) }, { additionalProperties: false })),
     }, { additionalProperties: false }), (args, context) => {
       const { jobId, ...patch } = args;
       let job: JobSnapshot;
@@ -107,18 +116,23 @@ export function createBraidTools(
       catch (error) { throw new Error(`Braid update rejected; no changes or resumes applied. ${error instanceof Error ? error.message : String(error)}. Retry the complete corrected patch with dependencies, loops, and resume IDs.`); }
       return { text: formatUpdate(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision, pausedExecutionIds: job.execution.pausedExecutionIds };
     }),
-    tool("braid_resume", "Release paused (pauseAfter) executions, or resume suspended ones in the same conversation, by execution ID at expectedRevision. Omit executionIds to resume a job paused with braid_pause; executions paused separately stay suspended. This does not reset budgets or the graph deadline. With after=true it instead removes the hold on still-running executions. Do not resume work the user paused or held unless the user asks.", Type.Object({
+    tool("braid_resume", "Release paused (pauseAfter) executions, or resume suspended ones in the same conversation, by execution ID at expectedRevision. Omit executionIds to resume a job paused with braid_pause; executions paused separately stay suspended. This does not reset tool budgets or the graph deadline. An execution paused by its node timeout gets the job's nodeTimeoutMs again, or nodeTimeoutMs if given; resuming the job does not resume it. With after=true it instead removes the hold on still-running executions. Do not resume work the user paused or held unless the user asks.", Type.Object({
       jobId: id, expectedRevision: Type.Optional(revision), executionIds: Type.Optional(Type.Array(id, { minItems: 1, uniqueItems: true })),
       after: Type.Optional(Type.Boolean({ description: "true: remove the hold that braid_pause after=true or pauseAfter put on these still-running executions, so their results go downstream when they finish. Requires executionIds; expectedRevision is not needed. A result that is already held is released without after." })),
+      nodeTimeoutMs: Type.Optional(nodeTimeoutMs),
     }, { additionalProperties: false }), (args, context) => {
       if (args.after) {
+        if (args.nodeTimeoutMs !== undefined) throw new Error("nodeTimeoutMs cannot be combined with after");
         const job = hold(getJobs(context), args.jobId, args.executionIds, false);
         return { text: formatHold(job, args.executionIds!, false), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision,
           pausedExecutionIds: job.execution.pausedExecutionIds, suspendedExecutionIds: job.execution.suspendedExecutionIds };
       }
       const jobs = getJobs(context);
       if (args.executionIds && args.expectedRevision === undefined) throw new Error("expectedRevision is required with executionIds; read it from braid_status");
-      const job = args.executionIds ? jobs.resume(args.jobId, args.executionIds, args.expectedRevision!) : jobs.resumeJob(args.jobId);
+      if (!args.executionIds && args.nodeTimeoutMs !== undefined) throw new Error("nodeTimeoutMs requires executionIds");
+      const job = args.executionIds
+        ? jobs.resume(args.jobId, args.executionIds, args.expectedRevision!, "agent", args.nodeTimeoutMs === undefined ? undefined : { nodeTimeoutMs: args.nodeTimeoutMs })
+        : jobs.resumeJob(args.jobId);
       return { text: formatResume(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision,
         pausedExecutionIds: job.execution.pausedExecutionIds, suspendedExecutionIds: job.execution.suspendedExecutionIds };
     }),

@@ -29,7 +29,8 @@ It registers:
 - `braid_update` / `braid_resume` — edit live definitions or release paused executions.
 - `braid_pause` — pause running executions, or the whole job, without losing their
   work; with `after: true`, hold a running execution's result once it finishes.
-- `braid_cancel` — cancel a job with `{ "jobId": "..." }`.
+- `braid_cancel` — cancel a job with `{ "jobId": "..." }`, or add
+  `"executionIds"` to fail only those executions.
 - `braid_finish` — print/JSON runs only: record the run outcome with
   `{ "status": "success" | "failure", "summary": "..." }`.
 - `/braid [jobId]` — open a live flow panel in interactive Pi.
@@ -326,6 +327,26 @@ The node timeout stops while an execution is suspended; the graph timeout keeps
 running. `braid_status` shows suspended executions, a job pause, and who paused
 them.
 
+### Node timeouts
+
+When an execution exceeds `options.nodeTimeoutMs`, it is paused instead of
+failed. Its current model request or shell command is stopped; the interrupted
+call, with any output it produced, and any calls after it in the same batch are
+recorded in its conversation. Its conversation, workspace, and tool budgets are
+kept, and its successors wait. The parent is woken with a reminder that says how
+long the execution ran, what it was doing, and what it can do next:
+
+- `braid_resume({jobId, expectedRevision, executionIds})` gives it the job's
+  `nodeTimeoutMs` again; add `nodeTimeoutMs` for a different budget.
+- `braid_update` with `resume` and `resumeOptions: { nodeTimeoutMs }` resumes it
+  together with graph changes.
+- `braid_cancel({jobId, executionIds})` fails only that execution with
+  `NODE_TIMEOUT`; its successors follow the usual failure rules.
+
+Resuming the whole job does not resume a timeout pause. Set
+`options.onNodeTimeout: "fail"` to fail on timeout instead. Deprecated blocking
+jobs always fail on timeout.
+
 Users can pause and hold from the panel too (`p` and `h`, below). The parent is not woken for
 that: one notice with the latest state per execution or job is added to its next
 turn, and it is told not to resume work the user paused unless the user asks.
@@ -359,9 +380,11 @@ and pass outputs downstream.
 Use Left/Right to select jobs, Up/Down or Page Up/Page Down to scroll, `c` to
 cancel the selected job, `p` to pause or resume it, and Escape or `q` to close the panel.
 In node selection or an open session, `p` pauses or resumes that node's latest
-execution instead; a suspended node shows `‖ PAUSED`. `h` holds that execution's
-result once it finishes, removes the hold if one is set (its status shows
-`· hold`), or releases a result that is already held. Closing the panel
+execution instead; a suspended node shows `‖ PAUSED`, and one paused by its node
+timeout also shows `timed out`. `h` holds that execution's result once it
+finishes, removes the hold if one is set (its status shows `· hold`), or
+releases a result that is already held. Press `x` twice there to cancel only
+that execution; the parent gets a notice with its next turn. Closing the panel
 leaves jobs running. In RPC or noninteractive modes, use `braid_status`.
 
 A flowchart wider than the terminal is cropped to the terminal width around the
@@ -661,7 +684,8 @@ pass any of these fields in the `braid` tool's `options`:
 | `maxToolRounds` | Maximum assistant responses containing tool calls, per node |
 | `maxToolCalls` | Maximum total requested tool calls, per node |
 | `maxModelRetries` | Retries per model request for transient provider errors; default 3, `0` disables, at most 10 |
-| `nodeTimeoutMs` | Time allowed for each node after it starts, in milliseconds |
+| `nodeTimeoutMs` | Active time allowed for each node after it starts, excluding pauses, in milliseconds |
+| `onNodeTimeout` | `pause` (default) suspends a timed-out node and wakes the parent; `fail` fails it with `NODE_TIMEOUT` |
 | `graphTimeoutMs` | Time allowed for the entire graph, including queueing and pauses, in milliseconds |
 | `maxExecutions` | Total materialized execution records, including skips; default 1000, positive safe integer |
 

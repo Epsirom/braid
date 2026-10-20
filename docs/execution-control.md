@@ -184,6 +184,73 @@ run with `GRAPH_TIMEOUT`; with an unlimited graph timeout it waits until resumed
 or cancelled. Cancellation and run failure end suspended executions as failed.
 A paused run with nothing running reports `status: "waiting"` and does not finish.
 
+### Pausing on node timeout
+
+By default, `startBraid` pauses an execution that exceeds `nodeTimeoutMs`
+instead of failing it (`onNodeTimeout: "pause"`). Set `onNodeTimeout: "fail"` to
+fail it with `NODE_TIMEOUT` as before. `braid()` always fails, because it has no
+handle to resume with; passing `"pause"` to it throws a `TypeError`.
+
+When the timeout fires, core interrupts the current step and the execution
+suspends with `source: "node_timeout"`, keeping its conversation, workspace,
+tool budgets, and decision or merge state:
+
+1. The execution enters `pausing`, emits `execution_suspending`, and its current
+   model request or tool call is interrupted.
+2. The runner records the interruption and reaches its next checkpoint, where the
+   execution suspends (`execution_suspended`) and releases its slot.
+3. `suspension.timeout` records `{ nodeTimeoutMs, activeMs }`: the budget that
+   ran out and how long the execution ran, excluding earlier suspensions.
+
+Successors wait until the execution is resumed or cancelled:
+
+```ts
+// A full new window (the run's nodeTimeoutMs), or choose one:
+run.resume([executionId], revision);
+run.resume([executionId], revision, { nodeTimeoutMs: 120_000 });
+run.update({ expectedRevision: revision, upsertNodes, resume: [executionId], resumeOptions: { nodeTimeoutMs: 120_000 } });
+// Or fail only this execution, with the same result as onNodeTimeout: "fail":
+run.cancelExecutions([executionId], { source: "agent" });
+```
+
+`ResumeOptions.nodeTimeoutMs` sets the remaining node budget, in active time
+from when the execution gets a slot again; `Infinity` removes it. Without it, a
+timeout pause gets the run's `nodeTimeoutMs` again, and any other pause keeps
+its remaining budget. It applies to `pausing` and `suspended` executions;
+resuming a timeout pause that is still `pausing` withdraws it and renews the
+budget the same way. `resumeRun()` does not resume a timeout pause, and a timeout
+that fires while a pause is pending takes over that pause's `source`.
+
+This needs an interruptible runner. Such a runner sets `interruptible: true`
+(which implies `pausable`) and calls `request.stepSignal()` at the start of each
+model request, retry backoff, and tool call, passing the result to that step
+instead of `request.signal`. A step whose signal aborted while `request.signal`
+did not was interrupted (`isStepInterrupted(request, step)`): the runner
+discards a partial model response, gives an interrupted tool call an error
+result such as `interruptedToolResult(partialOutput)`, gives calls later in the
+batch `notRunToolResult()`, and continues to its next checkpoint. Every tool call
+in an assistant message therefore has a result. If the runner does not reach a
+checkpoint within 10 seconds of the interruption, the execution fails with
+`NODE_TIMEOUT`, so a timeout is always enforced. Runners that are not
+interruptible, including runners that are only `pausable`, fail on timeout as
+before. The Pi, DSH, and OpenAI-compatible runners are interruptible.
+
+A timeout pause never fails the run, even for `requireSuccess` nodes; only
+cancelling the execution does. The graph timeout keeps running, so a timeout
+pause that is never resumed ends the run with `GRAPH_TIMEOUT`; with an unlimited
+graph timeout the run waits until it is resumed or cancelled.
+
+### Cancelling one execution
+
+`run.cancelExecutions(executionIds, { source })` fails running executions,
+including `pausing`, `suspended`, and `resuming` ones, without cancelling the
+run. Their successors follow the usual failure rules: unconditional edges
+receive the error, and a `requireSuccess` node fails the run with
+`REQUIRED_NODE_FAILED`. A timeout pause fails with `NODE_TIMEOUT`; anything else
+fails with `CANCELLED` ("Execution cancelled by <source>"). Settled and held
+executions are rejected; drop a held execution's successors with a graph update
+instead. `run.cancel()` still cancels the whole run.
+
 A job accepts updates while running or waiting. Once no work, gates, suspended
 executions, or run pause remain, it enters finalization and rejects further
 updates. Completed jobs cannot be reopened. These are in-memory controls,

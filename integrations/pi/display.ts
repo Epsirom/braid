@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   formatActivityStatus,
+  formatPauseSource,
   type BraidResult,
   type Edge,
   type ExecutionActivity,
@@ -235,7 +236,9 @@ function mermaidLabelLines(
           runnable: "◇",
           pending: "○",
         }[node.status];
-  const status = node.suspension ? node.suspension.state : node.status === "completed" ? "done" : node.status;
+  const status = node.suspension
+    ? `${node.suspension.state}${node.suspension.source === "node_timeout" ? " · timed out" : ""}`
+    : node.status === "completed" ? "done" : node.status;
   const decision =
     node.decision === undefined ? "" : ` → ${compact(node.decision, 16)}`;
   const now = "observedAt" in result ? result.observedAt : Date.now();
@@ -389,8 +392,8 @@ function eventText(event: ExecutionEvent): string {
     case "graph_updated": return `graph updated · revision ${event.revision}`;
     case "execution_paused": return `paused · ${compact(event.nodeId, 40)} · ${event.executionId}`;
     case "execution_resumed": return `resumed · ${compact(event.nodeId, 40)} · ${event.executionId}`;
-    case "execution_suspending": return `pausing · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
-    case "execution_suspended": return `suspended · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
+    case "execution_suspending": return `pausing · ${compact(event.nodeId, 40)} · by ${compact(formatPauseSource(event.source), 20)}`;
+    case "execution_suspended": return `suspended · ${compact(event.nodeId, 40)} · by ${compact(formatPauseSource(event.source), 20)}`;
     case "execution_hold_added": return `hold added · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
     case "execution_hold_removed": return `hold removed · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
     case "graph_paused": return `job paused · by ${compact(event.source, 20)}`;

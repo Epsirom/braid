@@ -46,10 +46,10 @@ agent's model captured at submission.
 | Read a node's latest invocation | `braid_status({ jobId, nodeId })` |
 | Page earlier activity of an invocation | `braid_status({ jobId, executionId, activityBefore })` |
 | Atomically edit/resume | `braid_update({ jobId, expectedRevision, ...patch })` |
-| Resume without edits | `braid_resume({ jobId, expectedRevision, executionIds })` |
+| Resume without edits | `braid_resume({ jobId, expectedRevision, executionIds, nodeTimeoutMs? })` |
 | Pause running executions or the whole job | `braid_pause({ jobId, executionIds? })`; resume a paused job with `braid_resume({ jobId })` |
 | Hold a running execution's result once it finishes | `braid_pause({ jobId, executionIds, after: true })`; remove the hold with `braid_resume({ jobId, executionIds, after: true })` |
-| Cancel | `braid_cancel({ jobId })` or `/braid cancel <jobId>` |
+| Cancel | `braid_cancel({ jobId })` or `/braid cancel <jobId>`; `braid_cancel({ jobId, executionIds })` fails only those executions |
 | Human progress snapshot | `/braid [jobId]`, `/braid list` |
 | Graph, execution details and controls | **Braid** in the session header or right-sidebar guide |
 | Generic job progress and cancellation | DSH's native **Jobs** panel |
@@ -74,7 +74,7 @@ guide. Braid's six tool calls also render as clickable transcript cards:
 | `braid_update` | Before/after revision, upserted/removed nodes, edge counts and resumed executions; rejected updates are marked as not applied |
 | `braid_resume` | Requested execution IDs (or the job) and remaining pauses; a single execution links directly to its history |
 | `braid_pause` | Requested execution IDs (or the job) and suspended executions; a single execution links directly to its history |
-| `braid_cancel` | Cancellation requested or job already finished; opens the original job |
+| `braid_cancel` | Cancellation requested (for the job or the listed executions) or job already finished; a single execution links directly to its history |
 
 The main card opens the right-sidebar Braid tab in the call's owning session.
 Cards retain the result recorded at the time of the call; the sidebar shows the
@@ -260,6 +260,20 @@ released with the usual `braid_resume` or `braid_update` `resume`. The panel's
 **Hold result when finished** and **Remove hold** buttons do the same for the
 user, with the same notices to the parent.
 
+When an execution exceeds `options.nodeTimeoutMs`, it is paused instead of
+failed. Its current model request or shell command is stopped; the interrupted
+call, with any output it produced, and any calls after it in the same batch are
+recorded in its conversation. It keeps its conversation, workspace, and tool
+budgets, and its successors wait. Unlike other pauses, this wakes the parent
+with a reminder that says how long the execution ran, what it was doing, and how
+to continue: `braid_resume` gives it the job's `nodeTimeoutMs` again (or pass
+`nodeTimeoutMs`), `braid_update` can resume it with `resumeOptions`, and
+`braid_cancel` with `executionIds` fails only that execution with
+`NODE_TIMEOUT`. Resuming the whole job does not resume it. The panel shows who
+paused it and has a **Cancel this execution** button, which asks for
+confirmation; a cancellation from the panel is a notice for the parent, like a
+user pause. Set `options.onNodeTimeout: "fail"` to fail on timeout instead.
+
 Completion and pause messages use DSH `agent.steer`: a running agent consumes
 them at the next step, and an idle agent wakes. Acknowledged messages are removed;
 discarded messages retry when the agent returns to idle. DSH's generic job
@@ -275,7 +289,8 @@ they do not survive a DSH restart.
 ## Budgets and accounting
 
 `options` accepts `maxConcurrency` (default 4), `maxExecutions` (default 1000),
-`maxToolRounds`, `maxToolCalls`, `nodeTimeoutMs`, and `graphTimeoutMs`. Tool/time
+`maxToolRounds`, `maxToolCalls`, `nodeTimeoutMs`, `graphTimeoutMs`, and
+`onNodeTimeout` (`pause` by default, or `fail`). Tool/time
 budgets are unlimited when omitted. Limits count rejected tool calls too. Workers
 receive remaining budget/deadline reminders before model requests. Graph deadlines
 continue during pauses and do not reset on resume or update.
