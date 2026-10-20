@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changes
+
+- Pi and DSH guidance and `braid` option descriptions now tell the agent to
+  leave `maxToolRounds`, `maxToolCalls`, `nodeTimeoutMs`, `graphTimeoutMs`, and
+  `onNodeTimeout` unset unless the user asks for limits, instead of suggesting
+  hard limits and `onNodeTimeout=fail`. Defaults are unchanged — @Epsirom.
+
 ## 0.5.0 — 2026-10-20
 
 ### Breaking changes
