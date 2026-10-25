@@ -97,9 +97,9 @@ See [execution control](docs/execution-control.md) for the contract and
 [0.1 → 0.2 migration](docs/compatibility.md#migrating-from-01-to-02) before upgrading.
 
 Each release follows the [release checklist](docs/releasing.md): validate the
-supported Node/platform matrix and isolated package installation, credit PR
-authors and first-time contributors, then verify all registry versions,
-provenance, and clean installation before marking publication complete.
+supported Node/platform matrix and isolated package installation, publish upgrade
+notes with release notes generated from labeled PRs, then verify all registry
+versions, provenance, and clean installation before marking publication complete.
 
 ## Next candidates
 

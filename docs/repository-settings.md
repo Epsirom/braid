@@ -86,6 +86,13 @@ Use a new version for a correction. See [the release guide](releasing.md).
 - Actions use read-only `GITHUB_TOKEN` permissions by default and cannot create
   or approve PRs through that token. Individual workflows request only their
   needed permissions; the release job uses `id-token: write` for npm OIDC.
+- Release automation uses `GITHUB_TOKEN`: Publish Release creates the `vX.Y.Z`
+  tag (`contents: write`) and dispatches Publish (`actions: write`), whose last
+  job creates the GitHub release (`contents: write`). The version-tag ruleset
+  allows creating tags, so no bypass actor is needed.
+- Label Pull Requests runs on `pull_request_target` so it can label fork PRs.
+  It checks out only the trusted base commit, never PR code, and reads PR
+  metadata through the API; keep it that way.
 - External actions and reusable workflows are limited to GitHub-owned
   repositories; local actions remain allowed. External actions must be pinned
   to full commit SHAs. Review and explicitly allow any future third-party action
