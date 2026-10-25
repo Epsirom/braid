@@ -25,7 +25,11 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run verify
+      # Same as npm run verify, but the package smoke runs on Linux only: the tarballs are
+      # identical on every OS, and its uncached consumer installs take minutes on Windows.
+      - run: npm run verify:checks
+      - if: runner.os == 'Linux'
+        run: npm run test:package
   core-minimum:
     runs-on: ubuntu-latest
     steps:

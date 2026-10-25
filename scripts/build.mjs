@@ -8,7 +8,8 @@ const integration = process.argv[2];
 if (integration && !["pi", "dsh"].includes(integration)) throw new Error(`Unknown integration: ${integration}`);
 const directory = integration ? resolve(root, "integrations", integration) : root;
 // Each integration resolves the current core through the development-only workspace link.
-if (integration) {
+// BRAID_CORE_BUILT=1 means the caller just rebuilt core, so the integration reuses that dist.
+if (integration && process.env.BRAID_CORE_BUILT !== "1") {
   const core = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], { stdio: "inherit" });
   if (core.error) throw core.error;
   if (core.status !== 0) process.exit(core.status ?? 1);
