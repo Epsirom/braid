@@ -1,8 +1,9 @@
 # Roadmap
 
-Braid is a small runtime for mutable agent graphs with bounded loops, isolated
+Braid is a small runtime for mutable agent graphs with loops, isolated
 executions, and explicit workspace integration. The goal is a predictable core
-and thin host adapters. This is a direction for discussion, not a delivery schedule.
+and thin host adapters, with runs that can keep going until their owner stops
+them. This is a direction for discussion, not a delivery schedule.
 
 ## Release status
 
@@ -27,6 +28,59 @@ and npm availability are separate milestones. Check
 [@chrok/braid](https://www.npmjs.com/package/@chrok/braid),
 [@chrok/pi-braid](https://www.npmjs.com/package/@chrok/pi-braid), and
 [@chrok/dsh-braid](https://www.npmjs.com/package/@chrok/dsh-braid) for published versions.
+
+## Milestones
+
+Current work is grouped into [GitHub milestones](https://github.com/Epsirom/braid/milestones).
+Each has a tracking issue or a short list of issues; releases are cut from
+whatever has landed, so the milestones are not tied to version numbers.
+
+### RSI Mode
+
+Let a run keep refining, evaluating, and improving its own output until its
+owner stops it. Safety comes from observability and owner control (holds,
+pauses, reminders) instead of hard limits that fail the job. Tracking issue:
+[#118](https://github.com/Epsirom/braid/issues/118).
+
+- [x] Default every limit to unlimited, and hold or pause instead of failing
+  when a limit that is set is reached ([#112](https://github.com/Epsirom/braid/issues/112)).
+- [ ] Replace the schedule/execution split with an execution-only graph of
+  lineages, where a started node is changed by replacing it ([#113](https://github.com/Epsirom/braid/issues/113)).
+- [ ] Accept unconditional, nested, and overlapping cycles ([#114](https://github.com/Epsirom/braid/issues/114)).
+- [ ] Show lineage heads and the full execution history in one Pi graph ([#94](https://github.com/Epsirom/braid/issues/94)).
+- [ ] Persist run state and recover runs after a restart ([#115](https://github.com/Epsirom/braid/issues/115)).
+- [ ] Keep memory and disk bounded in long-running runs ([#116](https://github.com/Epsirom/braid/issues/116)).
+- [ ] Consume outputs from runs that never finish ([#117](https://github.com/Epsirom/braid/issues/117)).
+- [ ] Let the owner detach from and reattach to a long run, with summarized
+  reminders, and decide whether some nodes may change the graph themselves ([#66](https://github.com/Epsirom/braid/issues/66)).
+
+### Zen Mode
+
+Make the Braid graph the primary workspace: the main agent and the user both
+edit and run the same live graph, and nodes open as sessions. Tracking issue:
+[#57](https://github.com/Epsirom/braid/issues/57).
+
+- [x] Send prompts to a running node from its session view ([#59](https://github.com/Epsirom/braid/issues/59)).
+- [ ] Decide how Pi and DSH can show the graph as the primary, non-modal view
+  while the main agent stays reachable.
+- [ ] Keep jobs open for more work, or continue from a finished job.
+- [ ] Record who changed the graph, and tell the main agent about changes it did
+  not make.
+- [ ] Create, connect, and run nodes from the Pi and DSH graph views.
+- [ ] Persist node sessions as session files in Pi and DSH ([#63](https://github.com/Epsirom/braid/issues/63), [#64](https://github.com/Epsirom/braid/issues/64)),
+  with storage and retention rules ([#65](https://github.com/Epsirom/braid/issues/65)).
+
+Durable run state ([#115](https://github.com/Epsirom/braid/issues/115)) serves both RSI Mode and Zen Mode.
+
+### CI Mode
+
+Run Braid in single-shot and CI environments, such as `pi -p`, without giving
+up its asynchronous execution model.
+
+- [x] Pi print and JSON runs drain background jobs before exiting and report the
+  outcome with `braid_finish` ([#80](https://github.com/Epsirom/braid/issues/80)).
+- [ ] Find out whether DSH single-shot runs exit before Braid jobs finish, and
+  match Pi's behavior if they do ([#85](https://github.com/Epsirom/braid/issues/85)).
 
 ## 0.5 implemented changes
 
@@ -109,14 +163,15 @@ versions, provenance, and clean installation before marking publication complete
   optimizing data structures. Include execution history, updates, and loops;
   measure Git workspace costs separately. The [checked-in benchmark](docs/benchmark.md)
   is a 0.1 baseline.
-- Explore explicit retention and cleanup policies for execution history, Git
-  recovery refs, and Pi temporary result files without breaking result retrieval,
-  reusable checkpoints, or usage accounting.
+- Extend the retention work for long runs ([#116](https://github.com/Epsirom/braid/issues/116)) to Pi temporary result
+  files without breaking result retrieval, reusable checkpoints, or usage
+  accounting.
 - Discuss definition, prompt/output, and event-log size limits and host-wide
-  admission controls. `maxExecutions` already bounds materialized instances;
-  it does not bound all memory, disk, or concurrent jobs.
-- Define token/spend budget semantics that account for missing usage, failed
-  requests, and in-flight calls before adding enforcement.
+  admission controls. Limits are unlimited by default; when set, `maxExecutions`
+  and `maxTokens` bound materialized instances and reported tokens, but nothing
+  bounds all memory, disk, or concurrent jobs.
+- Complete the `maxTokens` semantics for missing usage, failed requests, and
+  in-flight calls, and consider spend-based budgets.
 - Improve provider diagnostics and add adapters backed by real compatibility
   tests. Keep SDK dependencies outside the core.
 - Migrate all packages from TypeScript 5 to 7 in one dedicated change. Explicitly
@@ -126,9 +181,12 @@ versions, provenance, and clean installation before marking publication complete
 
 ## Scope after 0.3
 
-The original fixed-DAG-only boundary no longer applies. Bounded loops, live
-graph changes, parent-controlled pause/resume, and execution history are part of
-the core. The following boundaries still apply:
+The original fixed-DAG-only boundary no longer applies. Loops, live graph
+changes, parent-controlled pause/resume, and execution history are part of the
+core. The following boundaries still apply. RSI Mode and Zen Mode deliberately
+revisit some of them: arbitrary and nested cycles ([#114](https://github.com/Epsirom/braid/issues/114)), durable recovery
+and scheduler persistence ([#115](https://github.com/Epsirom/braid/issues/115)), nodes that change the graph ([#66](https://github.com/Epsirom/braid/issues/66)), and a
+graphical workflow editor ([#57](https://github.com/Epsirom/braid/issues/57)). Each row changes when that work lands.
 
 | Supported | Outside the current scope |
 | --- | --- |
