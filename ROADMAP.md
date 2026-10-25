@@ -46,7 +46,7 @@ pauses, reminders) instead of hard limits that fail the job. Tracking issue:
   when a limit that is set is reached ([#112](https://github.com/Epsirom/braid/issues/112)).
 - [x] Replace the schedule/execution split with an execution-only graph of
   lineages, where a started node is changed by replacing it ([#113](https://github.com/Epsirom/braid/issues/113)).
-- [ ] Accept unconditional, nested, and overlapping cycles ([#114](https://github.com/Epsirom/braid/issues/114)).
+- [x] Accept unconditional, nested, and overlapping cycles ([#114](https://github.com/Epsirom/braid/issues/114)).
 - [x] Show live executions and a timeline of every execution in the Pi panel ([#94](https://github.com/Epsirom/braid/issues/94)).
 - [ ] Persist run state and recover runs after a restart ([#115](https://github.com/Epsirom/braid/issues/115)).
 - [ ] Keep memory and disk bounded in long-running runs ([#116](https://github.com/Epsirom/braid/issues/116)).
@@ -184,13 +184,13 @@ versions, provenance, and clean installation before marking publication complete
 The original fixed-DAG-only boundary no longer applies. Loops, live graph
 changes, parent-controlled pause/resume, and execution history are part of the
 core. The following boundaries still apply. RSI Mode and Zen Mode deliberately
-revisit some of them: arbitrary and nested cycles ([#114](https://github.com/Epsirom/braid/issues/114)), durable recovery
+revisit some of them: durable recovery
 and scheduler persistence ([#115](https://github.com/Epsirom/braid/issues/115)), nodes that change the graph ([#66](https://github.com/Epsirom/braid/issues/66)), and a
 graphical workflow editor ([#57](https://github.com/Epsirom/braid/issues/57)). Each row changes when that work lands.
 
 | Supported | Outside the current scope |
 | --- | --- |
-| Cycles closed by a decision's choice edge, bounded by optional per-node `maxRuns`; sequential and independent cycles | Other cycles, and nested/overlapping cycles |
+| Any cycle, including unconditional, nested, and overlapping ones, with notices of new cycles, bounded by optional per-node `maxRuns` | `maxRuns` counts that reset in each round of an enclosing cycle |
 | In-memory updates and pause/resume before finalization | Durable workflow recovery, restart/resume, or reopening finalized jobs |
 | Git checkpoints and backup refs for inspecting/recovering files | Persistence of scheduler state or host sessions |
 | Per-execution workspace capabilities and isolated model context | A security sandbox, arbitrary code nodes, or recursive worker delegation |

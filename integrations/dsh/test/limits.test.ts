@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BraidJobs, type WaitingNotice } from "../jobs.js";
+import { BraidJobs, type Completion, type WaitingNotice } from "../jobs.js";
 import { createBraidTools, type ToolValue } from "../tools.js";
 import { formatWaiting } from "../status-text.js";
 import { answer, calls, context, llm, payload, until } from "./helpers.js";
@@ -56,5 +56,26 @@ test("a rerun at its node's maxRuns wakes the parent with how to continue or sto
   const state = jobs.get(job.handle);
   assert.equal(state.status, "completed");
   assert.equal(state.execution.nodes.work!.executionId, "work@1");
+  await jobs.dispose();
+});
+
+test("DSH tool results report new cycles and the maxRuns that bounds them", async () => {
+  const runtime = llm(options => answer(payload(options).nodeId));
+  const completions: Completion[] = [];
+  const jobs = new BraidJobs(runtime, completion => { completions.push(completion); });
+  const tools = createBraidTools(() => jobs, () => { throw new Error("unused"); });
+  const run = (name: string, args: object) => tools.find(tool => tool.name === name)!.execute(args as never, { signal: new AbortController().signal } as never) as unknown as Promise<ToolValue>;
+  const job = jobs.start({ goal: "improve", nodes: [{ ...node("gate"), pauseAfter: true }, { ...node("improve"), maxRuns: 2 }, node("evaluate")],
+    edges: [{ from: "gate", to: "improve" }, { from: "improve", to: "evaluate" }] }, {}, context());
+  await until(() => completions.length === 1);
+  const updated = await run("braid_update", { jobId: job.handle, expectedRevision: 0,
+    addEdges: [{ from: "evaluate", to: "improve" }], resume: [completions[0]!.executionId] });
+  assert.match(updated.text, /- improve -> evaluate -> improve: bounded by maxRuns on improve\./);
+  // The unconditional cycle runs improve twice, then its third run waits at maxRuns; releasing it ends the cycle.
+  await until(() => jobs.get(job.handle).execution.limitedExecutionIds.length === 1);
+  jobs.resume(job.handle, jobs.get(job.handle).execution.limitedExecutionIds, jobs.get(job.handle).execution.revision);
+  await jobs.wait(job.handle);
+  assert.equal(jobs.get(job.handle).status, "completed");
+  assert.equal(jobs.get(job.handle).result!.nodes.evaluate!.executionId, "evaluate@2");
   await jobs.dispose();
 });

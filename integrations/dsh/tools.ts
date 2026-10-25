@@ -69,7 +69,7 @@ export function createBraidTools(
     };
   }
   return [
-    tool("braid", "Start a background Braid graph before nontrivial engineering work with independent concerns. Returns jobId immediately. Supports execute/decision/merge/integrate, promptTemplates, cycles closed by a decision's choice edge, worktree isolation, pauseAfter and notifyOnCompletion. Omit workspace on merge/integrate. No automatic integration. " + BRAID_ASYNC_GUIDANCE, braidParameters, submit),
+    tool("braid", "Start a background Braid graph before nontrivial engineering work with independent concerns. Returns jobId immediately. Supports execute/decision/merge/integrate, promptTemplates, cycles (any edge may close one; the result reports new cycles), worktree isolation, pauseAfter and notifyOnCompletion. Omit workspace on merge/integrate. No automatic integration. " + BRAID_ASYNC_GUIDANCE, braidParameters, submit),
     tool("braid_status", "Retrieve progress and results by exact jobId handle or UUID. Omit all IDs to list this agent's jobs. executionId (<nodeId>@<generation>, such as review@2) selects an exact execution; nodeId selects the node's latest. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and the latest " + STATUS_ACTIVITY_ENTRIES + " history entries; activityBefore pages earlier entries. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the CURRENT graph revision and paused execution IDs. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. usage includes completed provider rounds from failed workers and cache tokens; reads do not add charges. Read results after the completion reminder, or deliberately for a progress check or diagnosis; do not sleep, use a timer, or poll in a loop to wait for a job.", Type.Object({
       jobId: Type.Optional(id), nodeId: Type.Optional(id), executionId: Type.Optional(id),
       activityBefore: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
@@ -112,9 +112,11 @@ export function createBraidTools(
     }, { additionalProperties: false }), (args, context) => {
       const { jobId, ...patch } = args;
       let job: JobSnapshot;
+      let previous: JobSnapshot["execution"]["graph"] | undefined;
+      try { previous = getJobs(context).get(jobId).execution.graph; } catch { /* update reports the unknown job */ }
       try { job = getJobs(context).update(jobId, patch as GraphUpdate); }
       catch (error) { throw new Error(`Braid update rejected; no changes or resumes applied. ${error instanceof Error ? error.message : String(error)}. Retry the complete corrected patch with dependencies and resume IDs.`); }
-      return { text: formatUpdate(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision, pausedExecutionIds: job.execution.pausedExecutionIds };
+      return { text: formatUpdate(job, previous), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision, pausedExecutionIds: job.execution.pausedExecutionIds };
     }),
     tool("braid_resume", "Release paused (pauseAfter) executions, or resume suspended ones in the same conversation, by execution ID at expectedRevision. Releasing a rerun that waits at its node's maxRuns ends it: it is removed and the node keeps its last result. Omit executionIds to resume a job paused with braid_pause or at a job limit; executions paused separately stay suspended. A job paused at a limit resumes only once limits raises that limit. This does not reset tool budgets or the graph deadline. An execution paused by its node timeout gets the job's nodeTimeoutMs again, or nodeTimeoutMs if given; resuming the job does not resume it. With after=true it instead removes the hold on still-running executions. Do not resume work the user paused or held unless the user asks.", Type.Object({
       jobId: id, expectedRevision: Type.Optional(revision), executionIds: Type.Optional(Type.Array(id, { minItems: 1, uniqueItems: true })),

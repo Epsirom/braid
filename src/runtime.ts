@@ -25,7 +25,7 @@ import type {
   BraidNode,
   WaitReason,
 } from "./types.js";
-import { compileGraph, edgeIdentity, type Graph } from "./validate.js";
+import { compileGraph, edgeIdentity, reportCycles, type Graph } from "./validate.js";
 import { GitWorkspaces, WorkspaceInputError, WorkspaceCheckpointError } from "./workspaces.js";
 import { resolve } from "node:path";
 
@@ -529,9 +529,13 @@ interface Lineage {
   queued: Firing[];
 }
 
-/** Why a lineage's head cannot be used as an input yet; undefined when it is current. */
-type Dirt = "predecessors" | "stale" | "hold" | undefined;
-const dirtRank = { hold: 3, predecessors: 2, stale: 1 } as const;
+/**
+ * Why a lineage's head cannot be used as an input yet; undefined when it is current.
+ * "round": only because an unconditional edge closed a cycle, so another round
+ * starts. Active edges that leave the cycle still use the round that ended.
+ */
+type Dirt = "predecessors" | "stale" | "hold" | "round" | undefined;
+const dirtRank = { hold: 3, predecessors: 2, stale: 1, round: 0 } as const;
 const worse = (a: Dirt, b: Dirt): Dirt => !a ? b : !b ? a : dirtRank[a] >= dirtRank[b] ? a : b;
 
 const settled = (record: NodeResult) => ["completed", "failed", "skipped"].includes(record.status);
@@ -1057,6 +1061,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     if (patch.resumeOptions !== undefined && !patch.resume?.length) throw new TypeError("resumeOptions requires resume");
     validateResume(patch.resume ?? [], patch.resumeOptions);
     const { candidate, compiled } = candidateGraph(patch);
+    const previousEdges = definition.edges;
     // Commit all state before publishing callbacks, which may themselves submit an update.
     batch = [];
     definition = candidate;
@@ -1107,6 +1112,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     const events = batch;
     batch = undefined;
     log.emit({ type: "graph_updated", graph: definition, revision });
+    announceCycles(previousEdges);
     for (const event of events) log.emit(event);
     announceResumed(continued);
     grantSlots();
@@ -1119,18 +1125,44 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     const used = consulted.get(record.executionId);
     return graph.incoming.get(record.id)!.some(edge => !graph.closing.has(edge) && used?.get(edge.from) !== head(edge.from).executionId);
   }
-  function upstreamDirt(id: string, dirt: Map<string, Dirt>): Dirt {
+  function upstreamDirt(id: string, dirt: Map<string, Dirt>, cycles: Map<number, Dirt>): Dirt {
     let result: Dirt;
-    for (const edge of graph.incoming.get(id)!) if (!graph.closing.has(edge)) result = worse(result, dirt.get(edge.from));
+    for (const edge of graph.incoming.get(id)!) {
+      if (graph.closing.has(edge)) continue;
+      let value = dirt.get(edge.from);
+      const component = graph.component.get(edge.from)!;
+      if (component !== graph.component.get(id)) {
+        // An edge that leaves a cycle waits while any of the cycle reruns. A round that ended
+        // unconditionally activates it; if it is inactive, it waits for a later round.
+        value = worse(value, cycles.get(component));
+        if (value === "round") value = edgeState(edge, head(edge.from)) === "active" ? undefined : "stale";
+      }
+      result = worse(result, value);
+    }
+    return result;
+  }
+  /** Why a lineage's own head cannot be used yet, regardless of its inputs. */
+  function ownDirt(id: string): Dirt {
+    const lineage = lineages.get(id)!;
+    const record = lineage.instances.at(-1)!;
+    return paused.has(record.executionId) ? "hold"
+      : !done(record) ? (lineage.instances.length > 1 ? "stale" : "predecessors")
+      : outdated(record) || lineage.queued.some(firing => firing.edge.choice !== undefined) ? "stale"
+      : lineage.queued.length ? "round" : undefined;
+  }
+  /** What the lineages of each cycle wait for, by component. */
+  function cycleDirt(): Map<number, Dirt> {
+    const cyclic = new Set([...graph.closing].map(edge => graph.component.get(edge.from)!));
+    const result = new Map<number, Dirt>();
+    for (const id of lineages.keys()) {
+      const component = graph.component.get(id)!;
+      if (cyclic.has(component)) result.set(component, worse(result.get(component), ownDirt(id)));
+    }
     return result;
   }
   /** Whether successors must wait for this lineage, given what its inputs are waiting for. */
   function lineageDirt(id: string, upstream: Dirt): Dirt {
-    const lineage = lineages.get(id)!;
-    const record = lineage.instances.at(-1)!;
-    const own: Dirt = paused.has(record.executionId) ? "hold"
-      : !done(record) ? (lineage.instances.length > 1 ? "stale" : "predecessors")
-      : lineage.queued.length || outdated(record) ? "stale" : undefined;
+    const own = ownDirt(id);
     const result = worse(own, upstream);
     // A lineage that already has a result will refresh it: its successors wait on a stale input.
     return result === "predecessors" && own !== "predecessors" ? "stale" : result;
@@ -1139,11 +1171,12 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   function assess(): Map<string, WaitReason> {
     const waits = new Map<string, WaitReason>();
     const dirt = new Map<string, Dirt>();
+    const cycles = cycleDirt();
     for (const { id } of graph.topologicalOrder) {
       if (!lineages.has(id)) continue;
-      const upstream = upstreamDirt(id, dirt);
+      const upstream = upstreamDirt(id, dirt, cycles);
       const record = head(id);
-      if (record.status === "pending") waits.set(record.executionId, upstream ?? (overLimit(record) ? "limit" : runPause ? "run_paused" : "slot"));
+      if (record.status === "pending") waits.set(record.executionId, upstream === "round" ? "stale" : upstream ?? (overLimit(record) ? "limit" : runPause ? "run_paused" : "slot"));
       dirt.set(id, lineageDirt(id, upstream));
     }
     return waits;
@@ -1271,19 +1304,24 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     const startRevision = revision;
     let progressed = route();
     const dirt = new Map<string, Dirt>();
+    const cycles = cycleDirt();
+    // Lineages that start a round after an unconditional edge closed a cycle; cloned after
+    // this pass, so edges that leave the cycle first use the round that ended.
+    const rounds: string[] = [];
     for (const { id } of graph.topologicalOrder) {
       // A paused run admits nothing, not even skipped records; an update restarts the pass.
       if (controller.signal.aborted || revision !== startRevision) return true;
       const lineage = lineages.get(id)!;
-      const upstream = upstreamDirt(id, dirt);
+      const upstream = upstreamDirt(id, dirt, cycles);
       let record = lineage.instances.at(-1)!;
       if (!upstream && !runPause && done(record) && !paused.has(record.executionId) && (lineage.queued.length || outdated(record))) {
-        // An edge reached the settled head: clone it into a new instance.
-        const source = lineage.queued[0]?.source ?? graph.incoming.get(id)!.filter(edge => !graph.closing.has(edge))
-          .map(edge => head(edge.from)).find(value => consulted.get(record.executionId)?.get(value.id) !== value.executionId);
-        record = createInstance(id, "cloned", source ? { trigger: source.executionId } : {});
-        progressed = true;
-        if (revision !== startRevision) return true;
+        if (lineageDirt(id, upstream) === "round") rounds.push(id);
+        else {
+          // An edge reached the settled head: clone it into a new instance.
+          record = clone(id);
+          progressed = true;
+          if (revision !== startRevision) return true;
+        }
       }
       if (record.status === "pending" && lineage.queued.length) {
         attached.set(record.executionId, [...(attached.get(record.executionId) ?? []), ...lineage.queued]);
@@ -1304,7 +1342,27 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       }
       dirt.set(id, lineageDirt(id, upstream));
     }
+    for (const id of rounds) {
+      const lineage = lineages.get(id)!;
+      attached.set(clone(id).executionId, lineage.queued);
+      lineage.queued = [];
+      progressed = true;
+      if (revision !== startRevision) return true;
+    }
     return progressed;
+  }
+  /** Report the cycles that a submission, or an update from previousEdges, created. */
+  function announceCycles(previousEdges?: readonly Edge[]) {
+    const { cycles, truncated } = reportCycles(graph, previousEdges);
+    if (cycles.length) log.emit({ type: "cycles_created", cycles, truncated, revision });
+  }
+  /** Clone a settled head that an edge reached into a new pending instance. */
+  function clone(id: string): NodeExecution {
+    const lineage = lineages.get(id)!;
+    const record = lineage.instances.at(-1)!;
+    const source = lineage.queued[0]?.source ?? graph.incoming.get(id)!.filter(edge => !graph.closing.has(edge))
+      .map(edge => head(edge.from)).find(value => consulted.get(record.executionId)?.get(value.id) !== value.executionId);
+    return createInstance(id, "cloned", source ? { trigger: source.executionId } : {});
   }
   /** Whether a pending head with settled inputs would be skipped rather than run. */
   function willSkip(record: NodeExecution): boolean {
@@ -1319,6 +1377,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       log.emit({ type: "graph_created", nodeCount: graph.nodes.length, edgeCount: graph.edges.length, revision });
       for (const event of initialEvents) log.emit(event);
       for (const edge of graph.edges) log.emit({ type: "edge_created", ...edge });
+      announceCycles();
       await workspaces.initialize(runId);
       while (true) {
         if (runLimits.graph_timeout.reached()) reachLimit("graph_timeout");

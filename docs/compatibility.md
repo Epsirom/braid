@@ -289,10 +289,8 @@ node is created but waits pending (`waitReason: "limit"`, listed in
 release it with `resume` to end the cycle, as described in
 [limits](execution-control.md#limits).
 
-The cycle rules are otherwise unchanged: the closing edge must be a decision's
-choice edge into the cycle's entry, the decision needs an exit choice, edges enter
-only at the entry and leave only from the decision, and cycles cannot nest or
-overlap. Node IDs can no longer contain `@`.
+Any edge may now close a cycle; see [below](#any-edge-may-close-a-cycle). Node
+IDs can no longer contain `@`.
 
 **Updates.** `upsertNodes` now acts on the node's head. A head that has not
 started is edited in place. A head that has started, running or settled, is
@@ -358,6 +356,29 @@ with source `"maxRuns"`. Pi's `OutstandingJob` adds `limitedExecutionIds`. The P
 `iterations` with `generations`, and the DSH panel's `PanelJob` drops `loops`,
 marks the closing edge with `closesCycle`, and gives each execution a
 `generation`.
+
+### Any edge may close a cycle
+
+Validation no longer rejects cycles. Unconditional, nested, and overlapping
+cycles, cycles with several entries or with edges that leave from any node, and
+decisions without an exit choice are all accepted. See
+[cycles](execution-control.md#cycles).
+
+Graphs that earlier versions accepted run as before: their cycles keep the same
+closing edge, and the exits of a cycle closed by a decision's choice edge still
+wait for its final round. The one exception is a cycle with no entry (no edge
+from outside enters it) where a decision inside the cycle also has a choice edge
+back to a node listed before the old round start: its rounds may now start at
+that node. List the node where rounds start first in `nodes`, and check
+`closingEdges(graph)`. Bound any cycle with `maxRuns` on one of its nodes.
+
+- `closingEdges` returns the closing edges of every cycle, including several per
+  cycle, instead of skipping cycles that were rejected.
+- New: the `cycles_created` event, the `GraphCycle` type, and the `newCycles`
+  helper, which report new cycles and whether anything stops or bounds them. An
+  exhaustive `switch` over `ExecutionEvent` needs a case for `cycles_created`.
+- Pi and DSH: `braid` and `braid_update` results list new cycles, and
+  `formatUpdate` takes the previous graph as an optional second argument.
 
 ## Versioning
 

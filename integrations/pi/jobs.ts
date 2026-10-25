@@ -2,6 +2,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+  closingEdges,
   ExecutionActivityTracker,
   formatActivityStatus,
   startBraid,

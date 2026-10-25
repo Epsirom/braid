@@ -344,37 +344,57 @@ test("a cycle can be changed mid-round; later rounds follow the current edges", 
   assert.deepEqual(seen, ["work@1", "extra@1", "check@1", "work@2", "extra@2", "check@2", "end@1"]);
 });
 
-test("cycles must be closed by a decision's choice edge", () => {
-  assert.throws(() => validateGraph({ goal: "bad", nodes: [node("a")], edges: [{ from: "a", to: "a" }] }), /closed by a decision's choice edge/);
-  assert.throws(() => validateGraph({ goal: "loops", nodes: [{ type: "decision", id: "check", prompt: "p", choices: ["again"] }, node("work")],
-    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }] }), /needs an exit choice/);
-  // Two cycles sharing check overlap.
-  assert.throws(() => validateGraph({ goal: "overlap", nodes: [node("a"), node("b"), { type: "decision", id: "check", prompt: "p", choices: ["a", "b", "done"] }],
-    edges: [{ from: "a", to: "check" }, { from: "b", to: "check" }, { from: "check", to: "a", choice: "a" }, { from: "check", to: "b", choice: "b" }] }), /nested or overlapping/);
+test("any edge may close a cycle", () => {
+  validateGraph({ goal: "self", nodes: [node("a")], edges: [{ from: "a", to: "a" }] });
+  // A decision without an exit choice, and two cycles sharing check.
+  validateGraph({ goal: "loops", nodes: [{ type: "decision", id: "check", prompt: "p", choices: ["again"] }, node("work")],
+    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }] });
+  validateGraph({ goal: "overlap", nodes: [node("a"), node("b"), { type: "decision", id: "check", prompt: "p", choices: ["a", "b", "done"] }],
+    edges: [{ from: "a", to: "check" }, { from: "b", to: "check" }, { from: "check", to: "a", choice: "a" }, { from: "check", to: "b", choice: "b" }] });
 });
 
-test("closingEdges finds the edge that closes each cycle for displays", () => {
+test("closingEdges finds the edges that close cycles for displays", () => {
   assert.deepEqual(closingEdges(loop()), [{ from: "check", to: "work", choice: "again" }]);
   // Without an external input, the entry listed first wins between two choice edges.
   const decisions = ["a", "b"].map(id => ({ type: "decision" as const, id, prompt: id, choices: ["next", "stop"] }));
   assert.deepEqual(closingEdges({ nodes: decisions, edges: [{ from: "a", to: "b", choice: "next" }, { from: "b", to: "a", choice: "next" }] }),
     [{ from: "b", to: "a", choice: "next" }]);
-  assert.deepEqual(closingEdges({ nodes: [node("a"), node("b")], edges: [{ from: "a", to: "b" }, { from: "b", to: "a" }] }), []);
+  // A choice edge closes before an unconditional one.
+  assert.deepEqual(closingEdges({ nodes: decisions, edges: [{ from: "a", to: "b", choice: "next" }, { from: "b", to: "a" }] }),
+    [{ from: "a", to: "b", choice: "next" }]);
+  // Unconditional: the edge back to the node listed first closes.
+  assert.deepEqual(closingEdges({ nodes: [node("a"), node("b")], edges: [{ from: "a", to: "b" }, { from: "b", to: "a" }] }), [{ from: "b", to: "a" }]);
+  // Nested and overlapping cycles have one closing edge each.
+  assert.deepEqual(closingEdges({ nodes: ["a", "b", "c", "d"].map(node), edges: [{ from: "a", to: "b" }, { from: "b", to: "c" },
+    { from: "c", to: "a" }, { from: "c", to: "d" }, { from: "d", to: "b" }] }), [{ from: "c", to: "a" }, { from: "d", to: "b" }]);
 });
 
-test("cycle validation names the entry and an exit from another node", () => {
-  // Reduced from a Pi session: the edge back to the entry must be the decision's choice.
+test("a cycle's rounds start at its entry, whichever edge returns there", () => {
+  // Reduced from a Pi session: accept reviews merge1 first, and the edge back to accept closes the cycle.
   const input: BraidInput = { goal: "review", nodes: [node("merge1"), node("fix"),
     { type: "decision", id: "accept", prompt: "review", choices: ["pass", "fail"] }, node("integrate")],
     edges: [{ from: "merge1", to: "accept" }, { from: "fix", to: "accept" },
       { from: "accept", to: "fix", choice: "fail" },
       { from: "accept", to: "integrate", choice: "pass" }] };
-  assert.throws(() => validateGraph(input), /entry 'accept' through a decision's choice edge/);
-  assert.throws(() => validateGraph({ ...input, edges: [{ from: "merge1", to: "fix" }, { from: "merge1", to: "accept" }, ...input.edges.slice(1)] }),
-    /multiple entries \('fix', 'accept'\)/);
-  assert.throws(() => validateGraph({ ...input, edges: [{ from: "merge1", to: "fix" }, ...input.edges.slice(1), { from: "fix", to: "integrate" }] }),
-    /must exit through its decision 'accept': edge 'fix' -> 'integrate'/);
-  assert.doesNotThrow(() => validateGraph({ ...input, edges: [{ from: "merge1", to: "fix" }, ...input.edges.slice(1)] }));
+  assert.deepEqual(closingEdges(input), [{ from: "fix", to: "accept" }]);
+  // Several entries and exits from any node are allowed.
+  validateGraph({ ...input, edges: [{ from: "merge1", to: "fix" }, ...input.edges, { from: "fix", to: "integrate" }] });
+});
+
+test("an unconditional cycle closed through the entry runs until the decision passes", async t => {
+  const input: BraidInput = { goal: "review", nodes: [node("merge1"), node("fix"),
+    { type: "decision", id: "accept", prompt: "review", choices: ["pass", "fail"] }, node("integrate")],
+    edges: [{ from: "merge1", to: "accept" }, { from: "fix", to: "accept" },
+      { from: "accept", to: "fix", choice: "fail" }, { from: "accept", to: "integrate", choice: "pass" }] };
+  const result = await braid(input, { cwd: await outsideGit(t), runner: async request => {
+    request.decide?.(request.execution.generation === 1 ? "fail" : "pass");
+    return { output: request.execution.executionId! };
+  } });
+  assert.equal(result.status, "completed");
+  assert.deepEqual(result.executions["accept@2"]!.predecessorExecutionIds.sort(), ["fix@1", "merge1@1"]);
+  assert.equal(result.executions["fix@2"]!.skipReason, "inactive");
+  assert.deepEqual(result.executions["integrate@1"]!.predecessorExecutionIds, ["accept@2"]);
+  assert.equal(Object.values(result.executions).filter(value => value.id === "integrate").length, 1);
 });
 
 test("cancelling a paused graph clears resumable holds but retains pause history", async t => {

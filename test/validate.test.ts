@@ -86,27 +86,6 @@ const invalid: [string, unknown][] = [
       ],
     ),
   ],
-  ["self cycle", graph([execute("a")], [{ from: "a", to: "a" }])],
-  [
-    "cycle with independent root",
-    graph(
-      [execute("root"), execute("a"), execute("b")],
-      [
-        { from: "a", to: "b" },
-        { from: "b", to: "a" },
-      ],
-    ),
-  ],
-  [
-    "unconditional cycle",
-    graph(
-      [execute("a"), execute("b")],
-      [
-        { from: "a", to: "b" },
-        { from: "b", to: "a" },
-      ],
-    ),
-  ],
   ["unsupported graph field", { ...graph([execute("a")]), templates: [] }],
   [
     "unsupported node field",
@@ -145,14 +124,25 @@ for (const [name, input] of invalid) {
   });
 }
 
-test("validation errors identify the invalid node or edge and explain undeclared cycles", () => {
+test("validation errors identify the invalid node or edge", () => {
   assert.throws(() => validateGraph({
     goal: "Merge", nodes: [{ type: "merge", id: "combine", workspace: "worktree" }], edges: [],
   } as unknown as BraidInput), /Node 'combine' \(merge\): unsupported field 'workspace'/);
   assert.throws(() => validateGraph({
     ...graph([execute("a"), execute("b")]), edges: [{ from: "a", to: "b", condition: "ok" }],
   } as unknown as BraidInput), /Edge 'a' -> 'b': unsupported field 'condition'/);
-  assert.throws(() => validateGraph(graph([execute("a")], [{ from: "a", to: "a" }])), /Cycle through 'a' must be closed by a decision's choice edge/);
+});
+
+test("validation accepts self, unconditional, nested, and overlapping cycles", () => {
+  const cycles: BraidInput[] = [
+    graph([execute("a")], [{ from: "a", to: "a" }]),
+    graph([execute("root"), execute("a"), execute("b")], [{ from: "a", to: "b" }, { from: "b", to: "a" }]),
+    graph([execute("a"), execute("b"), execute("c")],
+      [{ from: "a", to: "b" }, { from: "b", to: "c" }, { from: "c", to: "a" }, { from: "c", to: "b" }]),
+    graph([execute("a"), execute("b"), execute("c"), execute("d")],
+      [{ from: "a", to: "b" }, { from: "b", to: "c" }, { from: "c", to: "a" }, { from: "c", to: "d" }, { from: "d", to: "b" }]),
+  ];
+  for (const input of cycles) assert.doesNotThrow(() => validateGraph(input));
 });
 
 test("validation allows terminal decisions, unconnected roots, conditional fan-out, and distinct edges to one target", () => {

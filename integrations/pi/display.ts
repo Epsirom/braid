@@ -579,6 +579,8 @@ function eventText(event: ExecutionEvent): string {
       return `superseded · ${compact(event.executionId ?? event.nodeId, 40)} by ${compact(event.supersededBy, 40)}`;
     case "edge_created":
       return `edge created · ${compact(event.from, 40)}${event.choice ? ` -${compact(event.choice, 30)}->` : " →"} ${compact(event.to, 40)}`;
+    case "cycles_created":
+      return `${event.cycles.length}${event.truncated ? "+" : ""} new cycle${event.cycles.length === 1 ? "" : "s"}${event.cycles.some(cycle => !cycle.stops.length) ? " · one has nothing that stops it" : ""}`;
     case "workspace_updated":
       return `workspace · ${compact(event.workspace.nodeId, 40)} · ${event.workspace.state}`;
     case "handoff":
