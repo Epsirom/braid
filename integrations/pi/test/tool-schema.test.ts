@@ -22,7 +22,7 @@ for (const templated of [false, true]) {
     const graph = {
       goal: "Review and integrate",
       nodes: [
-        { type: "execute", id: "work", prompt, model: "provider/model-id", workspace: "worktree", pauseAfter: true, notifyOnCompletion: true, requireSuccess: false },
+        { type: "execute", id: "work", prompt, model: "provider/model-id", workspace: "worktree", pauseAfter: true, notifyOnCompletion: true, requireSuccess: false, maxRuns: 3 },
         { type: "decision", id: "check", prompt, choices: ["retry", "done"], workspace: "read-only" },
         { type: "merge", id: "merge", prompt, requireSuccess: true },
         { type: "integrate", id: "integrate", prompt },
@@ -31,7 +31,7 @@ for (const templated of [false, true]) {
       ],
       edges: [
         { from: "work", to: "check" },
-        { from: "check", to: "work", choice: "retry", limit: 2 },
+        { from: "check", to: "work", choice: "retry" },
         { from: "check", to: "merge", choice: "done" },
         { from: "merge", to: "integrate" },
       ],
@@ -107,26 +107,25 @@ test("actual Kimi/Anthropic request exposes flat nodes for both submission and u
     const schema: NodeSchema = payload.tools.find(tool => tool.name === name)!.input_schema.properties[field!]!.items;
     assert.equal(schema.type, "object");
     assert.equal(schema.anyOf, undefined);
-    for (const key of ["type", "id", "prompt", "model", "workspace", "choices", "pauseAfter", "notifyOnCompletion", "requireSuccess"]) {
+    for (const key of ["type", "id", "prompt", "model", "workspace", "choices", "pauseAfter", "notifyOnCompletion", "requireSuccess", "maxRuns"]) {
       assert.ok(Object.hasOwn(schema.properties, key), `${name}: missing ${key}`);
     }
   }
 });
 
-test("edges are identified by from, to, and choice; loops, feedback, and execution pins are gone", () => {
-  for (const edge of [{ from: "a", to: "b", executionId: "a@1" }, { from: "a", to: "a", feedback: "retry" }]) {
+test("edges are identified by from, to, and choice; loops, feedback, limits, and execution pins are gone", () => {
+  for (const edge of [{ from: "a", to: "b", executionId: "a@1" }, { from: "a", to: "a", feedback: "retry" }, { from: "a", to: "a", choice: "again", limit: 2 }]) {
     assert.throws(() => validate(tools.braidTool, { ...input, edges: [edge] }), /Validation failed/);
     assert.throws(() => validate(tools.updateTool, { jobId: "job-1", expectedRevision: 0, addEdges: [edge] }), /Validation failed/);
   }
   assert.throws(() => validate(tools.braidTool, { ...input, loops: [] }), /Validation failed/);
-  // removeEdges ignores limit, so an edge copied from braid_status can be removed as is.
-  const patch = { jobId: "job-1", expectedRevision: 0, removeEdges: [{ from: "a", to: "b", choice: "x", limit: 2 }], addEdges: [{ from: "a", to: "b", choice: "x", limit: 3 }], resume: ["a@1"] };
+  const patch = { jobId: "job-1", expectedRevision: 0, removeEdges: [{ from: "a", to: "b", choice: "x" }], addEdges: [{ from: "a", to: "b", choice: "y" }], resume: ["a@1"] };
   assert.deepEqual(validate(tools.updateTool, patch), patch);
 });
 
-test("edge limits are positive safe integers", () => {
-  for (const limit of [0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
-    assert.throws(() => validate(tools.braidTool, { ...input, edges: [{ from: "a", to: "a", choice: "again", limit }] }), /Validation failed/);
+test("maxRuns is a positive safe integer", () => {
+  for (const maxRuns of [0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => validate(tools.braidTool, { ...input, nodes: [{ ...input.nodes[0], maxRuns }] }), /Validation failed/);
   }
 });
 

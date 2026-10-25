@@ -190,7 +190,7 @@ graphical workflow editor ([#57](https://github.com/Epsirom/braid/issues/57)). E
 
 | Supported | Outside the current scope |
 | --- | --- |
-| Cycles closed by a decision's choice edge, with optional edge limits; sequential and independent cycles | Other cycles, and nested/overlapping cycles |
+| Cycles closed by a decision's choice edge, bounded by optional per-node `maxRuns`; sequential and independent cycles | Other cycles, and nested/overlapping cycles |
 | In-memory updates and pause/resume before finalization | Durable workflow recovery, restart/resume, or reopening finalized jobs |
 | Git checkpoints and backup refs for inspecting/recovering files | Persistence of scheduler state or host sessions |
 | Per-execution workspace capabilities and isolated model context | A security sandbox, arbitrary code nodes, or recursive worker delegation |

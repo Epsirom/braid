@@ -181,7 +181,6 @@ function graphParts(result: BraidResult | BraidLiveState): {
         from: event.from,
         to: event.to,
         ...(event.choice ? { choice: event.choice } : {}),
-        ...(event.limit !== undefined ? { limit: event.limit } : {}),
       });
     }
   }
@@ -567,9 +566,9 @@ function eventText(event: ExecutionEvent): string {
     case "replan_requested": return `replan requested · ${compact(event.nodeId, 40)}: ${compact(event.reason, 64)}`;
     case "graph_paused": return `job paused · by ${compact(event.source, 20)}`;
     case "graph_resumed": return "job resumed";
-    case "limit_reached": return `limit reached · ${event.edge ? `edge ${compact(event.edge.from, 30)} → ${compact(event.edge.to, 30)}` : event.limit} ${event.value}${event.nodeId ? ` · holds ${compact(event.nodeId, 40)}` : ""}`;
+    case "limit_reached": return `limit reached · ${event.limit} ${event.value}${event.executionId ? ` · ${compact(event.executionId, 40)} waits` : ""}`;
     case "limits_updated": return `limits updated · ${Object.entries(event.limits).map(([key, value]) => `${key} ${value}`).join(", ") || "none"}`;
-    case "graph_waiting": return `nothing active · ${event.pausedExecutionIds.length} held · ${event.suspendedExecutionIds.length} suspended${event.pause ? " · job paused" : ""}`;
+    case "graph_waiting": return `nothing active · ${event.pausedExecutionIds.length} held · ${event.suspendedExecutionIds.length} suspended${event.limitedExecutionIds.length ? ` · ${event.limitedExecutionIds.length} at maxRuns` : ""}${event.pause ? " · job paused" : ""}`;
     case "graph_created":
       return `graph created · ${event.nodeCount} nodes · ${event.edgeCount} edges`;
     case "execution_created":
@@ -651,6 +650,9 @@ export function createLiveState(): BraidLiveState {
   };
 }
 
+/** The head each pending rerun replaced, by the rerun's execution ID. */
+const clonedHeads = new WeakMap<BraidLiveState, Map<string, NodeResult>>();
+
 export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
   // Keep per-update payloads bounded, without discarding any events from the core result.
   const preview = { ...event };
@@ -674,7 +676,6 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
       from: event.from,
       to: event.to,
       ...(event.choice ? { choice: event.choice } : {}),
-      ...(event.limit !== undefined ? { limit: event.limit } : {}),
     });
   if (state.events.length > MAX_VISIBLE_EVENTS) state.events.shift();
   if (event.type === "graph_completed" || event.type === "graph_failed") {
@@ -686,6 +687,11 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
     return;
   }
   if (event.type === "execution_created") {
+    // Remember the head a rerun replaces, in case the rerun ends at its maxRuns without starting.
+    if (event.cause === "cloned" && event.executionId && Object.hasOwn(state.nodes, event.nodeId)) {
+      const heads = clonedHeads.get(state) ?? clonedHeads.set(state, new Map()).get(state)!;
+      heads.set(event.executionId, state.nodes[event.nodeId]!);
+    }
     // The new instance becomes the node's head.
     Object.defineProperty(state.nodes, event.nodeId, {
       value: {
@@ -701,6 +707,17 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
     delete state.progress[event.nodeId];
     state.generations ??= Object.create(null) as Record<string, number>;
     state.generations[event.nodeId] = event.generation;
+    return;
+  }
+  if ((event.type === "node_started" || event.type === "node_skipped") && event.executionId) clonedHeads.get(state)?.delete(event.executionId);
+  if (event.type === "execution_removed") {
+    // A rerun released at its maxRuns: the head it replaced is current again.
+    const previous = event.executionId ? clonedHeads.get(state)?.get(event.executionId) : undefined;
+    if (previous && Object.hasOwn(state.nodes, event.nodeId) && state.nodes[event.nodeId]!.executionId === event.executionId) {
+      clonedHeads.get(state)!.delete(event.executionId!);
+      state.nodes[event.nodeId] = previous;
+      if (previous.executionId) state.generations![event.nodeId] = Number(previous.executionId.split("@").at(-1));
+    }
     return;
   }
   if (event.type === "graph_updated") {

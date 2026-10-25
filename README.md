@@ -175,16 +175,15 @@ type NodePrompt = string | {
 type BraidInputNode =
   | { type: "execute"; id: string; prompt: NodePrompt; model?: string;
       workspace?: "read-only" | "worktree"; notifyOnCompletion?: boolean;
-      requireSuccess?: boolean; pauseAfter?: boolean }
+      requireSuccess?: boolean; pauseAfter?: boolean; maxRuns?: number }
   | { type: "decision"; id: string; prompt: NodePrompt;
       choices: readonly string[]; model?: string; workspace?: "read-only" | "worktree"; notifyOnCompletion?: boolean;
-      requireSuccess?: boolean; pauseAfter?: boolean }
+      requireSuccess?: boolean; pauseAfter?: boolean; maxRuns?: number }
   | { type: "merge" | "integrate"; id: string; prompt?: NodePrompt; model?: string;
       notifyOnCompletion?: boolean;
-      requireSuccess?: boolean; pauseAfter?: boolean };
+      requireSuccess?: boolean; pauseAfter?: boolean; maxRuns?: number };
 
-// limit: only on the edge that closes a cycle; how many times it may fire.
-type Edge = { from: string; to: string; choice?: string; limit?: number };
+type Edge = { from: string; to: string; choice?: string };
 type BraidInput = {
   goal: string;
   nodes: readonly BraidInputNode[];
@@ -202,12 +201,16 @@ snapshots; read-only disables write capabilities. Outside Git all filesystem
 access is read-only. `notifyOnCompletion` requests host reminders, `pauseAfter`
 holds outgoing scheduling, and `requireSuccess` makes failure abort the whole run.
 All three booleans default to false. `BraidRun.holdAfter` adds or removes the
-same hold on an execution that is already running.
+same hold on an execution that is already running. `maxRuns` caps how many
+executions of a node may start, counting cycle rounds and downstream reruns
+(skipped ones do not count); it is unlimited when omitted or `Infinity`, and an
+owner's replacement of a started node always starts. A rerun past it waits with
+`waitReason: "limit"` (see [limits](docs/execution-control.md#limits)).
 
 Unknown fields, missing references, and duplicate edges (the same `from`, `to`,
 and `choice`) are rejected. A cycle is a loop and must be closed by a decision's
 choice edge back to the node where each round starts; nested or overlapping
-cycles are rejected. Disconnected components are allowed; every root runs.
+cycles are rejected. Bound a cycle's rounds with `maxRuns` on a node in it. Disconnected components are allowed; every root runs.
 Only decision nodes may have choice edges, and choices need not all have exits.
 
 `validateGraph(input)` validates without execution. Invalid graphs raise
@@ -289,7 +292,7 @@ length or token cap (see [resource limits](docs/resource-limits.md)).
 | `nodeTimeoutMs` | Unlimited | Separate deadline for each node, starting when it runs (not while queued or suspended) |
 | `graphTimeoutMs` | Unlimited | Whole execution deadline, including node queueing, paused gates, and suspensions; starts after validation |
 | `onNodeTimeout` | `"pause"` (`"fail"` in `braid()`) | `"pause"` suspends a timed-out execution with its work until it is resumed or cancelled (needs an interruptible runner); `"fail"` fails it with `NODE_TIMEOUT` |
-| `onLimit` | `"pause"` (`"fail"` in `braid()`) | What reaching an edge's `limit`, `maxExecutions`, `graphTimeoutMs`, or `maxTokens` does: `"pause"` holds the decision that chose the edge or pauses the run until the owner raises the limit; `"fail"` fails the run with `EDGE_LIMIT`, `EXECUTION_LIMIT`, `GRAPH_TIMEOUT`, or `TOKEN_LIMIT` |
+| `onLimit` | `"pause"` (`"fail"` in `braid()`) | What reaching a node's `maxRuns`, `maxExecutions`, `graphTimeoutMs`, or `maxTokens` does: `"pause"` keeps the rerun pending or pauses the run until the owner raises the limit; `"fail"` fails the run with `RUN_LIMIT`, `EXECUTION_LIMIT`, `GRAPH_TIMEOUT`, or `TOKEN_LIMIT` |
 | `signal` | None | Caller cancellation signal; aborts running nodes and marks queued nodes cancelled |
 | `onEvent` | None | Live observer for graph and execution creation, starts, handoffs, completions, skips, failures, and graph completion |
 

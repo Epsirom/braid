@@ -574,12 +574,12 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   const consulted = new Map<string, Map<string, string>>();
   // Cycle-closing firings attached to a pending instance.
   const attached = new Map<string, Firing[]>();
-  // Times each edge identity fired, for edge limits.
-  const firings = new Map<string, number>();
   // Settled instances whose cycle-closing edges have not been routed yet.
   const unrouted = new Set<string>();
-  // Decisions held at an edge limit; releasing one without a higher limit ends the cycle.
-  const limitHeld = new Set<string>();
+  // Instances cloned because an edge reached a settled head: the reruns that maxRuns limits.
+  const clones = new Set<string>();
+  // Pending clones at their node's maxRuns, reported by limit_reached.
+  const limited = new Set<string>();
   // Running instances per lineage ID: a lineage starts its next instance only after the last one stops.
   const runningLineages = new Map<string, number>();
   // Instances cancelled because an update replaced or removed them; their failure is not a run failure.
@@ -637,6 +637,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     const waits = assess();
     const state = structuredClone({ runId, status, revision, graph: definition, nodes: finalNodes ?? heads(),
       executions: Object.fromEntries(executions), pausedExecutionIds: [...paused], suspendedExecutionIds: [...suspended],
+      limitedExecutionIds: [...limited],
       ...(runPause ? { pause: runPause } : {}), limits: finiteLimits(),
       ...(controller.signal.aborted ? { error: describeError(controller.signal.reason) } : {}) });
     if (!finalNodes) for (const record of [...Object.values(state.nodes), ...Object.values(state.executions)]) mark(record, waits);
@@ -713,11 +714,11 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   }
   function resumable(id: string) {
     const state = executions.get(id)?.suspension?.state;
-    return paused.has(id) || state === "pausing" || state === "suspended";
+    return paused.has(id) || state === "pausing" || state === "suspended" || (limited.has(id) && atRunLimit(executions.get(id)!));
   }
   function validateResume(ids: readonly string[], options?: ResumeOptions) {
     if (!Array.isArray(ids) || new Set(ids).size !== ids.length || ids.some(id => !resumable(id)))
-      throw new Error("resume must contain unique held or paused execution IDs");
+      throw new Error("resume must contain unique held, paused, or limited execution IDs");
     if (options === undefined) return;
     if (!options || typeof options !== "object" || Object.keys(options).some(key => key !== "nodeTimeoutMs"))
       throw new TypeError("Unknown resume option");
@@ -729,7 +730,13 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   function stageResume(ids: readonly string[], options?: ResumeOptions): string[] {
     const continued: string[] = [];
     for (const id of ids) {
-      const record = executions.get(id)!;
+      const record = executions.get(id);
+      // A limited rerun is pending. An update in the same call may have raised its maxRuns, and then it
+      // simply starts, or removed its node.
+      if (!record || record.status === "pending") {
+        if (record && limited.has(id) && atRunLimit(record)) endRerun(record);
+        continue;
+      }
       pausedByRun.delete(id);
       // A timeout pause gets a full new window unless the caller chose one.
       const budget = options?.nodeTimeoutMs ?? (record.suspension?.source === "node_timeout" ? nodeTimeoutMs : undefined);
@@ -950,6 +957,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       ...(links.supersedes ? { supersedes: links.supersedes } : {}),
     };
     executions.set(record.executionId, record);
+    if (cause === "cloned") clones.add(record.executionId);
     let lineage = lineages.get(id);
     if (!lineage) lineages.set(id, lineage = { instances: [], queued: [] });
     lineage.instances.push(record);
@@ -975,8 +983,28 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   /** Drop a settled instance's hold without releasing it downstream. */
   function dropHold(record: NodeExecution) {
     paused.delete(record.executionId);
-    limitHeld.delete(record.executionId);
     unrouted.delete(record.executionId);
+  }
+  /** Forget a pending instance that never started; no history is kept. */
+  function forget(record: NodeExecution) {
+    executions.delete(record.executionId);
+    attached.delete(record.executionId);
+    clones.delete(record.executionId);
+    limited.delete(record.executionId);
+  }
+  /** Release a limited rerun without raising maxRuns: remove it, and its lineage keeps its last result. */
+  function endRerun(record: NodeExecution) {
+    const lineage = lineages.get(record.id)!;
+    lineage.instances.pop();
+    forget(record);
+    // The previous head accepts its settled inputs, so the same edges do not clone it again;
+    // an input that is still rerunning reaches it once it settles.
+    const used = consulted.get(lineage.instances.at(-1)!.executionId)!;
+    for (const edge of graph.incoming.get(record.id)!) {
+      const source = head(edge.from);
+      if (!graph.closing.has(edge) && done(source) && !paused.has(source.executionId)) used.set(edge.from, source.executionId);
+    }
+    emit({ type: "execution_removed", nodeId: record.id, ...context(record) });
   }
 
   /** Validate a graph edit against the current graph without applying it. */
@@ -999,7 +1027,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     const existing = new Set(definition.edges.map(edgeIdentity));
     const removedEdges = new Set<string>();
     for (const edge of patch.removeEdges ?? []) {
-      if (!edge || typeof edge !== "object" || Object.keys(edge).some(key => !["from", "to", "choice", "limit"].includes(key)) ||
+      if (!edge || typeof edge !== "object" || Object.keys(edge).some(key => !["from", "to", "choice"].includes(key)) ||
           [edge.from, edge.to, ...(edge.choice === undefined ? [] : [edge.choice])].some(value => typeof value !== "string" || !value.trim()))
         throw new TypeError("removeEdges must contain edge identities: from, to, and choice when present");
       const key = edgeIdentity(edge);
@@ -1034,8 +1062,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       lineages.delete(id);
       if (record.status === "pending") {
         // Never started: no history is kept.
-        executions.delete(record.executionId);
-        attached.delete(record.executionId);
+        forget(record);
         emit({ type: "execution_removed", nodeId: id, ...context(record) });
       } else {
         discard(record, "removed");
@@ -1107,7 +1134,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       if (!lineages.has(id)) continue;
       const upstream = upstreamDirt(id, dirt);
       const record = head(id);
-      if (record.status === "pending") waits.set(record.executionId, upstream ?? (runPause ? "run_paused" : "slot"));
+      if (record.status === "pending") waits.set(record.executionId, upstream ?? (overLimit(record) ? "limit" : runPause ? "run_paused" : "slot"));
       dirt.set(id, lineageDirt(id, upstream));
     }
     return waits;
@@ -1119,42 +1146,43 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     for (const id of [...unrouted]) {
       const record = executions.get(id)!;
       if (paused.has(id)) continue;
+      unrouted.delete(id);
       // Superseded and removed instances no longer route.
-      if (lineages.get(record.id)?.instances.at(-1) !== record) { unrouted.delete(id); continue; }
-      let held = false;
+      if (lineages.get(record.id)?.instances.at(-1) !== record) continue;
       for (const edge of graph.outgoing.get(record.id)!) {
         if (!graph.closing.has(edge) || edgeState(edge, record) !== "active") continue;
-        const key = edgeIdentity(edge);
-        const count = firings.get(key) ?? 0;
-        const limit = edge.limit ?? Infinity;
-        if (count >= limit) {
-          if (onLimit === "fail") {
-            controller.abort(new RunError("EDGE_LIMIT", `Edge '${edge.from}' -> '${edge.to}' reached its limit of ${limit}`));
-            return true;
-          }
-          // Released without a higher limit: the cycle ends here, and the decision's other edges stay inactive.
-          if (limitHeld.has(id)) continue;
-          // Hold the decision until the owner raises the limit or releases it to end the cycle.
-          limitHeld.add(id);
-          record.holdAfter = { source: "edge_limit", requestedAt: Date.now() };
-          paused.add(id);
-          log.emit({ type: "execution_hold_added", nodeId: record.id, source: "edge_limit", ...context(record) });
-          log.emit({ type: "limit_reached", limit: "edge", value: limit, nodeId: record.id,
-            edge: { from: edge.from, to: edge.to, ...(edge.choice !== undefined ? { choice: edge.choice } : {}), limit }, ...context(record) });
-          log.emit({ type: "execution_paused", nodeId: record.id, ...context(record) });
-          held = progressed = true;
-          break;
-        }
-        firings.set(key, count + 1);
         const target = head(edge.to);
         const firing = { edge, source: record };
         if (target.status === "pending") (attached.get(target.executionId) ?? attached.set(target.executionId, []).get(target.executionId)!).push(firing);
         else lineages.get(edge.to)!.queued.push(firing);
         progressed = true;
       }
-      if (!held) { unrouted.delete(id); limitHeld.delete(id); }
     }
     return progressed;
+  }
+
+  /** A clone whose node has already started maxRuns executions. */
+  function atRunLimit(record: NodeExecution): boolean {
+    if (!clones.has(record.executionId)) return false;
+    const runs = lineages.get(record.id)!.instances.filter(value => value.status !== "pending" && value.status !== "skipped").length;
+    return runs >= (record.node.maxRuns ?? Infinity);
+  }
+  /** A clone that would start, not be skipped, beyond its node's maxRuns. Valid once its inputs are current. */
+  function overLimit(record: NodeExecution): boolean {
+    return atRunLimit(record) && !willSkip(record);
+  }
+  /** Keep a clone at its node's maxRuns pending for the owner, or fail the run; false when the run fails. */
+  function reachRunLimit(record: NodeExecution): boolean {
+    const maxRuns = record.node.maxRuns!;
+    if (onLimit === "fail") {
+      controller.abort(new RunError("RUN_LIMIT", `Node '${record.id}' reached its maxRuns of ${maxRuns}`));
+      return false;
+    }
+    if (!limited.has(record.executionId)) {
+      limited.add(record.executionId);
+      log.emit({ type: "limit_reached", limit: "maxRuns", value: maxRuns, nodeId: record.id, ...context(record) });
+    }
+    return true;
   }
 
   /** Start or skip a pending head whose inputs are settled and current. */
@@ -1254,8 +1282,11 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       }
       if (record.status === "pending" && !upstream && !runPause && !runningLineages.get(id)) {
         const skip = willSkip(record);
-        // Resumed executions waiting for a slot take priority over new admissions.
-        if (skip || (active() < maxConcurrency && !resumeQueue.length)) {
+        if (overLimit(record)) {
+          if (!reachRunLimit(record)) return true;
+        } else if (skip || (active() < maxConcurrency && !resumeQueue.length)) {
+          // Resumed executions waiting for a slot take priority over new admissions.
+          limited.delete(record.executionId);
           if (!admit(record)) return true;
           progressed = true;
           // A skipped record's event may have submitted an update.
@@ -1289,12 +1320,12 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
         const schedulingRevision = revision;
         const progressed = schedule();
         if (controller.signal.aborted || progressed || schedulingRevision !== revision) continue;
-        if (running.size || paused.size || runPause) {
+        if (running.size || paused.size || runPause || limited.size) {
           status = active() ? "running" : "waiting";
           // Updates and resumes that start nothing leave lastSettled unset, so they do not report again.
           if (status === "waiting" && lastSettled) {
             log.emit({ type: "graph_waiting", settledExecutionId: lastSettled, pausedExecutionIds: [...paused],
-              suspendedExecutionIds: [...suspended], ...(runPause ? { pause: { ...runPause } } : {}), revision });
+              suspendedExecutionIds: [...suspended], limitedExecutionIds: [...limited], ...(runPause ? { pause: { ...runPause } } : {}), revision });
             lastSettled = undefined;
           }
           await changed;
@@ -1311,6 +1342,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       status = "finalizing";
       // Terminal holds are no longer resumable; the event log retains pause history.
       paused.clear();
+      limited.clear();
       runPause = undefined;
       try { await workspaces.archivePending("Execution checkpoint retained for inspection and future recovery"); }
       catch (error) { cleanupError = { code: "CLEANUP_FAILED", message: error instanceof Error ? error.message : String(error) }; }

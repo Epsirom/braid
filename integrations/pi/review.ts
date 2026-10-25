@@ -20,7 +20,8 @@ If nothing qualifies, say exactly "No issues found." End with "Merge verdict: BL
         },
         nodes: [
           {
-            type: "execute", id: "scope", workspace: "worktree", requireSuccess: true,
+            // Each retry reruns scope, so it runs at most once per round.
+            type: "execute", id: "scope", workspace: "worktree", requireSuccess: true, maxRuns: maxRounds,
             prompt: `Prepare this review round by inspecting the requested target and relevant repository instructions. You are the only fix writer.
 On the FIRST round only, resolve the target without editing files. For the default target, compare workspace.baseCommit (the caller's original HEAD) to workspace.snapshotCommit, including captured staged/unstaged/non-ignored new files. If identical, review the latest original commit against its parent; for an initial/unborn commit inspect all captured files. Do not mistake a clean isolated worktree for an empty target. For an explicit commit/range target, resolve HEAD against workspace.baseCommit, not the detached snapshot HEAD, and pin all endpoints as commit hashes.
 Pin the original baseline commit, original target endpoint commit, initial job snapshot commit (first-round workspace.snapshotCommit), and original target/file scope in the first handoff. For captured uncommitted changes the original target endpoint is the initial job snapshot; for latest-commit review it is workspace.baseCommit; for an explicit range it is the resolved upper endpoint. On later rounds retain all these exact values from the previous check handoff; never re-resolve HEAD-relative refs or switch target modes. Inspect two separate diffs: original baseline to original target endpoint, and initial job snapshot to current workspace.snapshotCommit for cumulative loop fixes. Do not review baseline-to-current-snapshot as the target: file filtering cannot exclude later commits or unrelated dirty edits in the same target file. Preserve those out-of-target edits and do not fix their defects.
@@ -53,8 +54,8 @@ Inspect the final diff and run or confirm focused validation without changing co
             { from: `review-${slot}`, to: "check" },
           ]),
           { from: "scope", to: "check" },
-          // Closes the review cycle: each retry reruns scope, at most maxRounds - 1 times.
-          { from: "check", to: "scope", choice: "retry", limit: maxRounds - 1 },
+          // Closes the review cycle; scope's maxRuns bounds the rounds.
+          { from: "check", to: "scope", choice: "retry" },
           { from: "check", to: "apply", choice: "done" },
         ],
       };

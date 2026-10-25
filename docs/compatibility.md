@@ -235,10 +235,10 @@ instances.
   need no round limit. Callers that relied on the old bounds, including
   `braid()` callers, must set them explicitly. Pi and DSH already defaulted both
   timeouts to unlimited; their jobs also lose the 1000-execution bound.
-- **Limits pause by default.** With `startBraid`, a decision that chooses an edge
-  at its limit is held, `maxExecutions` stops admission, and `graphTimeoutMs`
-  pauses the run, instead of failing with `EDGE_LIMIT`, `EXECUTION_LIMIT`, or
-  `GRAPH_TIMEOUT`. Pass `onLimit: "fail"` to keep failing.
+- **Limits pause by default.** With `startBraid`, a rerun past its node's
+  `maxRuns` waits, `maxExecutions` stops admission, and `graphTimeoutMs` pauses
+  the run, instead of failing with `RUN_LIMIT` (was `LOOP_LIMIT`),
+  `EXECUTION_LIMIT`, or `GRAPH_TIMEOUT`. Pass `onLimit: "fail"` to keep failing.
   Otherwise, raise the limit and continue as described in
   [limits](execution-control.md#limits), or cancel the run. `braid()` still fails
   and rejects `onLimit: "pause"`.
@@ -268,16 +268,26 @@ change without effect. See [execution control](execution-control.md) for the
 full model.
 
 **Graphs and loops.** Remove `loops` and every edge's `feedback`. A cycle closed
-by a decision's choice edge is a loop; move the loop's `maxIterations` onto that
-edge as `limit`, which counts how many times the edge fires, so it is one less:
+by a decision's choice edge is a loop; move the loop's `maxIterations` onto a node
+in the cycle, usually its entry, as `maxRuns` with the same number. `maxRuns`
+counts every execution of that node that starts, including reruns caused by
+upstream changes:
 
 ```ts
 // 0.5
+nodes: [{ type: "execute", id: "edit", prompt }, /* ... */],
 loops: [{ id: "refine", entry: "edit", maxIterations: 3 }],
 edges: [{ from: "review", to: "edit", choice: "again", feedback: "refine" }],
 // 0.6
-edges: [{ from: "review", to: "edit", choice: "again", limit: 2 }],
+nodes: [{ type: "execute", id: "edit", prompt, maxRuns: 3 }, /* ... */],
+edges: [{ from: "review", to: "edit", choice: "again" }],
 ```
+
+At the limit, the decision is no longer held: the next round's execution of that
+node is created but waits pending (`waitReason: "limit"`, listed in
+`limitedExecutionIds`). Raise `maxRuns` by upserting the node to let it start, or
+release it with `resume` to end the cycle, as described in
+[limits](execution-control.md#limits).
 
 The cycle rules are otherwise unchanged: the closing edge must be a decision's
 choice edge into the cycle's entry, the decision needs an exit choice, edges enter
@@ -327,19 +337,23 @@ unless you replace it.
   instance, with `generation`, `cause`, and `supersedes` or `trigger`),
   `node_runnable`, `loop_started`, and `loop_completed`. New events:
   `execution_removed` and `execution_superseded`. `limit_reached.limit` is
-  `"edge"` instead of `"maxIterations"` and carries the `edge`.
-- `ExecutionError.code` `LOOP_LIMIT` is now `EDGE_LIMIT`, and the hold source
-  `loop_limit` is now `edge_limit`.
-- New: `Edge.limit`, `WaitReason`, `NodeResult.waitReason`, `held`,
-  `supersedes`, and `supersededBy`, `NodeExecution.generation`, and the
-  `closingEdges` helper.
+  `"maxRuns"` instead of `"maxIterations"`, with the waiting execution's
+  `executionId`.
+- `ExecutionError.code` `LOOP_LIMIT` is now `RUN_LIMIT`, and the hold source
+  `loop_limit` is gone: a limit no longer holds the decision.
+- New: `maxRuns` on every node type, `WaitReason` (including `"limit"`),
+  `NodeResult.waitReason`, `held`, `supersedes`, and `supersededBy`,
+  `NodeExecution.generation`, `BraidSnapshot.limitedExecutionIds` and
+  `graph_waiting.limitedExecutionIds`, and the `closingEdges` helper.
+  `resume` also accepts a limited execution, which ends that rerun.
 
 **Pi and DSH.** The `braid` and `braid_update` tools drop `loops`, `feedback`, and
-`executionId` on edges, and accept `limit` on the closing edge; `removeEdges`
-ignores `limit`. Status text lists executions oldest first with their wait
-reasons, holds, and replacements, and marks the edge that closes a cycle.
-Completion notices drop `iteration` and replace `loopLimit` with `edgeLimit`,
-and `formatLoopLimit` is now `formatEdgeLimit`. The Pi live state replaces
+`executionId` on edges, and accept `maxRuns` on nodes. Status text lists
+executions oldest first with their wait reasons, holds, and replacements, and
+marks the edge that closes a cycle. Completion notices drop `iteration` and
+`loopLimit`, and `formatLoopLimit` is removed: a rerun at its node's `maxRuns`
+appears in the waiting reminder instead, as a `WaitingItem` of kind `"limited"`
+with source `"maxRuns"`. Pi's `OutstandingJob` adds `limitedExecutionIds`. The Pi live state replaces
 `iterations` with `generations`, and the DSH panel's `PanelJob` drops `loops`,
 marks the closing edge with `closesCycle`, and gives each execution a
 `generation`.

@@ -7,8 +7,8 @@ import { braid, closingEdges, startBraid, validateGraph, type BraidInput, type B
 import { deferred } from "./helpers.js";
 
 const node = (id: string) => ({ type: "execute" as const, id, prompt: id });
-const loop = (limit = 2): BraidInput => ({ goal: "refine", nodes: [node("work"), { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }, node("end")],
-  edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", limit }, { from: "check", to: "end", choice: "done" }] });
+const loop = (maxRuns = 3): BraidInput => ({ goal: "refine", nodes: [{ ...node("work"), maxRuns }, { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }, node("end")],
+  edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }, { from: "check", to: "end", choice: "done" }] });
 async function outsideGit(t: TestContext) {
   const cwd = await mkdtemp(join(tmpdir(), "braid-control-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
@@ -38,13 +38,15 @@ test("a cycle closed by a choice edge clones one instance per round and feeds th
   assert.ok(!result.events.some(event => event.type === "node_skipped"));
 });
 
-test("an edge limit is fatal under onLimit fail even when the decision is optional", async t => {
+test("maxRuns is fatal under onLimit fail even when the decision is optional", async t => {
   const result = await braid(loop(), { cwd: await outsideGit(t), runner: async request => {
     request.decide?.("again"); return { output: "keep going" };
   } });
-  assert.equal(result.error?.code, "EDGE_LIMIT");
-  assert.match(result.error!.message, /'check' -> 'work' reached its limit of 2/);
-  assert.equal(Object.values(result.executions).filter(value => value.id === "work").length, 3);
+  assert.equal(result.error?.code, "RUN_LIMIT");
+  assert.match(result.error!.message, /Node 'work' reached its maxRuns of 3/);
+  // The rerun that would exceed it never starts.
+  assert.deepEqual(Object.values(result.executions).filter(value => value.id === "work").map(value => value.skipReason ?? value.status),
+    ["completed", "completed", "completed", "run_failed"]);
 });
 
 test("execution IDs name the lineage and generation, so node IDs cannot contain @", async t => {
@@ -342,16 +344,8 @@ test("a cycle can be changed mid-round; later rounds follow the current edges", 
   assert.deepEqual(seen, ["work@1", "extra@1", "check@1", "work@2", "extra@2", "check@2", "end@1"]);
 });
 
-test("cycles must be closed by a decision's choice edge, and only that edge takes a limit", () => {
+test("cycles must be closed by a decision's choice edge", () => {
   assert.throws(() => validateGraph({ goal: "bad", nodes: [node("a")], edges: [{ from: "a", to: "a" }] }), /closed by a decision's choice edge/);
-  for (const limit of [0, 1.5, -1, Number.NaN])
-    assert.throws(() => validateGraph(loop(limit)), /limit must be a positive integer/);
-  for (const limit of [undefined, Infinity]) {
-    const input = loop();
-    validateGraph({ ...input, edges: input.edges.map(edge => edge.to === "work" ? { from: edge.from, to: edge.to, choice: edge.choice!, ...(limit === undefined ? {} : { limit }) } : edge) });
-  }
-  assert.throws(() => validateGraph({ ...loop(), edges: [...loop().edges.slice(0, 2), { from: "check", to: "end", choice: "done", limit: 1 }] }),
-    /'check' -> 'end' sets limit, but only the edge that closes a cycle can/);
   assert.throws(() => validateGraph({ goal: "loops", nodes: [{ type: "decision", id: "check", prompt: "p", choices: ["again"] }, node("work")],
     edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }] }), /needs an exit choice/);
   // Two cycles sharing check overlap.
@@ -360,7 +354,7 @@ test("cycles must be closed by a decision's choice edge, and only that edge take
 });
 
 test("closingEdges finds the edge that closes each cycle for displays", () => {
-  assert.deepEqual(closingEdges(loop()), [{ from: "check", to: "work", choice: "again", limit: 2 }]);
+  assert.deepEqual(closingEdges(loop()), [{ from: "check", to: "work", choice: "again" }]);
   // Without an external input, the entry listed first wins between two choice edges.
   const decisions = ["a", "b"].map(id => ({ type: "decision" as const, id, prompt: id, choices: ["next", "stop"] }));
   assert.deepEqual(closingEdges({ nodes: decisions, edges: [{ from: "a", to: "b", choice: "next" }, { from: "b", to: "a", choice: "next" }] }),
@@ -497,12 +491,12 @@ test("node IDs such as __proto__ stay ordinary snapshot properties", async t => 
 test("decision branches are resolved anew in each round", async t => {
   const inputs: string[][] = [];
   const result = await braid({ goal: "alternate branches", nodes: [
-    { type: "decision", id: "route", prompt: "pick", choices: ["left", "right"] }, node("left"), node("right"),
+    { type: "decision", id: "route", prompt: "pick", choices: ["left", "right"], maxRuns: 2 }, node("left"), node("right"),
     { type: "decision", id: "check", prompt: "continue", choices: ["again", "done"] },
   ], edges: [
     { from: "route", to: "left", choice: "left" }, { from: "route", to: "right", choice: "right" },
     { from: "left", to: "check" }, { from: "right", to: "check" },
-    { from: "check", to: "route", choice: "again", limit: 1 },
+    { from: "check", to: "route", choice: "again" },
   ] }, { cwd: await outsideGit(t), runner: async request => {
     if (request.node.id === "route") request.decide!(request.execution.generation === 1 ? "left" : "right");
     if (request.node.id === "check") {
@@ -521,7 +515,7 @@ test("a replaced held instance is released, and only the replacement routes", as
   const runner: ModelRunner = async request => { request.decide?.("again"); return { output: request.execution.executionId! }; };
   const check = { type: "decision" as const, id: "check", prompt: "review", choices: ["again", "done"], pauseAfter: true };
   let run!: BraidRun;
-  run = startBraid(loop(5), { cwd: await outsideGit(t), runner, onEvent(event) {
+  run = startBraid(loop(6), { cwd: await outsideGit(t), runner, onEvent(event) {
     if (event.type === "execution_paused" && event.executionId === "check@1")
       run.update({ expectedRevision: 1, upsertNodes: [{ ...check, prompt: "review again" }] });
   } });

@@ -142,10 +142,10 @@ export function compileGraph(input: BraidInput): Graph {
     fields(
       node,
       node.type === "decision"
-        ? ["type", "id", "prompt", "model", "choices", "workspace", "notifyOnCompletion", "requireSuccess", "pauseAfter"]
+        ? ["type", "id", "prompt", "model", "choices", "workspace", "notifyOnCompletion", "requireSuccess", "pauseAfter", "maxRuns"]
         : node.type === "execute"
-          ? ["type", "id", "prompt", "model", "workspace", "notifyOnCompletion", "requireSuccess", "pauseAfter"]
-          : ["type", "id", "prompt", "model", "notifyOnCompletion", "requireSuccess", "pauseAfter"],
+          ? ["type", "id", "prompt", "model", "workspace", "notifyOnCompletion", "requireSuccess", "pauseAfter", "maxRuns"]
+          : ["type", "id", "prompt", "model", "notifyOnCompletion", "requireSuccess", "pauseAfter", "maxRuns"],
       `Node '${node.id}' (${node.type})`,
     );
     requireValid(!byId.has(node.id), `Duplicate node id '${node.id}'`);
@@ -168,6 +168,9 @@ export function compileGraph(input: BraidInput): Graph {
     for (const field of ["requireSuccess", "pauseAfter"] as const) {
       requireValid(node[field] === undefined || typeof node[field] === "boolean", `Invalid ${field} on '${node.id}': expected a boolean`);
     }
+    requireValid(node.maxRuns === undefined || node.maxRuns === Infinity ||
+      (typeof node.maxRuns === "number" && Number.isSafeInteger(node.maxRuns) && node.maxRuns > 0),
+    `Invalid maxRuns on '${node.id}': expected a positive integer, Infinity, or omitted`);
     const common = {
       id: node.id,
       prompt,
@@ -175,6 +178,7 @@ export function compileGraph(input: BraidInput): Graph {
       ...(node.notifyOnCompletion !== undefined ? { notifyOnCompletion: node.notifyOnCompletion } : {}),
       ...(node.requireSuccess !== undefined ? { requireSuccess: node.requireSuccess as boolean } : {}),
       ...(node.pauseAfter !== undefined ? { pauseAfter: node.pauseAfter as boolean } : {}),
+      ...(node.maxRuns !== undefined ? { maxRuns: node.maxRuns } : {}),
       ...(workspace !== undefined ? { workspace } as const : {}),
     };
     if (node.type === "decision") {
@@ -204,7 +208,7 @@ export function compileGraph(input: BraidInput): Graph {
   }
   for (const edge of input.edges) {
     requireValid(isRecord(edge), "Edge must be an object");
-    fields(edge, ["from", "to", "choice", "limit"], `Edge '${edge.from}' -> '${edge.to}'`);
+    fields(edge, ["from", "to", "choice"], `Edge '${edge.from}' -> '${edge.to}'`);
     requireValid(text(edge.from) && byId.has(edge.from), `Missing source node '${edge.from}'`);
     requireValid(text(edge.to) && byId.has(edge.to), `Missing target node '${edge.to}'`);
     requireValid(edge.choice === undefined || text(edge.choice), "Invalid edge choice");
@@ -213,9 +217,6 @@ export function compileGraph(input: BraidInput): Graph {
       requireValid(source.type === "decision", `Choice edge from non-decision '${edge.from}'`);
       requireValid(source.choices.includes(edge.choice), `Undeclared edge choice '${edge.choice}' on '${edge.from}'`);
     }
-    requireValid(edge.limit === undefined || edge.limit === Infinity ||
-      (typeof edge.limit === "number" && Number.isSafeInteger(edge.limit) && edge.limit > 0),
-    `Edge '${edge.from}' -> '${edge.to}' limit must be a positive integer, Infinity, or omitted`);
     const key = edgeIdentity(edge as unknown as Edge);
     requireValid(!seen.has(key), `Duplicate edge '${edge.from}' -> '${edge.to}'`);
     seen.add(key);
@@ -223,7 +224,6 @@ export function compileGraph(input: BraidInput): Graph {
       from: edge.from,
       to: edge.to,
       ...(edge.choice !== undefined ? { choice: edge.choice } : {}),
-      ...(edge.limit !== undefined ? { limit: edge.limit } : {}),
     };
     edges.push(snapshot);
     incoming.get(edge.to)!.push(snapshot);
@@ -252,10 +252,6 @@ export function compileGraph(input: BraidInput): Graph {
     }
     closing.add(back);
     cycles.push({ entry: back.to, edge: back, members });
-  }
-  for (const edge of edges) {
-    requireValid(edge.limit === undefined || closing.has(edge),
-      `Edge '${edge.from}' -> '${edge.to}' sets limit, but only the edge that closes a cycle can`);
   }
   // Kahn's algorithm is iterative, including for very deep graphs.
   const remaining = new Map(nodes.map(node => [node.id, incoming.get(node.id)!.filter(edge => !closing.has(edge)).length]));
@@ -330,7 +326,7 @@ export function closingEdges(graph: { nodes: readonly Pick<BraidNode, "id" | "ty
     .map(cycle => cycle.candidates[0]!);
 }
 
-/** Edges are identified by source, target, and choice; `limit` is an attribute. */
+/** Edges are identified by source, target, and choice. */
 export function edgeIdentity(edge: Pick<Edge, "from" | "to" | "choice">): string {
   return JSON.stringify([edge.from, edge.to, edge.choice ?? null]);
 }

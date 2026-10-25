@@ -2,8 +2,8 @@
 
 Braid targets small reasoning graphs. Graph size, prompt/output size, event-log
 size, and the number of simultaneous graph submissions have no hard cap. Started and
-skipped executions can be capped with `maxExecutions`, and the rounds of a cycle with
-its closing edge's `limit`; both are unlimited by default.
+skipped executions can be capped with `maxExecutions`, and the runs of a node,
+including the rounds of a cycle, with its `maxRuns`; both are unlimited by default.
 The scheduler rescans the graph as work settles. Consult the
 [benchmark](benchmark.md) for measured local overhead rather than treating the
 validator's deep-graph tests as a production capacity guarantee.
@@ -18,10 +18,11 @@ well as the compact definition.
 | --- | --- | --- |
 | Active runtime-managed invocations per graph | 4 | 4 |
 | Started and skipped executions across rounds/updates | Unlimited (`maxExecutions`) | Unlimited (`maxExecutions`) |
+| Started executions of one node, including cycle rounds and reruns | Unlimited (`maxRuns`) | Unlimited (`maxRuns`) |
 | Node timeout (starts at admission, stops while suspended) | Unlimited | Unlimited |
 | On node timeout (`onNodeTimeout`) | Pause with `startBraid` and an interruptible runner; fail with `braid()` | Pause; the parent gets a reminder to resume or cancel |
 | Graph timeout (includes queueing, paused gates, and suspensions) | Unlimited | Unlimited |
-| On reaching a limit that is set (`onLimit`) | Pause with `startBraid` (hold the decision at an edge `limit`, or pause the run); fail with `braid()` | Pause; the parent gets a reminder to raise the limit or stop |
+| On reaching a limit that is set (`onLimit`) | Pause with `startBraid` (keep a rerun past `maxRuns` pending, or pause the run); fail with `braid()` | Pause; the parent gets a reminder to raise the limit or stop |
 | Caller cancellation | `AbortSignal`; `cancelExecutions` for single executions | `braid_cancel` / panel `c`; `braid_cancel` with `executionIds` / panel `x` |
 | Pause running work | `pause` / `pauseRun` | `braid_pause` / panel `p` |
 | Worker tool loop | Decision continuation / merge Git-tool loop, bounded by deadlines | Unlimited by default; optional `maxToolRounds` and `maxToolCalls` |

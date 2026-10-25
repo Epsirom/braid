@@ -19,7 +19,8 @@ export function panelJob(job: JobSnapshot, activity: (executionId: string) => Ex
     jobId: job.jobId, handle: job.handle, goal: clip(job.goal), status: job.status, createdAt: job.createdAt,
     revision: state.revision, phase: state.status, observedAt: Date.now(),
     ...(job.error || state.error ? { error: clip(job.error ?? state.error!.message) } : {}),
-    nodes: state.graph.nodes.map(node => ({ id: node.id, type: node.type, status: state.nodes[node.id]?.status ?? "pending" })),
+    nodes: state.graph.nodes.map(node => ({ id: node.id, type: node.type, status: state.nodes[node.id]?.status ?? "pending",
+      ...(node.maxRuns === undefined ? {} : { maxRuns: node.maxRuns }) })),
     edges: state.graph.edges.map(edge => ({ ...edge, ...(closing.has(edge) ? { closesCycle: true } : {}) })),
     executions: Object.values(state.executions).map(e => ({
       id: e.id, executionId: e.executionId, status: e.status, type: e.node.type, revision: e.revision,

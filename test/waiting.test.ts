@@ -67,7 +67,7 @@ for (const outcome of ["succeeds", "fails"] as const) {
     assert.equal(rest.length, 0);
     const held = executionOf(run, "held").executionId;
     assert.deepEqual({ ...event, sequence: 0, timestamp: 0 }, {
-      type: "graph_waiting", settledExecutionId: a, pausedExecutionIds: [held], suspendedExecutionIds: [], revision: 0, sequence: 0, timestamp: 0,
+      type: "graph_waiting", settledExecutionId: a, pausedExecutionIds: [held], suspendedExecutionIds: [], limitedExecutionIds: [], revision: 0, sequence: 0, timestamp: 0,
     });
     const settled = events.findIndex(item => item.executionId === a && (item.type === "node_completed" || item.type === "node_failed"));
     assert.ok(events.indexOf(event!) > settled, "it follows the settling execution's own event");

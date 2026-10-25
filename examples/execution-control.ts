@@ -7,11 +7,12 @@ await inTemporaryDirectory(async cwd => {
   run = startBraid({
     goal: "Refine a proposal, then add the next step using the accepted result.",
     nodes: [
-      { type: "execute", id: "draft", prompt: "Refine the proposal." },
+      // draft may run twice, so there are at most two rounds.
+      { type: "execute", id: "draft", prompt: "Refine the proposal.", maxRuns: 2 },
       { type: "decision", id: "review", prompt: "Review it.", choices: ["again", "done"], pauseAfter: true },
     ],
-    // The choice edge back to draft closes the cycle; it may fire once, so there are at most two rounds.
-    edges: [{ from: "draft", to: "review" }, { from: "review", to: "draft", choice: "again", limit: 1 }],
+    // The choice edge back to draft closes the cycle.
+    edges: [{ from: "draft", to: "review" }, { from: "review", to: "draft", choice: "again" }],
   }, {
     cwd,
     runner: async request => {

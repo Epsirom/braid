@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BraidJobs, type Completion, type WaitingNotice } from "../jobs.js";
+import { BraidJobs, type WaitingNotice } from "../jobs.js";
 import { createBraidTools, type ToolValue } from "../tools.js";
-import { formatEdgeLimit, formatWaiting } from "../status-text.js";
+import { formatWaiting } from "../status-text.js";
 import { answer, calls, context, llm, payload, until } from "./helpers.js";
 
 const node = (id: string) => ({ type: "execute" as const, id, prompt: `task:${id}` });
@@ -33,7 +33,7 @@ test("a job paused at maxExecutions wakes the parent and resumes once braid_resu
   await jobs.dispose();
 });
 
-test("a loop decision held at maxIterations sends a reminder that says how to continue or stop", async () => {
+test("a rerun at its node's maxRuns wakes the parent with how to continue or stop", async () => {
   const rounds = new Set<string>();
   const runtime = llm(options => {
     const data = payload(options);
@@ -41,20 +41,20 @@ test("a loop decision held at maxIterations sends a reminder that says how to co
     rounds.add(data.execution.executionId);
     return calls({ name: "decide", args: { choice: "again" } });
   });
-  const completions: Completion[] = [];
-  const jobs = new BraidJobs(runtime, completion => { completions.push(completion); });
+  const waiting: WaitingNotice[] = [];
+  const jobs = new BraidJobs(runtime, undefined, undefined, undefined, undefined, notice => { waiting.push(notice); });
   const job = jobs.start({
-    goal: "refine", nodes: [node("work"), { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }],
-    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", limit: 1 }],
+    goal: "refine", nodes: [{ ...node("work"), maxRuns: 1 }, { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }],
+    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }],
   }, {}, context());
-  await until(() => completions.length === 1);
-  const [held] = completions;
-  assert.equal(held!.paused, true);
-  assert.equal(held!.executionId, "check@2");
-  assert.deepEqual(held!.edgeLimit, { from: "check", to: "work", choice: "again", limit: 1 });
-  assert.match(formatEdgeLimit(job.handle, held!.executionId!, held!.edgeLimit!), /already fired its limit of 1 times.*the cycle ends/);
-  jobs.resume(job.handle, [held!.executionId!], 0);
+  await until(() => waiting.length === 1);
+  assert.deepEqual(waiting[0]!.waitingOn, [{ kind: "limited", executionId: "work@2", nodeId: "work", source: "maxRuns" }]);
+  assert.match(formatWaiting(waiting[0]!),
+    /It waits on the rerun of node "work" execution work@2 \(its node's maxRuns\)\..*higher maxRuns in braid_update.*release it to end the rerun/);
+  jobs.resume(job.handle, ["work@2"], 0);
   await jobs.wait(job.handle);
-  assert.equal(jobs.get(job.handle).status, "completed");
+  const state = jobs.get(job.handle);
+  assert.equal(state.status, "completed");
+  assert.equal(state.execution.nodes.work!.executionId, "work@1");
   await jobs.dispose();
 });

@@ -52,9 +52,9 @@ test("cycles use fresh invocations and prompt templates", async () => {
   const cwd = directory();
   const rounds = new Map<string, number>();
   const graph: BraidInput = { goal: "loop", promptTemplates: { task: "Work on {{target}}" }, nodes: [
-    { type: "execute", id: "work", prompt: { template: "task", variables: { target: "loop" } } },
+    { type: "execute", id: "work", prompt: { template: "task", variables: { target: "loop" } }, maxRuns: 2 },
     { type: "decision", id: "check", prompt: "check", choices: ["retry", "done"] },
-  ], edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "retry", limit: 1 }] };
+  ], edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "retry" }] };
   const result = await braid(graph, { cwd, defaultModel: "fake/model", runner: createDshRunner(llm(options => {
     const p = payload(options);
     if (p.nodeId === "work") { assert.equal(p.prompt, "Work on loop"); return answer(); }
