@@ -36,7 +36,8 @@ async function cwd(t: TestContext) {
 function start(t: TestContext, graph: BraidInput, options: Omit<BraidOptions, "cwd">, events: ExecutionEvent[] = []) {
   return cwd(t).then(directory => startBraid(graph, { ...options, cwd: directory, onEvent: event => { events.push(event); } }));
 }
-const executionOf = (run: BraidRun, nodeId: string) => Object.values(run.snapshot().executions).find(record => record.id === nodeId)!;
+/** The node's first started instance. */
+const executionOf = (run: BraidRun, nodeId: string) => Object.values(run.snapshot().executions).find(record => record.id === nodeId && record.status !== "pending")!;
 
 /** A tool that runs for `ms` (forever by default) unless its step signal aborts. */
 function tool(signal: AbortSignal, ms = Infinity): Promise<void> {

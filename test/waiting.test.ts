@@ -45,7 +45,8 @@ function gated(gates: Record<string, Promise<void>[]>, fail: string[] = []): Mod
   }, { pausable: true });
 }
 
-const executionOf = (run: BraidRun, nodeId: string) => Object.values(run.snapshot().executions).find(record => record.id === nodeId)!;
+/** The node's first started instance. */
+const executionOf = (run: BraidRun, nodeId: string) => Object.values(run.snapshot().executions).find(record => record.id === nodeId && record.status !== "pending")!;
 const waiting = (events: ExecutionEvent[]) =>
   events.filter((event): event is Extract<ExecutionEvent, { type: "graph_waiting" }> => event.type === "graph_waiting");
 

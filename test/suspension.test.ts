@@ -53,7 +53,8 @@ function start(t: TestContext, graph: BraidInput, options: Omit<BraidOptions, "c
   return cwd(t).then(directory => startBraid(graph, { ...options, cwd: directory, onEvent: event => { events.push(event); options.onEvent?.(event); } }));
 }
 
-const executionOf = (run: BraidRun, nodeId: string) => Object.values(run.snapshot().executions).find(record => record.id === nodeId)!;
+/** The node's first started instance. */
+const executionOf = (run: BraidRun, nodeId: string) => Object.values(run.snapshot().executions).find(record => record.id === nodeId && record.status !== "pending")!;
 
 test("a paused execution suspends at its next checkpoint and resumes the same conversation", async t => {
   const gate = deferred();
@@ -79,7 +80,7 @@ test("a paused execution suspends at its next checkpoint and resumes the same co
   assert.equal(result.status, "completed");
   assert.equal(result.nodes.a!.output, "a: step 1, step 2, step 3");
   assert.equal(result.executions[id]!.suspension, undefined);
-  assert.deepEqual(events.filter(event => event.type.startsWith("execution_")).map(event => event.type),
+  assert.deepEqual(events.filter(event => event.type.startsWith("execution_") && event.type !== "execution_created").map(event => event.type),
     ["execution_suspending", "execution_suspended", "execution_resumed"]);
   assert.equal(events.find(event => event.type === "execution_suspended")!.executionId, id);
 });
@@ -118,7 +119,7 @@ test("resuming a still-pausing execution withdraws the request without suspendin
   gate.resolve();
   const result = await run.result;
   assert.equal(result.status, "completed");
-  assert.deepEqual(events.filter(event => event.type.startsWith("execution_")).map(event => event.type),
+  assert.deepEqual(events.filter(event => event.type.startsWith("execution_") && event.type !== "execution_created").map(event => event.type),
     ["execution_suspending", "execution_resumed"]);
 });
 

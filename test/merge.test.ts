@@ -108,7 +108,7 @@ for (const baseline of ["clean", "dirty", "unborn"] as const) {
     assert.equal(result.terminalOutputs.review!.output, "review");
     assert.deepEqual(result.metadata.usage, { inputTokens: 3, outputTokens: 3 });
     assert.equal(result.metadata.usageReportedNodes, 3);
-    assert.ok(!result.events.some(event => event.type === "node_created" && event.nodeType === "merge"));
+    assert.ok(!result.events.some(event => event.type === "execution_created" && event.nodeType === "merge"));
     for (const workspace of Object.values(result.workspaces!)) {
       assert.equal(workspace.state, "archived");
       assert.equal(workspace.reason, "Execution checkpoint retained for inspection and future recovery");
@@ -216,7 +216,7 @@ test("cancellation during checkpoint sealing prevents downstream admission", asy
   });
   assert.equal(result.error!.code, "CANCELLED");
   assert.deepEqual(calls, ["work"]);
-  assert.ok(!result.events.some(event => event.type === "node_created" && event.nodeType === "merge"));
+  assert.ok(!result.events.some(event => event.type === "execution_created" && event.nodeType === "merge"));
   assert.equal(result.nodes.work!.workspace!.state, "archived");
   assert.equal(await git(cwd, "show", `${result.nodes.work!.workspace!.checkpointRef}:partial.txt`), "recover me");
   await noWorktrees(cwd, result);

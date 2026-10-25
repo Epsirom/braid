@@ -8,7 +8,7 @@ export type {
   BraidSnapshot,
   CancelExecutionsOptions,
   GraphUpdate,
-  LoopDefinition,
+  WaitReason,
   NodeExecution,
   BraidInputNode,
   BraidNode,

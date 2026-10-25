@@ -40,9 +40,10 @@ function gated(gates: Record<string, Promise<void>>, fail: string[] = []) {
   return { runner, ran };
 }
 
-const executionOf = (run: BraidRun, nodeId: string) => Object.values(run.snapshot().executions).find(record => record.id === nodeId)!;
+/** The node's first started instance. */
+const executionOf = (run: BraidRun, nodeId: string) => Object.values(run.snapshot().executions).find(record => record.id === nodeId && record.status !== "pending")!;
 const holdEvents = (events: ExecutionEvent[]) =>
-  events.filter(event => event.type.startsWith("execution_")).map(event => event.type);
+  events.filter(event => event.type.startsWith("execution_") && event.type !== "execution_created").map(event => event.type);
 
 test("a hold added to a running execution holds its result like pauseAfter", async t => {
   const gate = deferred();

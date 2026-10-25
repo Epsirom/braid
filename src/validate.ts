@@ -1,4 +1,4 @@
-import type { BraidInput, BraidNode, Edge, LoopDefinition } from "./types.js";
+import type { BraidInput, BraidNode, DecisionNode, Edge } from "./types.js";
 
 export class GraphValidationError extends Error {
   constructor(message: string) {
@@ -15,14 +15,16 @@ export interface Graph {
   edges: Edge[];
   incoming: Map<string, Edge[]>;
   outgoing: Map<string, Edge[]>;
-  loops: Map<string, CompiledLoop>;
-  membership: Map<string, string>;
+  /** The edge that closes each cycle; scheduling treats the rest of the graph as acyclic. */
+  closing: Set<Edge>;
+  cycles: CompiledCycle[];
 }
 
-export interface CompiledLoop extends LoopDefinition {
-  /** Infinity when the definition sets no limit. */
-  maxIterations: number;
-  feedback: Edge;
+export interface CompiledCycle {
+  /** Where each round starts: the closing edge's target. */
+  entry: string;
+  /** A decision's choice edge back to the entry. */
+  edge: Edge;
   members: Set<string>;
 }
 
@@ -119,7 +121,7 @@ export function validateGraph(input: BraidInput): void {
 
 export function compileGraph(input: BraidInput): Graph {
   requireValid(isRecord(input), "Graph must be an object");
-  fields(input, ["goal", "nodes", "edges", "promptTemplates", "loops"], "Graph");
+  fields(input, ["goal", "nodes", "edges", "promptTemplates"], "Graph");
   requireValid(text(input.goal), "Graph goal must be a non-empty string");
   requireValid(
     Array.isArray(input.nodes) && input.nodes.length > 0,
@@ -132,6 +134,7 @@ export function compileGraph(input: BraidInput): Graph {
   for (const node of input.nodes) {
     requireValid(isRecord(node), "Node must be an object");
     requireValid(text(node.id), "Node id must be a non-empty string");
+    requireValid(!node.id.includes("@"), `Node id '${node.id}' must not contain '@', which separates a node ID from an instance's generation`);
     requireValid(
       node.type === "execute" || node.type === "decision" || (node.type === "merge" || node.type === "integrate"),
       `Node '${node.id}': unknown node type; expected execute, decision, merge, or integrate`,
@@ -201,114 +204,80 @@ export function compileGraph(input: BraidInput): Graph {
   }
   for (const edge of input.edges) {
     requireValid(isRecord(edge), "Edge must be an object");
-    fields(edge, ["from", "to", "choice", "feedback", "executionId"], `Edge '${edge.from}' -> '${edge.to}'`);
-    requireValid(edge.executionId === undefined || text(edge.executionId), "Invalid edge executionId");
-    requireValid(edge.feedback === undefined || text(edge.feedback), "Invalid edge feedback");
-    requireValid(!edge.feedback || !edge.executionId, "Feedback cannot pin an execution");
-    requireValid(
-      text(edge.from) && (byId.has(edge.from) || edge.executionId !== undefined),
-      `Missing source node '${edge.from}'`,
-    );
-    requireValid(
-      text(edge.to) && byId.has(edge.to),
-      `Missing target node '${edge.to}'`,
-    );
+    fields(edge, ["from", "to", "choice", "limit"], `Edge '${edge.from}' -> '${edge.to}'`);
+    requireValid(text(edge.from) && byId.has(edge.from), `Missing source node '${edge.from}'`);
+    requireValid(text(edge.to) && byId.has(edge.to), `Missing target node '${edge.to}'`);
     requireValid(edge.choice === undefined || text(edge.choice), "Invalid edge choice");
-    if (edge.choice !== undefined && edge.executionId === undefined) {
+    if (edge.choice !== undefined) {
       const source = byId.get(edge.from)!;
-      requireValid(
-        source.type === "decision",
-        `Choice edge from non-decision '${edge.from}'`,
-      );
-      requireValid(
-        text(edge.choice) && source.choices.includes(edge.choice),
-        `Undeclared edge choice '${edge.choice}' on '${edge.from}'`,
-      );
+      requireValid(source.type === "decision", `Choice edge from non-decision '${edge.from}'`);
+      requireValid(source.choices.includes(edge.choice), `Undeclared edge choice '${edge.choice}' on '${edge.from}'`);
     }
-    const key = JSON.stringify([edge.from, edge.to, edge.choice ?? null, edge.feedback ?? null, edge.executionId ?? null]);
-    requireValid(
-      !seen.has(key),
-      `Duplicate edge '${edge.from}' -> '${edge.to}'`,
-    );
+    requireValid(edge.limit === undefined || edge.limit === Infinity ||
+      (typeof edge.limit === "number" && Number.isSafeInteger(edge.limit) && edge.limit > 0),
+    `Edge '${edge.from}' -> '${edge.to}' limit must be a positive integer, Infinity, or omitted`);
+    const key = edgeIdentity(edge as unknown as Edge);
+    requireValid(!seen.has(key), `Duplicate edge '${edge.from}' -> '${edge.to}'`);
     seen.add(key);
     const snapshot: Edge = {
       from: edge.from,
       to: edge.to,
       ...(edge.choice !== undefined ? { choice: edge.choice } : {}),
-      ...(edge.feedback !== undefined ? { feedback: edge.feedback } : {}),
-      ...(edge.executionId !== undefined ? { executionId: edge.executionId } : {}),
+      ...(edge.limit !== undefined ? { limit: edge.limit } : {}),
     };
     edges.push(snapshot);
     incoming.get(edge.to)!.push(snapshot);
-    outgoing.get(edge.from)?.push(snapshot);
+    outgoing.get(edge.from)!.push(snapshot);
   }
 
-  // Kahn's algorithm is iterative, including for very deep graphs.
   const nodes = [...byId.values()];
-  const remaining = new Map(
-    nodes.map((node) => [node.id, incoming.get(node.id)!.filter(edge => !edge.feedback && !edge.executionId).length]),
-  );
-  const topologicalOrder = nodes.filter((node) => remaining.get(node.id) === 0);
+  const order = new Map(nodes.map((node, index) => [node.id, index]));
+  const cycles: CompiledCycle[] = [];
+  const closing = new Set<Edge>();
+  for (const component of stronglyConnected(nodes, outgoing, incoming)) {
+    const members = new Set(component);
+    const inside = (edge: Edge) => members.has(edge.from) && members.has(edge.to);
+    if (members.size === 1 && !outgoing.get(component[0]!)!.some(inside)) continue;
+    const label = `Cycle through ${[...members].sort((a, b) => order.get(a)! - order.get(b)!).map(id => `'${id}'`).join(", ")}`;
+    const internal = edges.filter(inside);
+    // Removing the closing edge must leave the cycle acyclic; otherwise cycles nest or overlap.
+    const breaks = internal.filter(edge => acyclic(members, internal.filter(other => other !== edge)));
+    requireValid(breaks.length > 0, `${label}: nested or overlapping cycles are unsupported`);
+    const entries = new Set(edges.filter(edge => !members.has(edge.from) && members.has(edge.to)).map(edge => edge.to));
+    requireValid(entries.size <= 1, `${label} has multiple entries (${[...entries].map(id => `'${id}'`).join(", ")}). Route external dependencies to one entry node`);
+    const candidates = breaks.filter(edge => byId.get(edge.from)!.type === "decision" && edge.choice !== undefined &&
+      (!entries.size || entries.has(edge.to)));
+    const entry = [...entries][0];
+    requireValid(candidates.length > 0, entry
+      ? `${label} must return to its entry '${entry}' through a decision's choice edge. Route the edge back to '${entry}' from a decision and set its choice`
+      : `${label} must be closed by a decision's choice edge back to the node where each round starts`);
+    candidates.sort((a, b) => order.get(a.to)! - order.get(b.to)!);
+    const back = candidates[0]!;
+    const decision = byId.get(back.from)! as DecisionNode;
+    requireValid(decision.choices.some(choice => choice !== back.choice), `${label}: decision '${back.from}' needs an exit choice besides '${back.choice}'`);
+    for (const edge of edges) {
+      requireValid(!(members.has(edge.from) && !members.has(edge.to) && edge.from !== back.from),
+        `${label} must exit through its decision '${back.from}': edge '${edge.from}' -> '${edge.to}' leaves from another node`);
+    }
+    closing.add(back);
+    cycles.push({ entry: back.to, edge: back, members });
+  }
+  for (const edge of edges) {
+    requireValid(edge.limit === undefined || closing.has(edge),
+      `Edge '${edge.from}' -> '${edge.to}' sets limit, but only the edge that closes a cycle can`);
+  }
+  // Kahn's algorithm is iterative, including for very deep graphs.
+  const remaining = new Map(nodes.map(node => [node.id, incoming.get(node.id)!.filter(edge => !closing.has(edge)).length]));
+  const topologicalOrder = nodes.filter(node => remaining.get(node.id) === 0);
   for (let i = 0; i < topologicalOrder.length; i++) {
     for (const edge of outgoing.get(topologicalOrder[i]!.id)!) {
-      if (edge.feedback || edge.executionId) continue;
+      if (closing.has(edge)) continue;
       const count = remaining.get(edge.to)! - 1;
       remaining.set(edge.to, count);
       if (count === 0) topologicalOrder.push(byId.get(edge.to)!);
     }
   }
-  requireValid(
-    topologicalOrder.length === nodes.length,
-    "Graph contains a cycle without a declared feedback edge. Declare a bounded loop in loops and label its decision-to-entry edge with choice and feedback=loopId",
-  );
-  const loops = new Map<string, CompiledLoop>();
-  const membership = new Map<string, string>();
-  requireValid(input.loops === undefined || Array.isArray(input.loops), "Graph loops must be an array");
-  const reachable = (start: string, reverse = false): Set<string> => {
-    const visited = new Set<string>();
-    const queue = [start];
-    while (queue.length) {
-      const id = queue.pop()!;
-      if (visited.has(id)) continue;
-      visited.add(id);
-      for (const edge of (reverse ? incoming : outgoing).get(id) ?? []) {
-        if (!edge.feedback && !edge.executionId) queue.push(reverse ? edge.from : edge.to);
-      }
-    }
-    return visited;
-  };
-  for (const loop of input.loops ?? []) {
-    requireValid(isRecord(loop), "Loop must be an object");
-    fields(loop, ["id", "entry", "maxIterations"], "Loop");
-    requireValid(text(loop.id) && !loops.has(loop.id), "Loop ids must be non-empty and unique");
-    requireValid(text(loop.entry) && byId.has(loop.entry), `Unknown loop entry '${loop.entry}'`);
-    requireValid(loop.maxIterations === undefined || loop.maxIterations === Infinity ||
-      (typeof loop.maxIterations === "number" && Number.isSafeInteger(loop.maxIterations) && loop.maxIterations > 0),
-    `Loop '${loop.id}' maxIterations must be a positive integer, Infinity, or omitted`);
-    const feedback = edges.filter(edge => edge.feedback === loop.id);
-    requireValid(feedback.length === 1, `Loop '${loop.id}' needs exactly one feedback edge`);
-    const back = feedback[0]!;
-    const decision = byId.get(back.from)!;
-    requireValid(back.to === loop.entry && decision.type === "decision" && back.choice !== undefined,
-      `Loop '${loop.id}' feedback edge '${back.from}' -> '${back.to}' must route a decision choice to its entry '${loop.entry}'. Set feedback on the decision-to-entry edge and include choice`);
-    requireValid(decision.choices.some(choice => choice !== back.choice), `Loop '${loop.id}' needs an exit choice`);
-    const ancestors = reachable(back.from, true);
-    const members = new Set([...reachable(loop.entry)].filter(id => ancestors.has(id)));
-    requireValid(members.has(loop.entry) && members.has(back.from), `Loop '${loop.id}' entry must reach its feedback decision`);
-    for (const id of members) {
-      requireValid(!membership.has(id), "Nested or overlapping loops are unsupported");
-      membership.set(id, loop.id);
-    }
-    for (const edge of edges) {
-      if (edge.feedback || edge.executionId) continue;
-      requireValid(!(!members.has(edge.from) && members.has(edge.to) && edge.to !== loop.entry),
-        `Loop '${loop.id}' has multiple entries: edge '${edge.from}' -> '${edge.to}' bypasses entry '${loop.entry}'. Route external dependencies to '${loop.entry}'`);
-      requireValid(!(members.has(edge.from) && !members.has(edge.to) && edge.from !== back.from),
-        `Loop '${loop.id}' must exit through its feedback decision '${back.from}': edge '${edge.from}' -> '${edge.to}' leaves from another node`);
-    }
-    loops.set(loop.id, { id: loop.id, entry: loop.entry, maxIterations: loop.maxIterations ?? Infinity, feedback: back, members });
-  }
-  for (const edge of edges) requireValid(!edge.feedback || loops.has(edge.feedback), `Unknown feedback loop '${edge.feedback}'`);
+  requireValid(topologicalOrder.length === nodes.length, "Graph contains an unsupported cycle");
   return {
     goal: input.goal,
     nodes,
@@ -316,7 +285,70 @@ export function compileGraph(input: BraidInput): Graph {
     edges,
     incoming,
     outgoing,
-    loops,
-    membership,
+    closing,
+    cycles,
   };
+}
+
+/** Edges are identified by source, target, and choice; `limit` is an attribute. */
+export function edgeIdentity(edge: Pick<Edge, "from" | "to" | "choice">): string {
+  return JSON.stringify([edge.from, edge.to, edge.choice ?? null]);
+}
+
+/** Iterative Kosaraju, so very deep graphs do not overflow the stack. */
+function stronglyConnected(nodes: BraidNode[], outgoing: Map<string, Edge[]>, incoming: Map<string, Edge[]>): string[][] {
+  const finished: string[] = [];
+  const visited = new Set<string>();
+  for (const { id: start } of nodes) {
+    if (visited.has(start)) continue;
+    visited.add(start);
+    const stack: [string, number][] = [[start, 0]];
+    while (stack.length) {
+      const top = stack[stack.length - 1]!;
+      const edges = outgoing.get(top[0])!;
+      if (top[1] < edges.length) {
+        const next = edges[top[1]++]!.to;
+        if (!visited.has(next)) { visited.add(next); stack.push([next, 0]); }
+      } else {
+        finished.push(top[0]);
+        stack.pop();
+      }
+    }
+  }
+  const assigned = new Set<string>();
+  const components: string[][] = [];
+  for (let i = finished.length - 1; i >= 0; i--) {
+    const start = finished[i]!;
+    if (assigned.has(start)) continue;
+    assigned.add(start);
+    const component: string[] = [];
+    const queue = [start];
+    while (queue.length) {
+      const id = queue.pop()!;
+      component.push(id);
+      for (const edge of incoming.get(id)!) {
+        if (!assigned.has(edge.from)) { assigned.add(edge.from); queue.push(edge.from); }
+      }
+    }
+    components.push(component);
+  }
+  return components;
+}
+
+function acyclic(members: Set<string>, edges: Edge[]): boolean {
+  const remaining = new Map([...members].map(id => [id, 0]));
+  for (const edge of edges) remaining.set(edge.to, remaining.get(edge.to)! + 1);
+  const queue = [...members].filter(id => remaining.get(id) === 0);
+  let visited = 0;
+  while (queue.length) {
+    const id = queue.pop()!;
+    visited++;
+    for (const edge of edges) {
+      if (edge.from !== id) continue;
+      const count = remaining.get(edge.to)! - 1;
+      remaining.set(edge.to, count);
+      if (count === 0) queue.push(edge.to);
+    }
+  }
+  return visited === members.size;
 }
