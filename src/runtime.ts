@@ -536,6 +536,13 @@ const worse = (a: Dirt, b: Dirt): Dirt => !a ? b : !b ? a : dirtRank[a] >= dirtR
 
 const settled = (record: NodeResult) => ["completed", "failed", "skipped"].includes(record.status);
 
+/** Whether two definitions of a node differ, and only in maxRuns. */
+function onlyMaxRuns(before: BraidNode, after: BraidNode): boolean {
+  const { maxRuns: previous, ...rest } = before;
+  const { maxRuns: next, ...others } = after;
+  return previous !== next && JSON.stringify(rest) === JSON.stringify(others);
+}
+
 /** Execute a graph to completion. Use startBraid for live edits and pause/resume. */
 export async function braid(input: BraidInput, options: BraidOptions): Promise<BraidResult> {
   // Nothing can resume a paused execution without the run handle.
@@ -1054,6 +1061,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     batch = [];
     definition = candidate;
     graph = compiled;
+    const previousNodes = nodeById;
     nodeById = new Map(graph.nodes.map(node => [node.id, node]));
     revision++;
     for (const id of patch.removeNodeIds ?? []) {
@@ -1073,7 +1081,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     for (const id of upserted) {
       const record = lineages.get(id)?.instances.at(-1);
       if (!record) createInstance(id, "added");
-      else if (record.status !== "pending") {
+      // maxRuns bounds the lineage, not one execution: changing only it keeps a started head, and later reruns use it.
+      else if (record.status !== "pending" && !onlyMaxRuns(previousNodes.get(id)!, nodeById.get(id)!)) {
         // Started instances are immutable: replace this one, and cancel it if it is still running.
         const replacement = createInstance(id, "replaced", { supersedes: record.executionId });
         record.supersededBy = replacement.executionId;

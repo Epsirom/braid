@@ -310,7 +310,10 @@ not node IDs.
 `requireSuccess` defaults to false. Optional failures retain artifacts and allow
 unconditional recovery; required failures cancel siblings and fail the job after
 cleanup. A node's `maxRuns`, total `maxExecutions`, `maxTokens`, and the
-timeouts are unlimited unless set; `maxExecutions` spans updates. Deadlines keep
+timeouts are unlimited unless set; `maxExecutions` spans updates. `maxRuns` is
+the most runs the node's lineage can reach and never resets; upserting the node
+with only `maxRuns` changed raises or lowers it at any time without rerunning the
+node. Deadlines keep
 running through pauses. The graph timeout includes time waiting for the parent
 to inspect and update a paused graph, and resuming does not extend it.
 

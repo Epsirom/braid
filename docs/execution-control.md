@@ -164,7 +164,10 @@ its head:
 
 A new ID in `upsertNodes` adds a node. Upserting an unchanged definition of a
 started node reruns it from there; upsert only the nodes you mean to change or
-rerun. To review a replacement before its downstream lineages rerun, give it
+rerun. The exception is `maxRuns`, which bounds the lineage rather than one
+execution: an upsert that changes only `maxRuns` keeps a started head, running or
+settled, with its hold, and later reruns use the new limit. The head's own `node`
+keeps the definition it ran with. To review a replacement before its downstream lineages rerun, give it
 `pauseAfter: true`: they then wait on the hold. `removeNodeIds` closes the
 lineage together with its edges; the ID may be added again later and continues
 with the next generation. A cancelled instance of a replaced or removed node never
@@ -461,7 +464,9 @@ that would be skipped is not held, and an owner's replacement of a started node
 always starts, even past the limit.
 
 To let the rerun start, raise `maxRuns` with an update that upserts the node: the
-pending rerun is edited in place, not replaced, and starts. To end it instead,
+pending rerun is edited in place, not replaced, and starts. The limit can also be
+raised or lowered ahead of time: changing only `maxRuns` never replaces a started
+head (see [live updates](#live-updates-and-gates)). To end it instead,
 release it with `resume` (or `resume` in an update) without raising the limit: the
 rerun is removed (`execution_removed`), the node keeps its last result, and nothing
 downstream reruns for it. In a cycle this ends the cycle there; the decision chose
