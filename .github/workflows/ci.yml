@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
         node: ['22.19.0', '24']
     runs-on: ${{ matrix.os }}
     steps:
@@ -30,6 +30,51 @@ jobs:
       - run: npm run verify:checks
       - if: runner.os == 'Linux'
         run: npm run test:package
+  # Windows is the slowest runner, so its verify:checks runs as one job per suite.
+  windows-suite:
+    name: windows suite (${{ matrix.node }}, ${{ matrix.suite }})
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.19.0', '24']
+        suite: [core, pi, dsh]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - if: matrix.suite != 'core'
+        run: npm run build
+      - run: npm run verify:${{ matrix.suite }}
+  # Reports the required verify (windows-latest, <node>) check from that Node version's suites.
+  windows:
+    name: verify (windows-latest, ${{ matrix.node }})
+    needs: windows-suite
+    # A skipped required check counts as passing, so this must also run when a suite failed.
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.19.0', '24']
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Require every suite for this Node version to pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NODE: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | select(.name | startswith("windows suite (" + env.NODE + ",")) | "\(.conclusion) \(.name)"' > suites.txt
+          cat suites.txt
+          test "$(wc -l < suites.txt)" -eq 3
+          ! grep -v '^success ' suites.txt
   core-minimum:
     runs-on: ubuntu-latest
     steps:
