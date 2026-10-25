@@ -330,7 +330,9 @@ they do not survive a DSH restart.
 `options` accepts `maxConcurrency` (default 4), `maxExecutions`, `maxTokens`,
 `maxToolRounds`, `maxToolCalls`, `nodeTimeoutMs`, `graphTimeoutMs`,
 `onNodeTimeout` (`pause` by default, or `fail`), and `onLimit` (`pause` by
-default, or `fail`); nodes accept `maxRuns`. Every limit is unlimited when omitted. Reaching
+default, or `fail`); nodes accept `maxRuns`, the most runs the node's lineage can
+reach, which never resets; upserting the node with only `maxRuns` changed raises or
+lowers it at any time without rerunning the node. Every limit is unlimited when omitted. Reaching
 `maxExecutions`, `graphTimeoutMs`, or `maxTokens` pauses the job; once nothing is
 active the parent gets the waiting reminder, and `braid_resume({ jobId, limits })`
 raises the limit and resumes the job. Limits count rejected tool calls too. Workers

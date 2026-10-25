@@ -345,7 +345,8 @@ unless you replace it.
   `NodeResult.waitReason`, `held`, `supersedes`, and `supersededBy`,
   `NodeExecution.generation`, `BraidSnapshot.limitedExecutionIds` and
   `graph_waiting.limitedExecutionIds`, and the `closingEdges` helper.
-  `resume` also accepts a limited execution, which ends that rerun.
+  `resume` also accepts a limited execution, which ends that rerun. An upsert
+  that changes only `maxRuns` keeps a started head instead of replacing it.
 
 **Pi and DSH.** The `braid` and `braid_update` tools drop `loops`, `feedback`, and
 `executionId` on edges, and accept `maxRuns` on nodes. Status text lists

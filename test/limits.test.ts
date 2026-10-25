@@ -125,6 +125,38 @@ test("maxRuns limits downstream reruns, never the owner's replacement", async t 
   assert.equal(state.nodes.b!.executionId, "b@2");
 });
 
+test("changing only maxRuns keeps a running head and applies to the lineage's later reruns", async t => {
+  let run!: BraidRun;
+  run = await start(t, loop(2), { runner: async request => {
+    if (request.execution.executionId === "work@1") run.update({ expectedRevision: 0, upsertNodes: [{ ...node("work"), maxRuns: 4 }] });
+    return repeating(request);
+  } });
+  await until(() => run.snapshot().limitedExecutionIds.length > 0 && run.snapshot().status === "waiting");
+  const state = run.snapshot();
+  assert.equal(state.executions["work@1"]!.status, "completed");
+  assert.equal(state.executions["work@1"]!.supersededBy, undefined);
+  // The started head keeps the definition it ran with; the graph and later reruns use the new limit.
+  assert.equal(state.executions["work@1"]!.node.maxRuns, 2);
+  assert.equal(state.graph.nodes[0]!.maxRuns, 4);
+  assert.deepEqual(state.limitedExecutionIds, ["work@5"]);
+});
+
+test("changing only maxRuns keeps a settled, held head; any other change replaces it", async t => {
+  const run = await start(t, { goal: "hold", nodes: [{ ...node("a"), pauseAfter: true, maxRuns: 1 }, node("b")], edges: [{ from: "a", to: "b" }] },
+    { runner: async request => ({ output: request.node.prompt! }) });
+  await until(() => run.snapshot().pausedExecutionIds.length === 1);
+  let state = run.snapshot();
+  state = run.update({ expectedRevision: state.revision, upsertNodes: [{ ...node("a"), pauseAfter: true, maxRuns: 3 }] });
+  assert.deepEqual(state.pausedExecutionIds, ["a@1"]);
+  assert.deepEqual(Object.keys(state.executions).filter(id => id.startsWith("a@")), ["a@1"]);
+  assert.equal(state.nodes.a!.executionId, "a@1");
+  state = run.update({ expectedRevision: state.revision, upsertNodes: [{ ...node("a"), prompt: "a2" }] });
+  assert.equal(state.executions["a@1"]!.supersededBy, "a@2");
+  const result = await run.result;
+  assert.equal(result.status, "completed");
+  assert.deepEqual(result.executions["b@1"]!.predecessorExecutionIds, ["a@2"]);
+});
+
 test("ending a limited rerun keeps inputs that are still rerunning, and an update may remove it instead", async t => {
   const gate = deferred();
   const run = await start(t, { goal: "rerun", nodes: [node("a"), { ...node("b"), maxRuns: 1 }, { ...node("hold"), pauseAfter: true }],

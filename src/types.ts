@@ -569,6 +569,7 @@ export interface GraphUpdate {
    * Complete node definitions. A new ID adds a lineage. A not-started head is
    * edited in place. A started head is replaced: a new instance supersedes it,
    * a running head is cancelled, and downstream lineages rerun once it settles.
+   * A definition that changes only maxRuns keeps a started head; later reruns use it.
    */
   upsertNodes?: readonly BraidInputNode[];
   /** Remove lineages with their edges. A pending head is deleted, a running one cancelled; started instances stay in history. */
