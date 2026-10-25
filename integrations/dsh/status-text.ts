@@ -1,6 +1,7 @@
 import {
   closingEdges,
-  type BraidInput, type BraidInputNode, type BraidSnapshot, type ExecutionActivity, type ExecutionError, type ExecutionHold,
+  newCycles,
+  type BraidInput, type BraidInputNode, type BraidSnapshot, type Edge, type GraphCycle, type ExecutionActivity, type ExecutionError, type ExecutionHold,
   type ExecutionSuspension, type NodeExecution, type NodeResult, type NodeWorkspace,
 } from "@chrok/braid";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -178,11 +179,28 @@ export function formatPause(job: JobSnapshot, executionIds?: readonly string[]):
 
 /** The submission receipt. The caller already has the graph it submitted. */
 export function formatReceipt(job: JobSnapshot, message: string): string {
-  return [`Braid job ${job.handle} started (${job.status}).`, `ID: ${job.jobId}`, message].join("\n");
+  const cycles = job.execution ? formatCycles(newCycles(job.execution.graph)) : "";
+  return [`Braid job ${job.handle} started (${job.status}).`, `ID: ${job.jobId}`, ...cycles ? [cycles] : [], message].join("\n");
 }
 
-export function formatUpdate(job: JobSnapshot): string {
-  return [`Braid job ${job.handle} updated to revision ${job.execution.revision}.`,
+/** A notice for the cycles a submission or update created, so an accidental one is noticed. */
+export function formatCycles(report: { cycles: readonly GraphCycle[]; truncated: boolean }): string {
+  if (!report.cycles.length) return "";
+  const label = (edge: Edge) => `${edge.from} -> ${edge.to}${edge.choice !== undefined ? ` [choice=${edge.choice}]` : ""}`;
+  return [`New cycles (accepted; each round runs new executions, starting at the first node listed):`,
+    ...report.cycles.map(cycle => {
+      const path = [...cycle.nodeIds, cycle.nodeIds[0]].join(" -> ");
+      const bounds = [...cycle.stops.length ? [`can stop at ${cycle.stops.map(label).join(", ")}`] : [],
+        ...cycle.limitedNodeIds.length ? [`bounded by maxRuns on ${cycle.limitedNodeIds.join(", ")}`] : []];
+      return bounds.length ? `- ${path}: ${bounds.join("; ")}.`
+        : `- ${path}: NOTHING STOPS IT, so it repeats until you pause or cancel the job. If it is unintended, remove one of its edges with braid_update; to bound it, set maxRuns on one of its nodes or route it through a decision's choice edge.`;
+    }),
+    ...report.truncated ? ["- More cycles than these may exist."] : []].join("\n");
+}
+
+export function formatUpdate(job: JobSnapshot, previous?: Pick<BraidInput, "edges">): string {
+  const cycles = formatCycles(newCycles(job.execution.graph, previous));
+  return [`Braid job ${job.handle} updated to revision ${job.execution.revision}.`, ...cycles ? [cycles] : [],
     `Paused executions: ${ids(job.execution.pausedExecutionIds)}`,
     ...job.execution.suspendedExecutionIds?.length ? [`Suspended executions: ${ids(job.execution.suspendedExecutionIds)}`] : [],
     "Current graph:", formatGraph(job.execution.graph)].join("\n");

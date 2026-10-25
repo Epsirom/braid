@@ -208,9 +208,13 @@ owner's replacement of a started node always starts. A rerun past it waits with
 `waitReason: "limit"` (see [limits](docs/execution-control.md#limits)).
 
 Unknown fields, missing references, and duplicate edges (the same `from`, `to`,
-and `choice`) are rejected. A cycle is a loop and must be closed by a decision's
-choice edge back to the node where each round starts; nested or overlapping
-cycles are rejected. Bound a cycle's rounds with `maxRuns` on a node in it. Disconnected components are allowed; every root runs.
+and `choice`) are rejected. A cycle is a loop, and any edge may close one:
+unconditional, nested, and overlapping cycles are allowed. A decision's choice
+edge can end a cycle, and `maxRuns` on a node in it bounds its rounds; without
+either it repeats until its owner stops it. Each submission or update that
+creates a cycle reports it with a `cycles_created` event, and
+`newCycles(graph, previous)` lists new cycles and whether anything stops them.
+Disconnected components are allowed; every root runs.
 Only decision nodes may have choice edges, and choices need not all have exits.
 
 `validateGraph(input)` validates without execution. Invalid graphs raise
@@ -653,7 +657,7 @@ implemented**. The current scheduler deliberately rescans a small graph after
 completions; `onEvent` is an observer for diagnostics and visualization, not a
 scheduler event bus.
 
-Out of scope: cycles not closed by a decision's choice edge, nested/overlapping cycles, arbitrary
+Out of scope: arbitrary
 code nodes, durable workflow recovery, saved templates, a graphical editing UI,
 and recursive Braid calls from model nodes. The RSI Mode and Zen Mode milestones
 revisit some of these boundaries; see [ROADMAP.md](ROADMAP.md#milestones).

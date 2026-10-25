@@ -239,16 +239,21 @@ revisions/patches change nothing. Supplied templates replace the whole map.
 `choice` is not a wildcard. Finalized jobs cannot be
 reopened.
 
-A cycle is closed by a decision's choice edge back to the node where each round
-starts, and the decision needs an exit choice. Without a limit the decision alone
-ends the cycle; to bound the rounds, set `maxRuns` on a node in the cycle, so
-`maxRuns: 3` allows three rounds. `maxRuns` counts every run of that node,
-including reruns after an upstream change, but never blocks the parent's own
-replacement of it. A rerun past the limit waits instead of starting, and once
-nothing else is active the parent gets the waiting reminder: upsert the node with
-a higher `maxRuns` in `braid_update` to let the waiting rerun start (it is edited
-in place), or release it with `braid_resume` to end the rerun, which in a cycle
-ends the cycle without taking its exits. Cycles cannot overlap or nest. Prompt
+Any edge may close a cycle, and cycles may be unconditional, nested, or
+overlapping. A retry cycle is usually closed by a decision's choice edge back to
+the node where each round starts, such as
+`{ "from": "check", "to": "work", "choice": "retry" }`; an unconditional cycle
+repeats until the parent stops the job, and edges that leave it run in every
+round. The `braid` and `braid_update` results list each new cycle and what can
+stop it, so an accidental cycle is noticed. To bound the rounds, set `maxRuns` on
+a node in the cycle, so `maxRuns: 3` on `work` allows three rounds; omit it unless
+the user asks for a limit. `maxRuns` counts every run of that node, including
+reruns after an upstream change and runs in earlier rounds of an enclosing
+cycle, but never blocks the parent's own replacement of it. A rerun past the limit
+waits instead of starting, and once nothing else is active the parent gets the
+waiting reminder: upsert the node with a higher `maxRuns` in `braid_update` to
+let the waiting rerun start (it is edited in place), or release it with
+`braid_resume` to end the rerun, which in a cycle ends the cycle. Prompt
 templates use `{{name}}` placeholders and node prompts such as
 `{ "template": "review", "variables": { "target": "src/runtime.ts" } }`.
 Variable names must match exactly; values are inserted literally.

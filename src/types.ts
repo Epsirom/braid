@@ -141,6 +141,21 @@ export interface Edge {
   choice?: string;
 }
 
+/**
+ * A cycle in the graph, as reported when a submission or update creates it. With
+ * no stops and no limitedNodeIds, it repeats until its owner stops it.
+ */
+export interface GraphCycle {
+  /** Nodes along the cycle, starting where its closing edge starts each round. */
+  nodeIds: string[];
+  /** The cycle's edges in order: edges[i] leaves nodeIds[i]. The last one closes the cycle. */
+  edges: Edge[];
+  /** A decision's choice edges on the cycle, which end it when the decision chooses otherwise. */
+  stops: Edge[];
+  /** Nodes on the cycle with a finite maxRuns, which bound how often it repeats. */
+  limitedNodeIds: string[];
+}
+
 export interface BraidInput {
   goal: string;
   nodes: readonly BraidInputNode[];
@@ -348,6 +363,13 @@ export type ExecutionEvent = Readonly<
     | { type: "execution_removed"; nodeId: string }
     | { type: "execution_superseded"; nodeId: string; supersededBy: string }
     | ({ type: "edge_created" } & Edge)
+    | {
+        /** After graph_created or graph_updated: the cycles that the submission or update created. */
+        type: "cycles_created";
+        cycles: readonly GraphCycle[];
+        /** More cycles than the 20 listed may exist. */
+        truncated: boolean;
+      }
     | { type: "graph_updated"; graph: BraidInput }
     | { type: "execution_paused"; nodeId: string }
     | { type: "execution_resumed"; nodeId: string }

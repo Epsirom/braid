@@ -184,18 +184,21 @@ Edges use exact node IDs in `from` and `to`. `choice` is an exact label declared
 by the source decision; omitting it makes the edge unconditional. Pass `edges: []`
 for independent roots.
 
-A retry cycle is closed by a decision's choice edge back to the node where each
-round starts, such as `{ "from": "check", "to": "work", "choice": "retry" }`. The
-decision needs another choice to exit. To bound the rounds, set `maxRuns` on a
-node in the cycle, so `maxRuns: 3` on `work` allows three rounds; omit it unless
+Any edge may close a cycle, and cycles may be unconditional, nested, or
+overlapping. A retry cycle is usually closed by a decision's choice edge back to
+the node where each round starts, such as
+`{ "from": "check", "to": "work", "choice": "retry" }`; an unconditional cycle
+repeats until the parent stops the job, and edges that leave it run in every
+round. The `braid` and `braid_update` results list each new cycle and what can
+stop it, so an accidental cycle is noticed. To bound the rounds, set `maxRuns` on
+a node in the cycle, so `maxRuns: 3` on `work` allows three rounds; omit it unless
 the user asks for a limit. `maxRuns` counts every run of that node, including
-reruns after an upstream change, but never blocks your own replacement of it. A
-rerun past the limit waits instead of starting, and once nothing else is active
-the parent gets the waiting reminder: upsert the node with a higher `maxRuns` in
-`braid_update` to let the waiting rerun start (it is edited in place), or release
-it with `braid_resume` to end the rerun, which in a cycle ends the cycle without
-taking its exits. Edges enter a cycle only at its start node and leave
-only from its decision; cycles cannot nest or overlap. Each round runs new
+reruns after an upstream change and runs in earlier rounds of an enclosing
+cycle, but never blocks your own replacement of it. A rerun past the limit
+waits instead of starting, and once nothing else is active the parent gets the
+waiting reminder: upsert the node with a higher `maxRuns` in `braid_update` to
+let the waiting rerun start (it is edited in place), or release it with
+`braid_resume` to end the rerun, which in a cycle ends the cycle. Each round runs new
 executions, named `<nodeId>@<generation>`. See the
 [cycle example](../../docs/execution-control.md#cycles).
 

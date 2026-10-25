@@ -102,26 +102,84 @@ const graph = {
 };
 ```
 
-A cycle is a loop. It must be closed by a decision's choice edge back to the node
-where each round starts, its **entry**: the cycle node that edges from outside
-enter, or, when none does, the target of the closing edge listed first in
-`nodes`. The decision also needs an exit choice. Edges enter a cycle only at its
-entry and leave only from its decision. Nested and overlapping cycles are
-rejected; sequential and independent cycles are supported. `closingEdges(graph)`
-returns the closing edge of each cycle, for displays and tools.
+A cycle is a loop, and any edge may close one. Cycles may be unconditional,
+nested, or overlapping; nothing about a loop is declared, and no loop body is
+copied. Scheduling treats the graph without its **closing edges** as acyclic,
+and `closingEdges(graph)` returns them, for displays and tools.
 
-Nothing about a loop is declared, and no loop body is copied. When the decision
-chooses the closing edge, the edge reaches the entry's head and clones it, with
-the decision as an extra input; each instance after it is cloned in turn once
+Closing edges decide only where each round starts. Braid picks them per strongly
+connected part of the graph: it keeps the other edges as ordinary dependencies,
+and an edge that would complete a cycle with them closes it instead. Edges close
+cycles in this order of preference:
+
+1. edges into an **entry**, a cycle node that an edge from outside the cycle enters;
+2. a decision's choice edges;
+3. edges back to a node listed earlier in `nodes`.
+
+So each round starts at the entry, or, without one, where a choice edge returns,
+or at the cycle node listed first. In the example, `review → edit` closes the
+cycle and each round starts at `edit`. Graphs that earlier versions accepted
+keep their closing edge (see [compatibility](compatibility.md#any-edge-may-close-a-cycle)).
+Which edges close a cycle depends only on the current graph,
+so an update that adds edges to a cycle can change it; `braid_status` in Pi and
+DSH marks the closing edges.
+
+When a closing edge fires, it reaches its target's head and clones it, with the
+edge's source as an extra input; each instance after it is cloned in turn once
 its inputs are current, which unrolls one round. A new round starts only after
-everything in the previous round that feeds the decision has settled and been
-released. Exits wait while the cycle is rerunning and use the final round.
-Inputs from outside the cycle stay available to every round.
+everything in the previous round that feeds the closing edge has settled and
+been released. Inputs from outside the cycle stay available to every round.
 
-Without a limit the decision alone ends the cycle. To bound the rounds, set
-`maxRuns` on a node in the cycle: `maxRuns: 3` on `edit` allows three rounds.
-The round that would exceed it waits for the graph owner, or fails the job with
-`RUN_LIMIT` under `onLimit: "fail"` (see [limits](#limits)).
+Edges that leave a cycle wait while any of its nodes reruns. What happens next
+depends on the edge that closed the cycle:
+
+| Closing edge | Edges that leave the cycle |
+| --- | --- |
+| A decision's choice edge | Wait for the final round: the decision chose to continue, so the round is not a result |
+| Unconditional | Fire in **every** round: each time the cycle ends a round, downstream nodes outside it run with that round. An inactive one waits for a later round |
+
+An unconditional cycle therefore runs until its owner stops it, or until
+`maxRuns` or a decision ends it, and keeps its downstream work current. A
+downstream node that is still running when the next round ends runs once more
+with the latest round, not once per round.
+
+In a nested cycle, the inner cycle reruns inside each round of the enclosing one,
+for example `implement → test → implement` until the tests pass, inside
+`design → implement → test → review → design`. When overlapping cycles reach a
+shared node together, the first closing edge clones it and the second attaches
+to that clone as another input, so their rounds merge; a closing edge that
+reaches the clone after it started clones it again.
+
+Without a decision that chooses another edge, a cycle repeats until its owner
+stops it. To bound the rounds, set `maxRuns` on a node in the cycle: `maxRuns: 3`
+on `edit` allows three rounds. It counts every run of that node and never resets,
+including for a nested cycle in each round of the enclosing one. The round that
+would exceed it waits for the graph owner, or fails the job with `RUN_LIMIT` under
+`onLimit: "fail"` (see [limits](#limits)).
+
+### Cycle notices
+
+A cycle is never rejected, so an accidental one, such as `test → fix` added next
+to an existing `fix → test` only to share the test results, would otherwise go
+unnoticed. Each submission and update that creates cycles emits
+`cycles_created`, after `graph_created` or `graph_updated`, with each new cycle:
+
+```ts
+{ type: "cycles_created", revision: 1, truncated: false, cycles: [{
+  nodeIds: ["fix", "test"],            // starts where each round starts
+  edges: [{ from: "fix", to: "test" }, { from: "test", to: "fix" }], // the last one closes it
+  stops: [],                           // no decision's choice edge
+  limitedNodeIds: [],                  // no node with a finite maxRuns
+}] }
+```
+
+`stops` lists the cycle's choice edges, which end it when their decision chooses
+otherwise, and `limitedNodeIds` the nodes on it with a finite `maxRuns`. When
+both are empty, the cycle repeats until its owner stops it. A cycle is new when
+it uses an edge that the previous graph did not have. At most 20 cycles are
+listed; `truncated` says there may be more. `newCycles(graph, previousGraph?)`
+computes the same list without a run, and Pi's and DSH's `braid` and
+`braid_update` results show it.
 
 An edge from a new node into a settled lineage that does not close a cycle
 reruns that lineage once, for example `fix → test` added after `test` finished.
@@ -469,8 +527,8 @@ raised or lowered ahead of time: changing only `maxRuns` never replaces a starte
 head (see [live updates](#live-updates-and-gates)). To end it instead,
 release it with `resume` (or `resume` in an update) without raising the limit: the
 rerun is removed (`execution_removed`), the node keeps its last result, and nothing
-downstream reruns for it. In a cycle this ends the cycle there; the decision chose
-the closing edge, so its other edges stay inactive.
+downstream reruns for it. In a cycle this ends the cycle there; if a decision
+chose the closing edge, its other edges stay inactive.
 
 ```ts
 const state = run.snapshot();

@@ -137,3 +137,31 @@ test("cancelled paused-policy executions still send one opted-in failure reminde
   assert.equal(notifications[0]!.errorCode, "CANCELLED");
   assert.equal(notifications[0]!.paused, undefined);
 });
+
+test("Pi tool results report new cycles and whether anything stops them", { timeout: 5_000 }, async t => {
+  const held = deferred<NodeCompletion>();
+  const ctx = context(async () => response("done"));
+  const jobs = new BraidJobs(undefined, value => held.resolve(value));
+  t.after(() => jobs.dispose());
+  const tools = createBraidTools(jobs);
+  const submitted = await tools.braidTool.execute("submit", {
+    goal: "fix", nodes: [{ type: "execute", id: "gate", prompt: "gate", pauseAfter: true }, { type: "execute", id: "fix", prompt: "fix" },
+      { type: "decision", id: "review", prompt: "review", choices: ["again", "done"] }],
+    edges: [{ from: "gate", to: "fix" }, { from: "fix", to: "review" }, { from: "review", to: "fix", choice: "again" }],
+  }, undefined, undefined, ctx);
+  assert.match((submitted.content[0] as { text: string }).text,
+    /New cycles \(accepted.*\n- fix -> review -> fix: can stop at review -> fix \[choice=again\]\./);
+  const paused = await held.promise;
+  // Meant to share the review, but this closes a second cycle that nothing stops.
+  const updated = await tools.updateTool.execute("accidental", {
+    jobId: paused.handle, expectedRevision: 0, upsertNodes: [{ type: "execute", id: "test", prompt: "test" }],
+    addEdges: [{ from: "fix", to: "test" }, { from: "test", to: "fix" }],
+  }, undefined, undefined, ctx);
+  const text = (updated.content[0] as { text: string }).text;
+  assert.match(text, /- fix -> test -> fix: NOTHING STOPS IT, so it repeats until you pause or cancel the job\..*set maxRuns on one of its nodes/);
+  assert.doesNotMatch(text, /fix -> review -> fix/);
+  const plain = await tools.updateTool.execute("no cycle", {
+    jobId: paused.handle, expectedRevision: 1, removeEdges: [{ from: "test", to: "fix" }],
+  }, undefined, undefined, ctx);
+  assert.doesNotMatch((plain.content[0] as { text: string }).text, /New cycles/);
+});

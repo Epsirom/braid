@@ -100,7 +100,7 @@ const templates = Type.Record(Type.String(), text(), { description: templateDesc
 const braidParameters = Type.Object({
   goal: text("Shared goal included in every worker's context."),
   nodes: Type.Array(nodeParameters, { minItems: 1 }),
-  edges: Type.Array(edgeParameters, { description: "Dependencies between node IDs; use [] for independent roots. A cycle is a loop and must return to the node where each round starts through a decision's choice edge." }),
+  edges: Type.Array(edgeParameters, { description: "Dependencies between node IDs; use [] for independent roots. Any edge may close a cycle (a loop); the result lists each new cycle and whether anything stops it." }),
   promptTemplates: Type.Optional(templates),
   options: Type.Optional(Type.Object({
     maxConcurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum simultaneous node executions; default 4." })),
@@ -183,7 +183,7 @@ export function createBraidTools(jobs: BraidJobs) {
         "Use this tool FIRST for nontrivial engineering work: code reviews, bug investigations, design comparisons, test planning, and changes spanning multiple files. " +
         "Run a mutable graph of isolated LLM invocations with parallel branches and joins; the user does not need to mention Braid. " +
         "Use execute, decision, merge, or integrate nodes. Execute/decision nodes require prompt. Only decision nodes declare choices and call decide; matching choice edges activate together. Merge/integrate nodes accept multiple predecessors and an optional prompt, with no workspace or choices field. " +
-        "A cycle is a loop: the edge back to the node where each round starts must be a decision's choice edge, which closes the cycle. The decision also needs an exit choice. To bound the rounds, set maxRuns on a node in the cycle (unlimited by default). Edges enter the cycle only at its start node and leave only from that decision; cycles cannot overlap or nest. Each round runs new executions with fresh worktrees. " +
+        "A cycle is a loop, and any edge may close one; cycles may nest and overlap. Each round starts where an edge from outside enters the cycle (else at the node listed first) and runs new executions with fresh worktrees. A decision's choice edge back ends the cycle when the decision chooses otherwise, and maxRuns on a node in the cycle bounds how often it runs, counted across all rounds (unlimited by default); with neither, the cycle repeats until you stop the job, and edges that leave it run in every round. The tool result lists each new cycle and what can stop it: check it for cycles you did not intend. " +
         'Example retry loop: nodes work (execute with prompt) and check (decision with prompt and choices ["retry","done"]); edges [{"from":"work","to":"check"},{"from":"check","to":"work","choice":"retry"}]. An optional done edge leaves check to a downstream node. ' +
         "For repeated prompts, define promptTemplates and set node prompt to {template: name, variables: {name: value}}; core renders {{name}} placeholders using explicit string variables before execution. " +
         "Unlabelled edges are unconditional. Joins wait for all possible predecessor paths to resolve. " +
@@ -399,12 +399,13 @@ export function createBraidTools(jobs: BraidJobs) {
     async execute(_id, params) {
       const { jobId, ...patch } = params;
       let job: JobSnapshot;
+      const previous = jobs.get(jobId)?.execution?.graph;
       try {
         job = jobs.update(jobId, patch as GraphUpdate);
       } catch (error) {
         throw new Error(`Braid update rejected; no changes or resumes were applied. ${error instanceof Error ? error.message : String(error)}. Retry the complete corrected patch, including its edges/resume; adding disconnected nodes separately can start them immediately.`);
       }
-      return { content: [{ type: "text", text: formatUpdate(job) }], details: job };
+      return { content: [{ type: "text", text: formatUpdate(job, previous) }], details: job };
     },
   });
   const resumeParameters = Type.Object({
