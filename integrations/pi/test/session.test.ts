@@ -31,7 +31,7 @@ async function until(check: () => boolean): Promise<void> {
   }
 }
 
-test("v selects nodes with arrow keys, Enter opens a session, and Esc steps back one level", async t => {
+test("v selects executions with arrow keys, Enter opens a session, and Esc steps back one level", async t => {
   const jobs = new BraidJobs();
   t.after(() => jobs.dispose());
   const job = jobs.start(chain, {}, context(async () => response("Chain step finished")));
@@ -39,19 +39,20 @@ test("v selects nodes with arrow keys, Enter opens a session, and Esc steps back
   let closed = 0;
   const panel = new BraidPanel(jobs, tui, theme, () => { closed++; }, job.handle);
   t.after(() => panel.dispose());
-  assert.match(text(panel), /v select node/);
+  assert.match(text(panel), /v select execution/);
   assert.doesNotMatch(text(panel), /◆/);
 
+  // Finished executions are drawn in the timeline, where selection starts at the newest.
+  panel.handleInput("g");
   panel.handleInput("v");
   let view = text(panel);
-  assert.match(view, /◆ Selected 1\/2: a · completed/);
-  assert.match(view, /◆ a/, "the chart marks the selected node in place of its status icon");
+  assert.match(view, /◆ Selected 2\/2: b@1 · completed/);
+  assert.match(view, /◆ b@1/, "the chart marks the selected execution in place of its status icon");
   assert.match(view, /Enter open session/);
   panel.handleInput("\x1b[B");
-  assert.match(text(panel), /◆ Selected 2\/2: b/);
+  assert.match(text(panel), /◆ Selected 1\/2: a@1/, "selection wraps around");
   panel.handleInput("\x1b[C");
-  assert.match(text(panel), /◆ Selected 1\/2: a/, "selection wraps around");
-  panel.handleInput("\x1b[D");
+  assert.match(text(panel), /◆ Selected 2\/2: b@1/);
 
   panel.handleInput("\r");
   view = text(panel);
@@ -61,7 +62,7 @@ test("v selects nodes with arrow keys, Enter opens a session, and Esc steps back
   assert.match(view, /context: 1 predecessor output/);
 
   panel.handleInput("\x1b");
-  assert.match(text(panel), /◆ Selected 2\/2: b/);
+  assert.match(text(panel), /◆ Selected 2\/2: b@1/);
   panel.handleInput("\x1b");
   assert.doesNotMatch(text(panel), /Selected/);
   assert.equal(closed, 0);
@@ -187,15 +188,17 @@ test("a flowchart wider than the panel is cropped around the selected node", asy
   const panel = new BraidPanel(jobs, { requestRender: () => {}, terminal: { rows: 40 } } as never, theme, () => {}, job.handle);
   t.after(() => panel.dispose());
   const lines = () => text(panel, 80).split("\n");
+  panel.handleInput("g");
   assert.ok(lines().some(line => /\[chart 1–76 of \d+ cols\]/.test(line)), "outside selection the left edge is shown");
   assert.ok(lines().some(line => line.includes("reviewer-number-0")));
   panel.handleInput("v");
+  panel.handleInput("\x1b[C");
   for (let index = 0; index < 6; index++) panel.handleInput("\x1b[C");
   let view = lines();
-  assert.ok(view.some(line => /\[chart \d+–\d+ of \d+ cols · selected node\]/.test(line)), view.join("\n"));
+  assert.ok(view.some(line => /\[chart \d+–\d+ of \d+ cols · selected execution\]/.test(line)), view.join("\n"));
   assert.ok(view.some(line => line.includes("◆ reviewer-number-6")), "the selected node's box is in the window");
-  assert.ok(!view.some(line => line.includes("reviewer-number-0 done")), "distant nodes are cropped away");
-  assert.ok(!view.some(line => line.startsWith("│ nodes")), "no fallback list while the selection is drawn");
+  assert.ok(!view.some(line => line.includes("reviewer-number-0@1 done")), "distant executions are cropped away");
+  assert.ok(!view.some(line => line.startsWith("│ executions")), "no fallback list while the selection is drawn");
   assert.ok(view.every(line => line.length === view[0]!.length), "cropping keeps every row within the panel");
   panel.handleInput("\x1b[D");
   view = lines();
@@ -213,7 +216,9 @@ test("selecting a node scrolls a tall flowchart to keep it in view", async t => 
   await jobs.wait(job.jobId);
   const panel = new BraidPanel(jobs, { requestRender: () => {}, terminal: { rows: 24 } } as never, theme, () => {}, job.handle);
   t.after(() => panel.dispose());
+  panel.handleInput("g");
   panel.handleInput("v");
+  panel.handleInput("\x1b[B");
   const body = () => text(panel, 100).split("\n").slice(7);
   assert.ok(body().some(line => line.includes("◆ step-0")));
   for (let index = 0; index < 7; index++) panel.handleInput("\x1b[B");

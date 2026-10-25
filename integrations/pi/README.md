@@ -393,7 +393,7 @@ you scroll the flow and event log. It refreshes as nodes start, finish, fail,
 and pass outputs downstream.
 Use Left/Right to select jobs, Up/Down or Page Up/Page Down to scroll, `c` to
 cancel the selected job, `p` to pause or resume it, and Escape or `q` to close the panel.
-In node selection or an open session, `p` pauses or resumes that node's latest
+In selection or an open session, `p` pauses or resumes the selected or open
 execution instead; a suspended node shows `‖ PAUSED`, and one paused by its node
 timeout also shows `timed out`. `h` holds that execution's result once it
 finishes, removes the hold if one is set (its status shows `· hold`), or
@@ -402,26 +402,59 @@ that execution; the parent gets a notice with its next turn. Closing the panel
 leaves jobs running. In RPC or noninteractive modes, use `braid_status`.
 
 A flowchart wider than the terminal is cropped to the terminal width around the
-first running node, or from its left edge; a `[chart 1–76 of 245 cols]` line
+first running execution, or from its left edge; a `[chart 1–76 of 245 cols]` line
 shows the visible columns.
 
-For cycles, a forward edge opposite the edge that closes the cycle is drawn
-dotted, while the closing retry edge stays solid. For example, `/braid:review` shows the direct
-`scope → check` handoff dotted and `check → scope` (`retry`) solid. All edges and
-choice labels remain visible; runtime dependencies and handoffs are unchanged.
+### Live and timeline views
 
-Press `v` to select a node: the arrow keys move a `◆` marker through the
-flowchart (starting at a running node), and the view pans horizontally and
-scrolls vertically to keep the selected node in sight. If the flowchart cannot be
-drawn, a node list replaces it while selecting. Enter opens that node's latest
-invocation as a live session. The session is drawn with Pi's own chat
+The panel draws one box per execution, in one of two views. Press `g` to switch
+between them; the panel title (`Braid · live view` or `Braid · timeline view`)
+and the footer show the active one, and the panel keeps your choice while it is
+open, across jobs and sessions.
+
+- **Live view** (default): only executions that have not released their result
+  downstream yet: pending, running, and held. It shows what the job is doing
+  now and what comes next, and stays small however long the job runs. A pending
+  execution shows why it waits (`waits predecessors`, `stale`, `hold`,
+  `run paused`, or `slot`); a running one shows whether its worker is in a
+  `model` request or a `tool`, `· hold` if its result will be held, and paused
+  or pausing. When nothing is live, for example once the job has finished, the
+  view says so and points to the timeline.
+- **Timeline view**: every execution, oldest first, in one flat graph: every
+  round of a cycle appears below the round before it, labelled by its execution
+  ID (`review@2`). Skipped executions show `⊘` and the reason, pending ones `○`.
+  Replaced executions stay and show `superseded → <executionId>`, and executions
+  of removed nodes show `removed`.
+
+In both views, solid edges are the inputs an execution ran with. Dotted edges
+show the input a pending execution will use or the upstream result a skipped
+one saw, and a dotted `replaces` edge links a replaced execution to its
+replacement. Edges to executions that a view does not draw are left out.
+
+So long runs stay readable, the timeline shows the last two generations of each
+node and folds older finished executions into one `≡` box per node
+(`≡ review@1–3`); pending, running, and held executions are never folded. Press
+`e` to show every generation, and `e` again to fold them. Either way at most 80
+boxes are drawn; the oldest finished executions fold first.
+
+Press `v` to select an execution: the arrow keys move a `◆` marker through the
+flowchart (starting at a running execution, or in the timeline at the newest
+one), and the view pans horizontally and scrolls vertically to keep the
+selection in sight. If the flowchart cannot be drawn, a list replaces it while
+selecting. Pressing `g` while selecting keeps the same execution selected when
+the other view draws it, or moves to the newest drawn execution of the same
+node. Enter opens that exact execution as a live session, and `p`, `h`, and `x`
+act on it. Left/Right in the session switch to the node's other executions,
+including folded and settled ones. Escape returns to the execution you were
+viewing, or, when the current view does not draw it, to the newest drawn
+execution of the same node. The session is drawn with Pi's own chat
 components, as in the main conversation: the worker's prompt, streamed
 assistant text and thinking, and tool cards whose arguments and output update
 while they run. The node summary—status, elapsed time, usage, context, and live
 activity (see below)—stays pinned at the top while the session scrolls. The
 session follows the newest lines; scroll up to pause, and press End to follow again. Left/Right switch between
 invocations of the same node (for example rounds of a cycle), and ctrl+o expands
-tool output. Escape steps back one level—session, then node selection, then the
+tool output. Escape steps back one level—session, then selection, then the
 graph—and closes the panel from the graph; `q` closes it from anywhere. Running
 invocations and the 20 most recently finished ones per job keep their session;
 older ones show the summary and activity history.
@@ -487,10 +520,15 @@ quote use JSON string syntax, such as `/braid job-1 " review "` or
 `/braid job-1 "review\nstep"`. Tab inserts this form automatically and displays
 control characters as escapes.
 
-The panel renders a Mermaid flowchart, node states, elapsed times, context-token
-estimates or provider-reported usage, context-window sizes, filesystem tool-call
-counts, and the execution log. Active nodes are marked `▶ ACTIVE`. The status
-tool also renders a flowchart; expand its result to see more log events.
+The panel renders a Mermaid flowchart of executions, their states, elapsed
+times, context-token estimates or provider-reported usage, context-window sizes,
+filesystem tool-call counts, and the execution log. Active executions are marked
+`▶ ACTIVE`. The `braid` and status tools render a flowchart with one box per node,
+its latest execution, showing its status, number of runs, and the tokens all its
+executions used; expand the result to see more log events. In that chart, a
+forward edge opposite the edge that closes a cycle is drawn dotted, while the
+closing retry edge stays solid: `/braid:review` shows the direct `scope → check`
+handoff dotted and `check → scope` (`retry`) solid.
 When selecting `nodeId` or `executionId`, it instead shows that invocation's
 output/error and activity, with the full text and history available on expansion.
 

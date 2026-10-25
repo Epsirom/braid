@@ -173,12 +173,13 @@ test("Tab toggles the assistant: beside the graph in a wide panel, in place of i
   assert.doesNotMatch(view, /Assistant ·/, "hidden until Tab");
   assert.match(view, /Tab assistant/);
 
+  panel.handleInput("g");
   panel.handleInput("\t");
   view = text(panel);
   assert.match(view, /Assistant · job/, "the graph view talks about the whole job");
-  assert.match(view, /a done/, "a wide panel keeps the graph beside it");
+  assert.match(view, /a@1 done/, "a wide panel keeps the graph beside it");
   assert.ok(view.split("\n").every(line => line.length === view.split("\n")[0]!.length), "both panes fit the panel width");
-  assert.doesNotMatch(text(panel, 90), /a done/, "a narrow panel shows only the assistant");
+  assert.doesNotMatch(text(panel, 90), /a@1 done/, "a narrow panel shows only the assistant");
 
   for (const key of "qc what happened?") panel.handleInput(key);
   assert.equal(closed, 0, "q is typed, not a close");
@@ -188,7 +189,7 @@ test("Tab toggles the assistant: beside the graph in a wide panel, in place of i
   view = text(panel);
   assert.match(view, /qc what happened\?/);
   assert.match(view, /Node a printed its result\./);
-  assert.match(String(requests[0]!.messages[0]!.content), /\[Panel view: job graph overview \(completed\)\]/);
+  assert.match(String(requests[0]!.messages[0]!.content), /\[Panel view: job graph, timeline of every execution \(completed\)\]/);
 
   panel.handleInput("\t");
   assert.doesNotMatch(text(panel), /Assistant ·/, "Tab hides it again");
@@ -226,7 +227,10 @@ test("node conversations are separate from the job's, bound to the node across i
     panel.handleInput("\t");
   };
 
+  // The timeline shows finished executions; selection starts at the newest one.
+  panel.handleInput("g");
   panel.handleInput("v");
+  panel.handleInput("\x1b[A");
   await ask("what did a do");
   panel.handleInput("\x1b[B");
   await ask("what did b do");

@@ -333,10 +333,10 @@ test("cycle charts draw forward handoffs dotted and the closing edge solid witho
   };
   const withoutShortcut = (edges: readonly Edge[]) => edges.filter(edge => edge.from !== "start" || edge.to !== "route");
   const expectedSource = `flowchart TD
-  n0{"○ start<br/>pending · —"}
-  n1["○ inspect<br/>pending · —"]
-  n2{"○ route<br/>pending · —"}
-  n3["○ end<br/>pending · —"]
+  n0{"○ start<br/>pending"}
+  n1["○ inspect<br/>pending"]
+  n2{"○ route<br/>pending"}
+  n3["○ end<br/>pending"]
   n0 --> n1
   n1 --> n2
   n0 -.-> n2

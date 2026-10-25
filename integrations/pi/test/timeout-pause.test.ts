@@ -134,7 +134,7 @@ test("a timeout pause wakes the parent, and x in /braid cancels the execution af
   await commands.get("braid")!.handler("", { mode: "tui", ui: { custom: async (factory: (...args: unknown[]) => BraidPanel) => {
     panel = factory({ requestRender: () => {}, terminal: { rows: 30 } }, plainTheme, {}, () => {});
   } } });
-  assert.match(panel.render(160).join("\n"), /‖ PAUSED a suspended ·[\s│]*timed out/);
+  assert.match(panel.render(160).join("\n"), /‖ PAUSED a@1 suspended[\s│]*·[\s│]*timed out/);
   panel.handleInput("v");
   panel.handleInput("x");
   assert.match(panel.render(160).join("\n"), /Press x again to cancel this execution/);
