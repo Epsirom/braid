@@ -63,6 +63,44 @@ export interface TimeoutPause {
   sequence: number;
 }
 
+/** Work a job with nothing active waits on, and who put it there: "agent", "user", "definition", "replan", or "node_timeout". */
+export interface WaitingItem {
+  kind: "held" | "suspended" | "job";
+  /** Omitted for the job pause. */
+  executionId?: string;
+  nodeId?: string;
+  source: string;
+}
+
+/** A job has nothing active any more and waits on paused work the parent owns. */
+export interface WaitingNotice {
+  jobId: string;
+  handle: string;
+  revision: number;
+  waitingOn: WaitingItem[];
+  /** Identifies this transition within the job; a later one is a new one. */
+  sequence: number;
+}
+
+/**
+ * What a waiting job waits on, or undefined when the parent should not be woken: the user
+ * paused the job or everything that remains, or what just left nothing active was the parent's
+ * own suspension, or a held result or timeout pause, whose own reminder already wakes the parent.
+ */
+function waitingOn(state: BraidSnapshot, event: Extract<ExecutionEvent, { type: "graph_waiting" }>): WaitingItem[] | undefined {
+  const settled = state.executions[event.settledExecutionId]?.suspension?.source;
+  if (event.pause?.source === "user" || settled === "agent" || settled === "node_timeout" ||
+      event.pausedExecutionIds.includes(event.settledExecutionId)) return undefined;
+  const execution = (kind: WaitingItem["kind"], executionId: string, source: string | undefined): WaitingItem =>
+    ({ kind, executionId, nodeId: state.executions[executionId]?.id ?? "?", source: source ?? "caller" });
+  const items = [
+    ...event.pausedExecutionIds.map(id => execution("held", id, state.executions[id]?.holdAfter?.source)),
+    ...event.suspendedExecutionIds.map(id => execution("suspended", id, state.executions[id]?.suspension?.source)),
+    ...event.pause ? [{ kind: "job" as const, source: event.pause.source }] : [],
+  ];
+  return items.some(item => item.source !== "user") ? items : undefined;
+}
+
 /** A pause, resume, hold change, or cancellation someone other than the parent agent made, such as the user in the panel. */
 export interface ControlNotice {
   jobId: string;
@@ -115,6 +153,7 @@ export class BraidJobs {
     private onControl: (notice: ControlNotice) => void = () => {},
     private onTimeoutPause: (pause: TimeoutPause) => void = () => {},
     private onReplanRequested: (notice: ReplanNotice) => void = () => {},
+    private onWaiting: (notice: WaitingNotice) => void = () => {},
   ) {}
 
   /** The parent made the change itself; anyone else's change becomes a notice for it. */
@@ -206,6 +245,16 @@ export class BraidJobs {
           ...(event.iteration === undefined ? {} : { iteration: event.iteration }),
           reason: event.reason, suggested: event.suggestion !== undefined, sequence: event.sequence });
       } catch { /* Notification failures cannot fail jobs. */ }
+      return;
+    }
+    // With nothing active, no later event would wake the parent to resume, update, or cancel.
+    if (event.type === "graph_waiting" && !this.disposed) {
+      const job = this.jobs.get(jobId);
+      const items = job && waitingOn(job.run.snapshot(), event);
+      if (items) {
+        try { this.onWaiting({ jobId, handle, revision: event.revision ?? 0, waitingOn: items, sequence: event.sequence }); }
+        catch { /* Notification failures cannot fail jobs. */ }
+      }
       return;
     }
     if (!["execution_paused", "node_completed", "node_failed"].includes(event.type) || !event.executionId) return;

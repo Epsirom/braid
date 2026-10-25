@@ -335,6 +335,18 @@ export type ExecutionEvent = Readonly<
     | { type: "replan_requested"; nodeId: string; reason: string; suggestion?: ReplanSuggestion }
     | { type: "graph_paused"; source: string }
     | { type: "graph_resumed" }
+    | {
+        /**
+         * The last active execution settled, was held, or suspended, and only held,
+         * suspended, or paused work remains. Emitted once per transition into that state.
+         */
+        type: "graph_waiting";
+        /** The execution whose settling or suspension left nothing active. */
+        settledExecutionId: string;
+        pausedExecutionIds: readonly string[];
+        suspendedExecutionIds: readonly string[];
+        pause?: Readonly<{ source: string; pausedAt: number }>;
+      }
     | { type: "loop_started"; entry: string }
     | { type: "loop_completed"; entry: string }
     | { type: "workspace_updated"; workspace: Readonly<NodeWorkspace> }

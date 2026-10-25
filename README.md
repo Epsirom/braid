@@ -369,7 +369,9 @@ human message to a running worker. Instance events carry `executionId`, admissio
 changes to a running execution's hold; `replan_requested` reports a node asking
 its graph owner to replan; `execution_suspending`/`execution_suspended`
 report pauses of running executions, and `graph_paused`/`graph_resumed` pauses
-of the whole run. `graph_completed` or `graph_failed` terminates
+of the whole run. `graph_waiting` reports that the last active execution
+settled, was held, or suspended, and only held, suspended, or paused work
+remains. `graph_completed` or `graph_failed` terminates
 the log. Completion/failure is published after checkpointing. Node events repeat
 with distinct execution IDs when the same definition runs again.
 

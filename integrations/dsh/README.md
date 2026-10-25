@@ -265,6 +265,14 @@ released with the usual `braid_resume` or `braid_update` `resume`. The panel's
 **Hold result when finished** and **Remove hold** buttons do the same for the
 user, with the same notices to the parent.
 
+When the last running execution finishes while held or suspended work remains,
+nothing more runs until the parent acts, so the parent gets a waking reminder
+that lists what the job waits on and how to release, resume, or cancel it. It is
+sent once each time the job reaches that state. There is none when that work is
+only what the user paused or held from the panel, when the user paused the whole
+job, or when the parent's own `braid_pause`, a held result's pause reminder, or
+a timeout pause reminder already accounts for it.
+
 Execute and decision nodes have a `request_replan` tool. A node calls it to
 report a finding that contradicts its prompt's assumptions, makes its task
 unnecessary, or affects more than its task, with a reason and optionally a
