@@ -1,4 +1,4 @@
-import { formatActivityStatus, type ExecutionActivity } from "@chrok/braid";
+import { closingEdges, formatActivityStatus, type ExecutionActivity } from "@chrok/braid";
 import type { JobSnapshot } from "./jobs.js";
 
 /** Plain text works in both DSH's native job panel and human command results. */
@@ -8,14 +8,15 @@ export function renderPanel(job: JobSnapshot, activity: (executionId: string) =>
     `Paused: ${state.pausedExecutionIds.join(", ") || "none"}`,
     ...state.suspendedExecutionIds.length ? [`Suspended: ${state.suspendedExecutionIds.join(", ")}`] : [],
     ...state.pause ? [`Job paused by ${state.pause.source}: no new executions start`] : [], ""];
+  const closing = new Set(closingEdges(state.graph));
   for (const node of state.graph.nodes.slice(0, 80)) {
     const result = state.nodes[node.id];
     const progress = result?.executionId ? job.progress[result.executionId] : undefined;
-    lines.push(`${result?.suspension && result.suspension.state !== "pausing" ? "‖" : result?.status === "running" ? "▶" : "·"} ${node.id} [${node.type}] ${result?.suspension?.state ?? result?.status ?? "pending"}${result?.holdAfter && result.status === "running" ? " · hold" : ""}` +
+    lines.push(`${result?.suspension && result.suspension.state !== "pausing" ? "‖" : result?.status === "running" ? "▶" : "·"} ${node.id} [${node.type}] ${result?.executionId ?? ""} ${result?.suspension?.state ?? result?.status ?? "pending"}${result?.waitReason ? ` (${result.waitReason.replace("_", " ")})` : ""}${result?.holdAfter && result.status === "running" ? " · hold" : ""}` +
       (progress ? ` · context ${progress.contextTokens}${progress.contextWindow ? `/${progress.contextWindow}` : ""} (${progress.contextSource}) · tools ${progress.toolCalls}` : "") +
       (result?.startedAt ? ` · ${Math.max(0, (result.finishedAt ?? Date.now()) - result.startedAt)} ms` : ""));
     for (const edge of state.graph.edges.filter(edge => edge.from === node.id))
-      lines.push(`  └─${edge.choice ? ` ${edge.choice}` : ""}${edge.feedback ? ` ↻ ${edge.feedback}` : ""} → ${edge.to}`);
+      lines.push(`  └─${edge.choice ? ` ${edge.choice}` : ""}${closing.has(edge) ? ` ↻${edge.limit === undefined ? "" : ` limit ${edge.limit}`}` : ""} → ${edge.to}`);
     const live = result?.status === "running" && result.executionId ? activity(result.executionId) : undefined;
     if (live) lines.push(`  activity: ${formatActivityStatus(live, now)} · ${live.lastActivity.slice(0, 160)}`);
     if (result?.error) lines.push(`  ${result.error.code}: ${result.error.message}`);

@@ -2,7 +2,7 @@ import { Type, type TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { GraphUpdate } from "@chrok/braid";
-import { BRAID_ASYNC_GUIDANCE, braidParameters, limitFields, nodeParameters, updateEdgeParameters, loopParameters } from "./schema.js";
+import { BRAID_ASYNC_GUIDANCE, braidParameters, edgeIdentityParameters, edgeParameters, limitFields, nodeParameters } from "./schema.js";
 import type { BraidJobs, JobSnapshot } from "./jobs.js";
 import { boundedText, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUpdate } from "./status-text.js";
 
@@ -69,8 +69,8 @@ export function createBraidTools(
     };
   }
   return [
-    tool("braid", "Start a background Braid graph before nontrivial engineering work with independent concerns. Returns jobId immediately. Supports execute/decision/merge/integrate, promptTemplates, bounded loops, worktree isolation, pauseAfter and notifyOnCompletion. Omit workspace on merge/integrate. No automatic integration. " + BRAID_ASYNC_GUIDANCE, braidParameters, submit),
-    tool("braid_status", "Retrieve progress and results by exact jobId handle or UUID. Omit all IDs to list this agent's jobs. executionId selects an exact invocation; nodeId selects its latest invocation. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and the latest " + STATUS_ACTIVITY_ENTRIES + " history entries; activityBefore pages earlier entries. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the CURRENT graph revision and paused execution IDs. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. usage includes completed provider rounds from failed workers and cache tokens; reads do not add charges. Read results after the completion reminder, or deliberately for a progress check or diagnosis; do not sleep, use a timer, or poll in a loop to wait for a job.", Type.Object({
+    tool("braid", "Start a background Braid graph before nontrivial engineering work with independent concerns. Returns jobId immediately. Supports execute/decision/merge/integrate, promptTemplates, cycles closed by a decision's choice edge, worktree isolation, pauseAfter and notifyOnCompletion. Omit workspace on merge/integrate. No automatic integration. " + BRAID_ASYNC_GUIDANCE, braidParameters, submit),
+    tool("braid_status", "Retrieve progress and results by exact jobId handle or UUID. Omit all IDs to list this agent's jobs. executionId (<nodeId>@<generation>, such as review@2) selects an exact execution; nodeId selects the node's latest. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and the latest " + STATUS_ACTIVITY_ENTRIES + " history entries; activityBefore pages earlier entries. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the CURRENT graph revision and paused execution IDs. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. usage includes completed provider rounds from failed workers and cache tokens; reads do not add charges. Read results after the completion reminder, or deliberately for a progress check or diagnosis; do not sleep, use a timer, or poll in a loop to wait for a job.", Type.Object({
       jobId: Type.Optional(id), nodeId: Type.Optional(id), executionId: Type.Optional(id),
       activityBefore: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
     }, { additionalProperties: false }), async (args, context) => {
@@ -102,18 +102,18 @@ export function createBraidTools(
       const cancelled = jobs.cancel(args.jobId);
       return { text: cancelled ? "Cancellation requested." : "Job has already finished.", jobId: job.handle, canonicalJobId: job.jobId, cancelled };
     }),
-    tool("braid_update", "Atomically edit live definitions and optionally resume paused executions at expectedRevision. Upserts replace complete definitions. Include new nodes and all dependencies/loops in the SAME update: disconnected roots may start immediately. removeEdges matches exact identities, not wildcards. Rejected patches have no effects; retry the complete corrected patch. Finalized jobs cannot be reopened.", Type.Object({
+    tool("braid_update", "Atomically change the graph and optionally resume paused executions at expectedRevision. upsertNodes takes complete definitions: a node that has not started is edited in place; a node that has started, running or finished, is replaced by a new execution (a running one is cancelled) and its downstream nodes rerun once the replacement finishes, so upsert only the nodes you mean to change or rerun. removeNodeIds removes nodes with their edges and cancels a running execution; finished executions stay in history. An edge added into a finished node reruns it once its new input finishes. Include new nodes and all dependencies in the SAME update: disconnected roots may start immediately. removeEdges identifies edges by from, to, and choice; to change a limit, remove the edge and add it again. Rejected patches have no effects; retry the complete corrected patch. Finalized jobs cannot be reopened.", Type.Object({
       jobId: id, expectedRevision: revision,
       upsertNodes: Type.Optional(Type.Array(nodeParameters)), removeNodeIds: Type.Optional(Type.Array(id)),
-      addEdges: Type.Optional(Type.Array(updateEdgeParameters)), removeEdges: Type.Optional(Type.Array(updateEdgeParameters)),
-      promptTemplates: Type.Optional(Type.Record(Type.String(), id)), loops: Type.Optional(Type.Array(loopParameters)),
+      addEdges: Type.Optional(Type.Array(edgeParameters)), removeEdges: Type.Optional(Type.Array(edgeIdentityParameters)),
+      promptTemplates: Type.Optional(Type.Record(Type.String(), id)),
       resume: Type.Optional(Type.Array(id, { uniqueItems: true })),
       resumeOptions: Type.Optional(Type.Object({ nodeTimeoutMs: Type.Optional(nodeTimeoutMs) }, { additionalProperties: false })),
     }, { additionalProperties: false }), (args, context) => {
       const { jobId, ...patch } = args;
       let job: JobSnapshot;
       try { job = getJobs(context).update(jobId, patch as GraphUpdate); }
-      catch (error) { throw new Error(`Braid update rejected; no changes or resumes applied. ${error instanceof Error ? error.message : String(error)}. Retry the complete corrected patch with dependencies, loops, and resume IDs.`); }
+      catch (error) { throw new Error(`Braid update rejected; no changes or resumes applied. ${error instanceof Error ? error.message : String(error)}. Retry the complete corrected patch with dependencies and resume IDs.`); }
       return { text: formatUpdate(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision, pausedExecutionIds: job.execution.pausedExecutionIds };
     }),
     tool("braid_resume", "Release paused (pauseAfter) executions, or resume suspended ones in the same conversation, by execution ID at expectedRevision. Omit executionIds to resume a job paused with braid_pause or at a job limit; executions paused separately stay suspended. A job paused at a limit resumes only once limits raises that limit. This does not reset tool budgets or the graph deadline. An execution paused by its node timeout gets the job's nodeTimeoutMs again, or nodeTimeoutMs if given; resuming the job does not resume it. With after=true it instead removes the hold on still-running executions. Do not resume work the user paused or held unless the user asks.", Type.Object({

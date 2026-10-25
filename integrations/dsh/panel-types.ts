@@ -23,7 +23,14 @@ export interface PanelActivityEntry {
 }
 export interface PanelExecution {
   id: string; executionId: string; status: string; type: string; revision: number;
-  iteration?: number; loopId?: string; latencyMs?: number;
+  /** One-based position in its node's lineage; executionId is `<id>@<generation>`. */
+  generation: number; latencyMs?: number;
+  /** Present on a pending execution: why it has not started. */
+  waitReason?: string;
+  /** True while this settled execution's result is held. */
+  held?: boolean;
+  supersedes?: string;
+  supersededBy?: string;
   progress?: { contextTokens: number; contextWindow?: number; contextSource: string; toolCalls: number; toolRounds: number; phase: string };
   /** Present while running; detail returns history for any execution. */
   activity?: PanelActivity;
@@ -37,8 +44,8 @@ export interface PanelJob extends PanelRow {
   /** Host clock when this frame was built, for elapsed and idle times. */
   observedAt: number;
   nodes: { id: string; type: string; status: string }[];
-  edges: { from: string; to: string; choice?: string; feedback?: string; executionId?: string }[];
-  loops: { id: string; entry: string; maxIterations?: number }[];
+  /** closesCycle marks the decision's choice edge back to where each round of a cycle starts. */
+  edges: { from: string; to: string; choice?: string; limit?: number; closesCycle?: boolean }[];
   executions: PanelExecution[];
   pausedExecutionIds: string[];
   suspendedExecutionIds: string[];

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { ExecutionActivityTracker, formatActivityStatus, startBraid, validateGraph, type BraidInput, type BraidLimits, type ExecutionActivity, type ExecutionActivityPage, type BraidRun, type BraidResult, type BraidSnapshot, type GraphUpdate, type ExecutionEvent, type NodeResult, type ResumeOptions } from "@chrok/braid";
+import { ExecutionActivityTracker, formatActivityStatus, startBraid, validateGraph, type BraidInput, type BraidLimits, type ExecutionActivity, type ExecutionActivityPage, type BraidRun, type BraidResult, type BraidSnapshot, type Edge, type GraphUpdate, type ExecutionEvent, type NodeResult, type ResumeOptions } from "@chrok/braid";
 import type { TokenUsage } from "@deepseek-ai/dsh-llm";
 import { createDshRunner, sumUsage, validateBudgets, type NodeProgress, type DshLlm } from "./runner.js";
 
@@ -52,7 +52,6 @@ export interface TimeoutPause {
   handle: string;
   nodeId: string;
   executionId: string;
-  iteration?: number;
   /** The node time budget that ran out. */
   nodeTimeoutMs: number;
   /** Time the execution ran, excluding earlier suspensions. */
@@ -118,11 +117,10 @@ export interface Completion {
   status: string;
   executionId?: string;
   nodeId?: string;
-  iteration?: number;
   paused?: boolean;
   sequence?: number;
-  /** A loop decision held because it chose feedback at its loop's maxIterations. */
-  loopLimit?: { loopId: string; maxIterations: number };
+  /** A decision held because the edge it chose is at its limit. */
+  edgeLimit?: Edge;
   /** The execution asked for a replan; its result is held for the parent. */
   replanRequested?: boolean;
 }
@@ -133,7 +131,6 @@ export interface ReplanNotice {
   handle: string;
   nodeId: string;
   executionId: string;
-  iteration?: number;
   reason: string;
   /** The node suggested a graph edit, readable with braid_status. */
   suggested: boolean;
@@ -142,11 +139,11 @@ export interface ReplanNotice {
 }
 
 /** One manager per live DSH agent; foreground cancellation never owns these runs. */
-/** The loop limit that holds a feedback decision, for its pause reminder. */
-function loopLimit(state: BraidSnapshot, node: BraidSnapshot["executions"][string]): Pick<Completion, "loopLimit"> {
-  if (node.holdAfter?.source !== "loop_limit" || !node.loopId) return {};
-  const maxIterations = state.graph.loops?.find(loop => loop.id === node.loopId)?.maxIterations;
-  return maxIterations === undefined ? {} : { loopLimit: { loopId: node.loopId, maxIterations } };
+/** The edge at its limit that holds a decision, for its pause reminder. */
+function edgeLimit(state: BraidSnapshot, node: BraidSnapshot["executions"][string]): Pick<Completion, "edgeLimit"> {
+  if (node.holdAfter?.source !== "edge_limit") return {};
+  const edge = state.graph.edges.find(edge => edge.from === node.id && edge.choice === node.decision && edge.limit !== undefined);
+  return edge ? { edgeLimit: { ...edge } } : {};
 }
 
 export class BraidJobs {
@@ -251,7 +248,6 @@ export class BraidJobs {
     if (event.type === "replan_requested" && event.executionId && !this.disposed) {
       try {
         this.onReplanRequested({ jobId, handle, nodeId: event.nodeId, executionId: event.executionId,
-          ...(event.iteration === undefined ? {} : { iteration: event.iteration }),
           reason: event.reason, suggested: event.suggestion !== undefined, sequence: event.sequence });
       } catch { /* Notification failures cannot fail jobs. */ }
       return;
@@ -272,9 +268,8 @@ export class BraidJobs {
     if (!node) return;
     const paused = event.type === "execution_paused";
     if (!paused && (!node.node.notifyOnCompletion || (node.holdAfter && !state?.error))) return;
-    this.remind({ jobId, handle, status: node.status, executionId: node.executionId, nodeId: node.id,
-      ...(node.iteration === undefined ? {} : { iteration: node.iteration }), paused, sequence: event.sequence,
-      ...(node.replan ? { replanRequested: true } : {}), ...loopLimit(state!, node) });
+    this.remind({ jobId, handle, status: node.status, executionId: node.executionId, nodeId: node.id, paused, sequence: event.sequence,
+      ...(node.replan ? { replanRequested: true } : {}), ...edgeLimit(state!, node) });
   }
 
   /** A timeout pause always wakes the parent, which must resume or cancel it. */
@@ -284,7 +279,6 @@ export class BraidJobs {
     if (this.disposed || !node || !timeout) return;
     try {
       this.onTimeoutPause({ jobId, handle, nodeId: node.id, executionId: node.executionId,
-        ...(node.iteration === undefined ? {} : { iteration: node.iteration }),
         nodeTimeoutMs: timeout.nodeTimeoutMs, activeMs: timeout.activeMs, ...(activity ? { activity } : {}), sequence: event.sequence });
     } catch { /* Notification failures cannot fail jobs. */ }
   }

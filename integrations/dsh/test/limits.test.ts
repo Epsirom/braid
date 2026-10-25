@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { BraidJobs, type Completion, type WaitingNotice } from "../jobs.js";
 import { createBraidTools, type ToolValue } from "../tools.js";
-import { formatLoopLimit, formatWaiting } from "../status-text.js";
+import { formatEdgeLimit, formatWaiting } from "../status-text.js";
 import { answer, calls, context, llm, payload, until } from "./helpers.js";
 
 const node = (id: string) => ({ type: "execute" as const, id, prompt: `task:${id}` });
@@ -45,14 +45,14 @@ test("a loop decision held at maxIterations sends a reminder that says how to co
   const jobs = new BraidJobs(runtime, completion => { completions.push(completion); });
   const job = jobs.start({
     goal: "refine", nodes: [node("work"), { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }],
-    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", feedback: "refine" }],
-    loops: [{ id: "refine", entry: "work", maxIterations: 1 }],
+    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", limit: 1 }],
   }, {}, context());
   await until(() => completions.length === 1);
   const [held] = completions;
   assert.equal(held!.paused, true);
-  assert.deepEqual(held!.loopLimit, { loopId: "refine", maxIterations: 1 });
-  assert.match(formatLoopLimit(job.handle, held!.executionId!, held!.loopLimit!), /reached its maxIterations of 1.*the loop ends and its exits are skipped/);
+  assert.equal(held!.executionId, "check@2");
+  assert.deepEqual(held!.edgeLimit, { from: "check", to: "work", choice: "again", limit: 1 });
+  assert.match(formatEdgeLimit(job.handle, held!.executionId!, held!.edgeLimit!), /already fired its limit of 1 times.*the cycle ends/);
   jobs.resume(job.handle, [held!.executionId!], 0);
   await jobs.wait(job.handle);
   assert.equal(jobs.get(job.handle).status, "completed");

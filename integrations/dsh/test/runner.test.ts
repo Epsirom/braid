@@ -48,18 +48,18 @@ test("decision routes through decide, preserves tool messages and provider repla
   assert.equal(result.nodes.yes!.status, "completed"); assert.equal(result.nodes.no!.status, "skipped");
 });
 
-test("bounded loops use fresh invocations and prompt templates", async () => {
+test("cycles use fresh invocations and prompt templates", async () => {
   const cwd = directory();
   const rounds = new Map<string, number>();
   const graph: BraidInput = { goal: "loop", promptTemplates: { task: "Work on {{target}}" }, nodes: [
     { type: "execute", id: "work", prompt: { template: "task", variables: { target: "loop" } } },
     { type: "decision", id: "check", prompt: "check", choices: ["retry", "done"] },
-  ], edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "retry", feedback: "retry" }], loops: [{ id: "retry", entry: "work", maxIterations: 2 }] };
+  ], edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "retry", limit: 1 }] };
   const result = await braid(graph, { cwd, defaultModel: "fake/model", runner: createDshRunner(llm(options => {
     const p = payload(options);
     if (p.nodeId === "work") { assert.equal(p.prompt, "Work on loop"); return answer(); }
     const id = p.execution.executionId;
-    if (!rounds.has(id)) { rounds.set(id, 1); return calls({ name: "decide", args: { choice: p.execution.iteration === 1 ? "retry" : "done" } }); }
+    if (!rounds.has(id)) { rounds.set(id, 1); return calls({ name: "decide", args: { choice: p.execution.generation === 1 ? "retry" : "done" } }); }
     return answer();
   }), { cwd }) });
   assert.equal(result.status, "completed"); assert.equal(Object.keys(result.executions).length, 4);

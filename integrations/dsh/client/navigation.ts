@@ -86,7 +86,6 @@ export function toolPresentation(toolName: string, props: ToolCallPhaseProps): T
     for (const [key, title] of [["addEdges", "Add edges"], ["removeEdges", "Remove edges"]] as const) {
       const values = array(args[key]); if (values.length) model.changes.push(`${title}: ${values.length}`);
     }
-    if ("loops" in args) model.changes.push(`Replace loops: ${array(args.loops).length}`);
     if ("promptTemplates" in args) model.changes.push(`Prompt templates: ${Object.keys(record(args.promptTemplates)).length}`);
   } else if (toolName === "braid_resume" || toolName === "braid_pause") {
     // Without execution IDs, both act on the whole job.

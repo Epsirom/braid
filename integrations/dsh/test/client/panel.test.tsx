@@ -12,9 +12,9 @@ const fixture: PanelFrame = {
   rows: [{ jobId: "uuid-a", handle: "job-1", goal: "Review and implement", status: "running", createdAt: 0 }],
   job: { jobId: "uuid-a", handle: "job-1", goal: "Review and implement", status: "running", createdAt: 0,
     revision: 4, phase: "waiting", observedAt: 0, nodes: [{ id: "review", type: "execute", status: "completed" }, { id: "apply", type: "integrate", status: "pending" }],
-    edges: [{ from: "review", to: "apply" }], loops: [], pausedExecutionIds: ["review@1"], suspendedExecutionIds: [],
+    edges: [{ from: "review", to: "apply" }], pausedExecutionIds: ["review@1"], suspendedExecutionIds: [],
     usage: { inputTokens: 100, outputTokens: 25, cacheReadTokens: 10, cacheWriteTokens: 0 },
-    executions: [{ id: "review", executionId: "review@1", revision: 3, status: "completed", type: "execute", iteration: 1, latencyMs: 1800 }],
+    executions: [{ id: "review", executionId: "review@1", revision: 3, status: "completed", type: "execute", generation: 1, latencyMs: 1800 }],
     events: [{ sequence: 1, timestamp: 0, type: "execution_paused", executionId: "review@1", message: "execution paused" }],
   },
 };
@@ -74,9 +74,9 @@ test("connection failures are visible, controls cannot act on stale frames and u
   assert.ok(h.signals.every(signal => signal.aborted));
 });
 
-test("forward DAG ranks remain stable with loop feedback, branching and disconnected nodes", () => {
+test("forward DAG ranks remain stable with a closing edge, branching and disconnected nodes", () => {
   const nodes = ["a", "b", "c", "d", "isolated"].map(id => ({ id, type: "execute", status: "pending" }));
-  const { positions, width, height } = layoutGraph(nodes, [{ from: "a", to: "b" }, { from: "a", to: "c" }, { from: "b", to: "d" }, { from: "c", to: "d" }, { from: "d", to: "a", feedback: "review" }]);
+  const { positions, width, height } = layoutGraph(nodes, [{ from: "a", to: "b" }, { from: "a", to: "c" }, { from: "b", to: "d" }, { from: "c", to: "d" }, { from: "d", to: "a", choice: "again", closesCycle: true }]);
   assert.ok(positions.get("a")!.y < positions.get("b")!.y);
   assert.equal(positions.get("b")!.y, positions.get("c")!.y);
   assert.ok(positions.get("b")!.y < positions.get("d")!.y);
@@ -88,7 +88,7 @@ test("tool navigation selects an older loop execution and reopening the tab rese
   const h = await setup();
   const requests: object[] = [];
   const data = structuredClone(fixture);
-  data.job!.executions.unshift({ ...data.job!.executions[0]!, executionId: "review@0", iteration: 0 });
+  data.job!.executions.unshift({ ...data.job!.executions[0]!, executionId: "review@0", generation: 0 });
   const api: PanelApi = { ...h.api, async *watch(request, signal) {
     requests.push(request); yield data;
     if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));

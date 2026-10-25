@@ -3,7 +3,7 @@ import { Remote, RemoteError, TypertRemoteService } from "@deepseek-ai/dsh-typer
 import type {} from "@deepseek-ai/dsh-typert-registry";
 import type { BraidJobs, JobSnapshot } from "./jobs.js";
 import { PANEL_PACKAGE, panelDescriptors } from "./panel-contract.js";
-import type { ExecutionActivity } from "@chrok/braid";
+import { closingEdges, type ExecutionActivity } from "@chrok/braid";
 import type { ControlRequest, DetailRequest, PanelActivity, PanelDetail, PanelFrame, PanelJob, PanelRequest } from "./panel-types.js";
 
 export const DETAIL_ACTIVITY_ENTRIES = 50;
@@ -14,16 +14,20 @@ function panelActivity({ entries: _entries, executionId: _executionId, nodeId: _
 /** activity supplies live summaries for running executions; history stays in detail reads. */
 export function panelJob(job: JobSnapshot, activity: (executionId: string) => ExecutionActivity | undefined = () => undefined): PanelJob {
   const state = job.execution;
+  const closing = new Set(closingEdges(state.graph));
   return {
     jobId: job.jobId, handle: job.handle, goal: clip(job.goal), status: job.status, createdAt: job.createdAt,
     revision: state.revision, phase: state.status, observedAt: Date.now(),
     ...(job.error || state.error ? { error: clip(job.error ?? state.error!.message) } : {}),
     nodes: state.graph.nodes.map(node => ({ id: node.id, type: node.type, status: state.nodes[node.id]?.status ?? "pending" })),
-    edges: state.graph.edges.map(edge => ({ ...edge })), loops: [...state.graph.loops ?? []],
+    edges: state.graph.edges.map(edge => ({ ...edge, ...(closing.has(edge) ? { closesCycle: true } : {}) })),
     executions: Object.values(state.executions).map(e => ({
       id: e.id, executionId: e.executionId, status: e.status, type: e.node.type, revision: e.revision,
-      ...(e.iteration === undefined ? {} : { iteration: e.iteration }),
-      ...(e.loopId === undefined ? {} : { loopId: e.loopId }),
+      generation: e.generation,
+      ...(e.waitReason ? { waitReason: e.waitReason } : {}),
+      ...(e.held ? { held: true } : {}),
+      ...(e.supersedes ? { supersedes: e.supersedes } : {}),
+      ...(e.supersededBy ? { supersededBy: e.supersededBy } : {}),
       ...(e.latencyMs === undefined ? {} : { latencyMs: e.latencyMs }),
       ...(job.progress[e.executionId] ? { progress: job.progress[e.executionId]! } : {}),
       ...(e.suspension ? { suspension: { state: e.suspension.state, source: clip(e.suspension.source, 100),
