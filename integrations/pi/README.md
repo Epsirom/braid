@@ -258,6 +258,14 @@ Pause reminders describe the event when it occurred: check current status and
 paused IDs before attempting an update/resume, since the job can time out or be
 cancelled before the parent handles the reminder.
 
+When the last running execution finishes while held or suspended work remains,
+nothing more runs until the parent acts, so the parent gets a waking reminder
+that lists what the job waits on and how to release, resume, or cancel it. It is
+sent once each time the job reaches that state. There is none when that work is
+only what the user paused or held from `/braid`, when the user paused the whole
+job, or when the parent's own `braid_pause`, a held result's pause reminder, or
+a timeout pause reminder already accounts for it.
+
 Execute and decision nodes have a `request_replan` tool. A node calls it to
 report a finding that contradicts its prompt's assumptions, makes its task
 unnecessary, or affects more than its task, with a reason and optionally a

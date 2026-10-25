@@ -234,6 +234,16 @@ run with `GRAPH_TIMEOUT`; with an unlimited graph timeout it waits until resumed
 or cancelled. Cancellation and run failure end suspended executions as failed.
 A paused run with nothing running reports `status: "waiting"` and does not finish.
 
+The run emits `graph_waiting` when it enters that state because the last active
+execution settled, was held, or suspended: nothing more runs until the graph
+owner resumes, updates, or cancels it. The event has `settledExecutionId`, the
+execution that left nothing active, `pausedExecutionIds`, `suspendedExecutionIds`,
+the run's `pause` if any, and the current `revision`. It is emitted once per
+transition. An update or resume that starts nothing does not repeat it, and
+neither does cancelling an execution that was already suspended; the next one
+follows after some execution runs again. A run that waits before anything ran,
+such as one paused at once, emits none.
+
 ### Pausing on node timeout
 
 By default, `startBraid` pauses an execution that exceeds `nodeTimeoutMs`

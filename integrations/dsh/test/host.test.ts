@@ -176,6 +176,28 @@ test("a node timeout pause wakes the parent with a reminder", async () => {
   } finally { await ctx.fiber.dispose(); }
 });
 
+test("a job left with only held work wakes the parent with a reminder", async () => {
+  let release!: () => void;
+  const slow = new Promise<void>(resolve => { release = resolve; });
+  const { ctx, agent, invoke } = await harness(async options => {
+    if (JSON.stringify(options.messages).includes("slow work")) await slow;
+    return answer();
+  });
+  try {
+    const a = await agent("waiting-owner");
+    const receipt = (await invoke(a.agent, "braid", { goal: "Test", edges: [],
+      nodes: [{ type: "execute", id: "held", prompt: "Do work", pauseAfter: true }, { type: "execute", id: "slow", prompt: "Do slow work" }] })).value as { jobId: string };
+    await until(() => a.messages.length === 1);
+    assert.match((a.messages[0]!.content[0] as { text: string }).text, /held: paused\. .*Outgoing scheduling was paused/);
+    release();
+    await until(() => a.messages.length === 2);
+    const text = (a.messages[1]!.content[0] as { text: string }).text;
+    assert.ok(text.startsWith(`[system-reminder] Braid job ${receipt.jobId} has no active work at revision 0`), text);
+    assert.match(text, /It waits on the held result of node "held" execution \S+ \(pauseAfter\)\./);
+    assert.equal(a.injected.length, 0, "a reminder, not a background notice");
+  } finally { release(); await ctx.fiber.dispose(); }
+});
+
 test("unloading the plugin aborts work and suppresses reminders after cleanup", async () => {
   let entered = false, cleaned = false;
   const { ctx, fiber, agent, invoke } = await harness(async options => {

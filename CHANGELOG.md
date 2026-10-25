@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Core emits `graph_waiting` when the last active execution settles, is held,
+  or suspends while held, suspended, or job-paused work remains, so nothing more
+  runs until the graph owner acts. It names the execution that left nothing
+  active and lists the paused and suspended execution IDs and any job pause. It
+  is emitted once each time the run enters that state: updates and resumes that
+  start nothing do not repeat it. An exhaustive `switch` over `ExecutionEvent`
+  needs a case for it. Pi and DSH send the parent a waking reminder that lists
+  what the job waits on and how to resume, update, or cancel it, so an idle
+  parent no longer waits forever on a job that cannot progress. There is no
+  reminder when the user paused the job or everything that remains, or when the
+  parent's own suspension, a held result, or a timeout pause left nothing active,
+  since the parent knows or already gets that reminder
+  ([#109](https://github.com/Epsirom/braid/issues/109)) — @Epsirom.
+
 ## 0.5.1 — 2026-10-20
 
 ### Features

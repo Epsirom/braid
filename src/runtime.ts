@@ -549,6 +549,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   const pausedByRun = new Set<string>();
   let runPause: BraidSnapshot["pause"];
   const active = () => running.size - suspended.size;
+  // The latest execution to stop being active work since the run last reported graph_waiting.
+  let lastSettled: string | undefined;
   const controller = new AbortController();
   let revision = 0;
   let status: BraidSnapshot["status"] = "running";
@@ -764,6 +766,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
         suspension.state = "suspended";
         suspension.suspendedAt = Date.now();
         suspended.add(id);
+        lastSettled = id;
         log.emit({ type: "execution_suspended", nodeId: record.id, source: suspension.source, ...context(record) });
         const resumed = new Promise<void>(resolve => resumers.set(id, resolve));
         // The released slot can go to a waiting resume or a new admission.
@@ -774,7 +777,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       finished() {
         const queued = resumeQueue.indexOf(id);
         if (queued >= 0) resumeQueue.splice(queued, 1);
-        suspended.delete(id);
+        // One that ends while suspended was not active work, so it cannot be what leaves the run waiting.
+        if (!suspended.delete(id)) lastSettled = id;
         resumers.delete(id);
         pausedByRun.delete(id);
         invocations.delete(id);
@@ -1021,6 +1025,12 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
         if (controller.signal.aborted || progressed || schedulingRevision !== revision) continue;
         if (running.size || paused.size || runPause) {
           status = active() ? "running" : "waiting";
+          // Updates and resumes that start nothing leave lastSettled unset, so they do not report again.
+          if (status === "waiting" && lastSettled) {
+            log.emit({ type: "graph_waiting", settledExecutionId: lastSettled, pausedExecutionIds: [...paused],
+              suspendedExecutionIds: [...suspended], ...(runPause ? { pause: { ...runPause } } : {}), revision });
+            lastSettled = undefined;
+          }
           await changed;
           continue;
         }

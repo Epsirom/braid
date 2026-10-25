@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TokenUsage } from "@deepseek-ai/dsh-llm";
-import type { ControlNotice, JobSnapshot, ReplanNotice, TimeoutPause } from "./jobs.js";
+import type { ControlNotice, JobSnapshot, ReplanNotice, TimeoutPause, WaitingItem, WaitingNotice } from "./jobs.js";
 
 /** Model-facing text documents for the parent Braid tools. */
 
@@ -281,6 +281,27 @@ export function formatTimeoutPause(pause: TimeoutPause): string {
     "or resume it in braid_update with resume and resumeOptions together with graph changes,",
     `or fail only this execution with braid_cancel({"jobId":"${pause.handle}","executionIds":["${pause.executionId}"]}).`,
     "The graph timeout keeps running while it is paused.",
+  ].filter(Boolean).join(" ");
+}
+
+const waitingSource = (source: string) =>
+  ({ definition: "pauseAfter", replan: "its replan request", node_timeout: "node timeout", agent: "you" } as Record<string, string>)[source] ?? source;
+const waitingItem = (item: WaitingItem) => item.kind === "job" ? `the job pause (by ${waitingSource(item.source)})`
+  : `${item.kind === "held" ? "the held result of" : "suspended"} node ${JSON.stringify(item.nodeId)} execution ${item.executionId} (${waitingSource(item.source)})`;
+
+/** The waking reminder for a job with nothing active that waits on paused work. */
+export function formatWaiting(notice: WaitingNotice): string {
+  const users = notice.waitingOn.filter(item => item.source === "user");
+  const job = notice.waitingOn.some(item => item.kind === "job");
+  return [
+    `Braid job ${notice.handle} has no active work at revision ${notice.revision}: nothing more runs until you act.`,
+    `It waits on ${notice.waitingOn.filter(item => item.source !== "user").map(waitingItem).join("; ")}.`,
+    users.length ? `The user paused ${users.map(waitingItem).join("; ")}: leave those unless the user asks.` : "",
+    `Check it with braid_status({"jobId":"${notice.handle}"}), then release held results or resume executions with`,
+    `braid_resume({"jobId":"${notice.handle}","expectedRevision":${notice.revision},"executionIds":[...]}) or braid_update with resume,`,
+    job ? `resume the job with braid_resume({"jobId":"${notice.handle}"}),` : "",
+    "fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel.",
+    "The graph timeout keeps running while it waits.",
   ].filter(Boolean).join(" ");
 }
 
