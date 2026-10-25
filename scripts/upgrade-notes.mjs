@@ -23,7 +23,10 @@ restarting Pi or DSH. Leave the list empty when nothing applies.
 export function renderUpgradeNotes(text, version) {
   const release = /^<!-- release: v(\S+) -->/.exec(text)?.[1];
   if (release !== version) throw new Error(`${UPGRADE_NOTES_PATH} is for ${release ? `v${release}` : "no release"}, not v${version}; run npm run release:prepare`);
-  const body = text.replace(/<!--[\s\S]*?-->/g, "").replace(/^## Upgrade notes\s*$/m, "").trim();
+  // Guidance comments sit above the heading; only the list below it is published.
+  const heading = /^## Upgrade notes[ \t]*$/m.exec(text);
+  if (!heading) throw new Error(`${UPGRADE_NOTES_PATH} must keep its "## Upgrade notes" heading`);
+  const body = text.slice(heading.index + heading[0].length).trim();
   return body ? `## Upgrade notes\n\n${body}\n` : "";
 }
 

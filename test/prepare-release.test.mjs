@@ -36,4 +36,5 @@ test("upgrade notes are published only for their release and only when they list
   assert.equal(renderUpgradeNotes(`${template}- Restart Pi.\n`, "0.5.3"), "## Upgrade notes\n\n- Restart Pi.\n");
   assert.throws(() => renderUpgradeNotes(template, "0.5.4"), /is for v0\.5\.3, not v0\.5\.4/);
   assert.throws(() => renderUpgradeNotes("## Upgrade notes\n", "0.5.3"), /is for no release/);
+  assert.throws(() => renderUpgradeNotes("<!-- release: v0.5.3 -->\n- Restart Pi.\n", "0.5.3"), /heading/);
 });
