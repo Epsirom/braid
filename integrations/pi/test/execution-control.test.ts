@@ -84,9 +84,9 @@ test("Pi loop reminders and status use a distinct execution ID for each round", 
   t.after(() => jobs.dispose());
   const { braidTool, statusTool } = createBraidTools(jobs);
   const job = await braidTool.execute("loop", { goal: "repeat", nodes: [
-    { type: "execute", id: "work", prompt: "work", notifyOnCompletion: true },
+    { type: "execute", id: "work", prompt: "work", notifyOnCompletion: true, maxRuns: 2 },
     { type: "decision", id: "review", prompt: "review", choices: ["again", "done"] },
-  ], edges: [{ from: "work", to: "review" }, { from: "review", to: "work", choice: "again", limit: 1 }],
+  ], edges: [{ from: "work", to: "review" }, { from: "review", to: "work", choice: "again" }],
   }, undefined, undefined, ctx);
   await jobs.wait(job.details!.handle);
   assert.equal(jobs.get(job.details!.handle)!.status, "completed");

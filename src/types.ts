@@ -9,6 +9,12 @@ export interface ExecuteNode {
   requireSuccess?: boolean;
   /** Hold this execution's outgoing dependencies until explicitly resumed. */
   pauseAfter?: boolean;
+  /**
+   * How many executions of this node may start, counting reruns: cycle rounds and
+   * downstream reruns. Skipped executions do not count. An owner's replacement is
+   * never blocked. Unlimited when omitted or Infinity.
+   */
+  maxRuns?: number;
   /** Fresh predecessor snapshot in Git; read-only disables writes. Read-only outside Git. */
   workspace?: "read-only" | "worktree";
 }
@@ -25,6 +31,12 @@ export interface DecisionNode {
   requireSuccess?: boolean;
   /** Hold this execution's outgoing dependencies until explicitly resumed. */
   pauseAfter?: boolean;
+  /**
+   * How many executions of this node may start, counting reruns: cycle rounds and
+   * downstream reruns. Skipped executions do not count. An owner's replacement is
+   * never blocked. Unlimited when omitted or Infinity.
+   */
+  maxRuns?: number;
   /** Fresh predecessor snapshot in Git; read-only disables writes. Read-only outside Git. */
   workspace?: "read-only" | "worktree";
 }
@@ -41,6 +53,12 @@ export interface MergeNode {
   requireSuccess?: boolean;
   /** Hold this execution's outgoing dependencies until explicitly resumed. */
   pauseAfter?: boolean;
+  /**
+   * How many executions of this node may start, counting reruns: cycle rounds and
+   * downstream reruns. Skipped executions do not count. An owner's replacement is
+   * never blocked. Unlimited when omitted or Infinity.
+   */
+  maxRuns?: number;
 }
 
 export interface IntegrateNode extends Omit<MergeNode, "type"> { type: "integrate"; }
@@ -121,11 +139,6 @@ export interface Edge {
   to: string;
   /** Omit for an unconditional edge, including from a decision node. */
   choice?: string;
-  /**
-   * Only on the edge that closes a cycle: how many times it may fire, each time
-   * cloning its target for another round. Omit or use Infinity for no limit.
-   */
-  limit?: number;
 }
 
 export interface BraidInput {
@@ -146,10 +159,11 @@ export type NodeStatus =
 /**
  * Why a pending instance has not started. predecessors: an input has not run yet;
  * stale: an input has a newer instance, or will get one, that has not settled;
- * hold: an input is held; run_paused: the run is paused; slot: no concurrency
- * slot is free, or the instance it replaces is still stopping.
+ * hold: an input is held; limit: a rerun at its node's maxRuns; run_paused: the
+ * run is paused; slot: no concurrency slot is free, or the instance it replaces
+ * is still stopping.
  */
-export type WaitReason = "predecessors" | "stale" | "hold" | "run_paused" | "slot";
+export type WaitReason = "predecessors" | "stale" | "hold" | "limit" | "run_paused" | "slot";
 
 export interface TokenUsage {
   inputTokens: number;
@@ -287,11 +301,7 @@ export interface ExecutionSuspension {
 
 /** A hold on an execution's outgoing scheduling, applied once it settles. */
 export interface ExecutionHold {
-  /**
-   * "definition" for the node's pauseAfter, "replan" for a replan request,
-   * "edge_limit" for a decision that chose an edge at its limit, otherwise the
-   * caller-supplied label.
-   */
+  /** "definition" for the node's pauseAfter, "replan" for a replan request, otherwise the caller-supplied label. */
   source: string;
   requestedAt: number;
 }
@@ -350,17 +360,15 @@ export type ExecutionEvent = Readonly<
     | { type: "graph_resumed" }
     | {
         /**
-         * A limit was reached under onLimit: "pause". An edge limit holds the decision
-         * that chose the edge; the other limits pause the run.
+         * A limit was reached under onLimit: "pause". maxRuns keeps the rerun pending,
+         * and executionId names it; the other limits pause the run.
          */
         type: "limit_reached";
-        limit: keyof BraidLimits | "edge";
+        limit: keyof BraidLimits | "maxRuns";
         /** The limit's value when it was reached. */
         value: number;
-        /** The held decision, for an edge limit. */
+        /** The node at its maxRuns. */
         nodeId?: string;
-        /** The edge at its limit. */
-        edge?: Edge;
       }
     | { type: "limits_updated"; limits: Readonly<BraidLimits> }
     | {
@@ -373,6 +381,7 @@ export type ExecutionEvent = Readonly<
         settledExecutionId: string;
         pausedExecutionIds: readonly string[];
         suspendedExecutionIds: readonly string[];
+        limitedExecutionIds: readonly string[];
         pause?: Readonly<{ source: string; pausedAt: number }>;
       }
     | { type: "workspace_updated"; workspace: Readonly<NodeWorkspace> }
@@ -443,11 +452,11 @@ export interface BraidOptions extends BraidLimits {
    */
   onNodeTimeout?: "pause" | "fail";
   /**
-   * What reaching an edge limit or a run limit does. "pause" holds the decision
-   * that chose the edge, or pauses the run, until the owner raises the limit or
-   * decides otherwise; "fail" fails the run with EDGE_LIMIT, EXECUTION_LIMIT,
-   * GRAPH_TIMEOUT, or TOKEN_LIMIT. Default: "pause" for startBraid, and "fail" for
-   * braid(), which cannot resume.
+   * What reaching a node's maxRuns or a run limit does. "pause" keeps the rerun
+   * pending, or pauses the run, until the owner raises the limit or decides
+   * otherwise; "fail" fails the run with RUN_LIMIT, EXECUTION_LIMIT, GRAPH_TIMEOUT,
+   * or TOKEN_LIMIT. Default: "pause" for startBraid, and "fail" for braid(), which
+   * cannot resume.
    */
   onLimit?: "pause" | "fail";
   /** Caller cancellation, independent of node and graph deadlines. */
@@ -470,7 +479,7 @@ export interface ExecutionError {
     | "CHECKPOINT_FAILED"
     | "WORKSPACE_MERGE_REQUIRED"
     | "EXECUTION_LIMIT"
-    | "EDGE_LIMIT"
+    | "RUN_LIMIT"
     | "TOKEN_LIMIT"
     | "REQUIRED_NODE_FAILED"
     | "SCHEDULING_ERROR";
@@ -565,10 +574,10 @@ export interface GraphUpdate {
   /** Remove lineages with their edges. A pending head is deleted, a running one cancelled; started instances stay in history. */
   removeNodeIds?: readonly string[];
   addEdges?: readonly Edge[];
-  /** Edge identities (from, to, choice) to remove; `limit` is ignored. */
+  /** Edge identities (from, to, choice) to remove. */
   removeEdges?: readonly Edge[];
   promptTemplates?: Readonly<Record<string, string>>;
-  /** Resume these held or paused executions atomically with this update. */
+  /** Resume these held, paused, or limited executions atomically with this update. */
   resume?: readonly string[];
   /** Applies to the paused executions in `resume`. Requires `resume`. */
   resumeOptions?: ResumeOptions;
@@ -602,10 +611,15 @@ export interface BraidSnapshot {
   graph: BraidInput;
   nodes: Record<string, NodeResult>;
   executions: Record<string, NodeExecution>;
-  /** Settled executions whose outgoing edges are held by pauseAfter, holdAfter, a replan request, or an edge limit. */
+  /** Settled executions whose outgoing edges are held by pauseAfter, holdAfter, or a replan request. */
   pausedExecutionIds: string[];
   /** Running executions stopped at a checkpoint, including resumed ones waiting for a slot. */
   suspendedExecutionIds: string[];
+  /**
+   * Pending reruns at their node's maxRuns. One starts once its maxRuns is raised;
+   * resuming it instead ends the rerun: it is removed and its node keeps its last result.
+   */
+  limitedExecutionIds: string[];
   /**
    * Present while the whole run is paused: no new executions are admitted. A limit
    * under onLimit: "pause" uses source "execution_limit", "graph_timeout", or "token_limit".
@@ -622,7 +636,10 @@ export interface BraidRun {
   result: Promise<BraidResult>;
   snapshot(): BraidSnapshot;
   update(update: GraphUpdate): BraidSnapshot;
-  /** Release held executions, or resume paused ones. Resuming a still-pausing execution withdraws the request. */
+  /**
+   * Release held executions, or resume paused ones. Resuming a still-pausing execution
+   * withdraws the request. Resuming a limited rerun ends it (see limitedExecutionIds).
+   */
   resume(executionIds: readonly string[], expectedRevision: number, options?: ResumeOptions): BraidSnapshot;
   /** Suspend running executions at their runner's next checkpoint. Requires a pausable runner. */
   pause(executionIds: readonly string[], options?: PauseOptions): BraidSnapshot;

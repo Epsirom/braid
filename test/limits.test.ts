@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   braid,
   startBraid,
+  validateGraph,
   type BraidInput,
   type BraidOptions,
   type BraidRun,
@@ -16,10 +17,10 @@ import {
 import { deferred } from "./helpers.js";
 
 const node = (id: string) => ({ type: "execute" as const, id, prompt: id });
-const loop = (limit?: number): BraidInput => ({
+const loop = (maxRuns?: number): BraidInput => ({
   goal: "refine",
-  nodes: [node("work"), { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }, node("end")],
-  edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", ...(limit === undefined ? {} : { limit }) }, { from: "check", to: "end", choice: "done" }],
+  nodes: [{ ...node("work"), ...(maxRuns === undefined ? {} : { maxRuns }) }, { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }, node("end")],
+  edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }, { from: "check", to: "end", choice: "done" }],
 });
 const until = async (condition: () => boolean, timeoutMs = 5_000) => {
   const deadline = performance.now() + timeoutMs;
@@ -54,43 +55,127 @@ test("limits default to unlimited", async t => {
   assert.ok(deadlines.every(value => value === undefined));
 });
 
-test("an edge at its limit holds the decision until the owner raises the limit or ends the cycle", async t => {
+test("a rerun beyond maxRuns waits pending until the owner raises maxRuns or ends the cycle", async t => {
   const events: ExecutionEvent[] = [];
-  const run = await start(t, loop(1), { runner: repeating }, events);
+  const run = await start(t, loop(2), { runner: repeating }, events);
   await until(() => run.snapshot().status === "waiting");
-  const [first, second] = executions(run, "check");
-  assert.equal(first!.holdAfter, undefined);
-  assert.deepEqual(run.snapshot().pausedExecutionIds, [second!.executionId]);
-  assert.equal(second!.holdAfter?.source, "edge_limit");
-  assert.equal(second!.held, true);
+  let state = run.snapshot();
+  assert.deepEqual(executions(run, "work").map(record => [record.executionId, record.status]),
+    [["work@1", "completed"], ["work@2", "completed"], ["work@3", "pending"]]);
+  assert.deepEqual(state.limitedExecutionIds, ["work@3"]);
+  assert.deepEqual(state.pausedExecutionIds, []);
+  assert.equal(state.nodes.work!.waitReason, "limit");
+  assert.equal(state.nodes.end!.waitReason, "stale");
   const reached = events.find(event => event.type === "limit_reached");
-  assert.deepEqual(reached && { limit: reached.limit, value: reached.value, nodeId: reached.nodeId, executionId: reached.executionId, edge: reached.edge },
-    { limit: "edge", value: 1, nodeId: "check", executionId: "check@2", edge: { from: "check", to: "work", choice: "again", limit: 1 } });
-  assert.deepEqual(events.filter(event => event.executionId === second!.executionId && event.type.startsWith("execution_") && event.type !== "execution_created").map(event => event.type),
-    ["execution_hold_added", "execution_paused"]);
-  assert.equal(run.snapshot().nodes.end!.waitReason, "hold");
+  assert.deepEqual(reached && { limit: reached.limit, value: reached.value, nodeId: reached.nodeId, executionId: reached.executionId },
+    { limit: "maxRuns", value: 2, nodeId: "work", executionId: "work@3" });
+  const waiting = events.filter(event => event.type === "graph_waiting").at(-1);
+  assert.deepEqual(waiting?.type === "graph_waiting" && waiting.limitedExecutionIds, ["work@3"]);
 
-  // Raising the limit in the same update continues with the next round; the edge keeps its count.
-  const edge = { from: "check", to: "work", choice: "again" };
-  run.update({ expectedRevision: run.snapshot().revision, removeEdges: [edge], addEdges: [{ ...edge, limit: 2 }], resume: [second!.executionId] });
-  await until(() => executions(run, "check").length === 3 && run.snapshot().status === "waiting");
-  const third = executions(run, "check")[2]!;
-  assert.deepEqual(run.snapshot().pausedExecutionIds, [third.executionId]);
+  // Raising maxRuns edits the pending rerun in place, and it starts.
+  run.update({ expectedRevision: state.revision, upsertNodes: [{ ...node("work"), maxRuns: 3 }] });
+  await until(() => executions(run, "work").length === 4 && run.snapshot().status === "waiting");
+  state = run.snapshot();
+  assert.equal(state.executions["work@3"]!.status, "completed");
+  assert.equal(state.executions["work@3"]!.supersedes, undefined);
+  assert.deepEqual(state.limitedExecutionIds, ["work@4"]);
 
-  // Releasing it without a higher limit ends the cycle; its exit is not taken.
-  run.resume([third.executionId], run.snapshot().revision);
+  // Releasing it without raising maxRuns ends the cycle: the rerun is removed and its exit is not taken.
+  run.resume(["work@4"], state.revision);
   const result = await run.result;
   assert.equal(result.status, "completed");
   assert.equal(result.nodes.end!.status, "skipped");
   assert.equal(result.nodes.end!.skipReason, "inactive");
-  assert.deepEqual(result.terminalExecutionIds, [third.executionId]);
-  assert.equal(executions(run, "work").length, 3);
+  assert.deepEqual(result.terminalExecutionIds, ["check@3"]);
+  assert.equal(result.executions["work@4"], undefined);
+  assert.equal(result.nodes.work!.executionId, "work@3");
+  assert.ok(events.some(event => event.type === "execution_removed" && event.executionId === "work@4"));
+  assert.deepEqual(run.snapshot().limitedExecutionIds, []);
 });
 
-test("onLimit fail fails the run at an edge limit", async t => {
+test("onLimit fail fails the run at maxRuns", async t => {
   const run = await start(t, loop(1), { runner: repeating, onLimit: "fail" });
   const result = await run.result;
-  assert.equal(result.error?.code, "EDGE_LIMIT");
+  assert.equal(result.error?.code, "RUN_LIMIT");
+  assert.match(result.error!.message, /Node 'work' reached its maxRuns of 1/);
+});
+
+test("maxRuns limits downstream reruns, never the owner's replacement", async t => {
+  const run = await start(t, { goal: "rerun", nodes: [node("a"), { ...node("b"), maxRuns: 1 }, { ...node("gate"), pauseAfter: true }],
+    edges: [{ from: "a", to: "b" }] }, { runner: async request => ({ output: request.node.prompt! }) });
+  await until(() => run.snapshot().status === "waiting");
+  // Replacing b starts it even though it has run maxRuns times.
+  run.update({ expectedRevision: 0, upsertNodes: [{ ...node("b"), prompt: "b2", maxRuns: 1 }] });
+  await until(() => run.snapshot().executions["b@2"]?.status === "completed" && run.snapshot().status === "waiting");
+  // A rerun of a reaches b, which is past its limit: b's rerun waits.
+  run.update({ expectedRevision: 1, upsertNodes: [{ ...node("a"), prompt: "a2" }] });
+  await until(() => run.snapshot().limitedExecutionIds.length > 0 && run.snapshot().status === "waiting");
+  let state = run.snapshot();
+  assert.deepEqual(state.limitedExecutionIds, ["b@3"]);
+  assert.equal(state.executions["b@3"]!.waitReason, "limit");
+  assert.throws(() => run.resume(["b@2"], state.revision), /held, paused, or limited/);
+
+  // Ending the rerun in an update keeps b@2, and b is not cloned again for the same input.
+  run.update({ expectedRevision: state.revision, resume: ["b@3", state.pausedExecutionIds[0]!] });
+  const result = await run.result;
+  assert.equal(result.status, "completed");
+  assert.deepEqual(Object.keys(result.executions).filter(id => id.startsWith("b@")), ["b@1", "b@2"]);
+  assert.equal(result.nodes.b!.output, "b2");
+  state = run.snapshot();
+  assert.equal(state.nodes.b!.executionId, "b@2");
+});
+
+test("ending a limited rerun keeps inputs that are still rerunning, and an update may remove it instead", async t => {
+  const gate = deferred();
+  const run = await start(t, { goal: "rerun", nodes: [node("a"), { ...node("b"), maxRuns: 1 }, { ...node("hold"), pauseAfter: true }],
+    edges: [{ from: "a", to: "b" }] }, { runner: async request => {
+    if (request.execution.executionId === "a@3") await gate.promise;
+    return { output: request.node.prompt! };
+  } });
+  await until(() => run.snapshot().status === "waiting");
+  run.update({ expectedRevision: 0, upsertNodes: [{ ...node("a"), prompt: "a2" }] });
+  await until(() => run.snapshot().limitedExecutionIds.length > 0 && run.snapshot().status === "waiting");
+  // a reruns again while b@2 waits; ending b@2 now must not accept a@3 before it settles.
+  run.update({ expectedRevision: 1, upsertNodes: [{ ...node("a"), prompt: "a3" }] });
+  await until(() => run.snapshot().executions["a@3"]?.status === "running");
+  run.resume(["b@2"], 2);
+  assert.equal(run.snapshot().executions["b@2"], undefined);
+  gate.resolve();
+  await until(() => run.snapshot().limitedExecutionIds.includes("b@3") && run.snapshot().status === "waiting");
+
+  // Removing b and releasing its rerun in one update does not fail.
+  const state = run.snapshot();
+  run.update({ expectedRevision: state.revision, removeNodeIds: ["b"], resume: ["b@3", ...state.pausedExecutionIds] });
+  const result = await run.result;
+  assert.equal(result.status, "completed");
+  assert.equal(result.executions["b@3"], undefined);
+});
+
+test("skipped reruns do not count toward maxRuns", async t => {
+  const result = await braid({ goal: "branch", nodes: [
+    { type: "decision", id: "route", prompt: "route", choices: ["left", "right"] }, { ...node("left"), maxRuns: 1 }, node("right"),
+    { type: "decision", id: "check", prompt: "check", choices: ["again", "done"] },
+  ], edges: [{ from: "route", to: "left", choice: "left" }, { from: "route", to: "right", choice: "right" },
+    { from: "left", to: "check" }, { from: "right", to: "check" }, { from: "check", to: "route", choice: "again" }] }, {
+    runner: async request => {
+      const round = request.execution.generation!;
+      if (request.node.id === "route") request.decide!(round === 3 ? "left" : "right");
+      if (request.node.id === "check") request.decide!(round === 3 ? "done" : "again");
+      return { output: request.execution.executionId! };
+    },
+  });
+  assert.equal(result.status, "completed", JSON.stringify(result.error));
+  assert.deepEqual(Object.values(result.executions).filter(record => record.id === "left").map(record => record.status),
+    ["skipped", "skipped", "completed"]);
+});
+
+test("maxRuns is validated on every node type, and edges take no limit", () => {
+  for (const maxRuns of [0, 1.5, -1, Number.NaN, "2"])
+    assert.throws(() => validateGraph({ goal: "x", nodes: [{ ...node("a"), maxRuns } as never], edges: [] }), /Invalid maxRuns on 'a'/);
+  for (const type of ["execute", "decision", "merge", "integrate"] as const)
+    validateGraph({ goal: "x", nodes: [{ type, id: "a", prompt: "a", ...(type === "decision" ? { choices: ["x"] } : {}), maxRuns: Infinity } as never], edges: [] });
+  assert.throws(() => validateGraph({ ...loop(), edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", limit: 2 } as never] }),
+    /unsupported field 'limit'/);
 });
 
 test("maxExecutions stops admission, lets admitted work finish, and resumes after setLimits", async t => {

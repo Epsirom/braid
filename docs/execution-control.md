@@ -45,6 +45,7 @@ and `supersedes` on its replacement. Staleness is derived, not stored.
 | `predecessors` | An input has not run yet |
 | `stale` | An input has a newer instance that has not settled, or will get one because something upstream of it is rerunning |
 | `hold` | An input, or something upstream of it, is held |
+| `limit` | It is a rerun beyond its node's `maxRuns` (see [limits](#limits)) |
 | `run_paused` | The run is paused, by `pauseRun` or at a run limit |
 | `slot` | No concurrency slot is free, or the instance it replaces is still stopping |
 
@@ -88,14 +89,14 @@ explicit operation: human input, a hold, a replacement, or cancellation.
 const graph = {
   goal: "Refine until the review passes",
   nodes: [
-    { type: "execute", id: "edit", prompt: "Implement the feedback." },
+    { type: "execute", id: "edit", prompt: "Implement the feedback.", maxRuns: 3 },
     { type: "decision", id: "review", prompt: "Review the result.",
       choices: ["again", "done"], workspace: "read-only" },
     { type: "integrate", id: "apply" },
   ],
   edges: [
     { from: "edit", to: "review" },
-    { from: "review", to: "edit", choice: "again", limit: 2 },
+    { from: "review", to: "edit", choice: "again" },
     { from: "review", to: "apply", choice: "done" },
   ],
 };
@@ -117,10 +118,10 @@ everything in the previous round that feeds the decision has settled and been
 released. Exits wait while the cycle is rerunning and use the final round.
 Inputs from outside the cycle stay available to every round.
 
-The closing edge's optional `limit` counts how many times it may fire, so
-`limit: 2` allows three rounds. Without a limit the decision alone ends the
-cycle. Choosing the edge at its limit holds the decision for the graph owner,
-or fails the job with `EDGE_LIMIT` under `onLimit: "fail"` (see [limits](#limits)).
+Without a limit the decision alone ends the cycle. To bound the rounds, set
+`maxRuns` on a node in the cycle: `maxRuns: 3` on `edit` allows three rounds.
+The round that would exceed it waits for the graph owner, or fails the job with
+`RUN_LIMIT` under `onLimit: "fail"` (see [limits](#limits)).
 
 An edge from a new node into a settled lineage that does not close a cycle
 reruns that lineage once, for example `fix → test` added after `test` finished.
@@ -170,10 +171,8 @@ with the next generation. A cancelled instance of a replaced or removed node nev
 fails the run, even with `requireSuccess`.
 
 Edges are identified by `from`, `to`, and `choice`. `addEdges` rejects an edge that
-already exists, and `removeEdges` rejects one that does not; `limit` is ignored
-there. To change an edge's limit, remove it and add it again in the same update:
-its firing count is kept. Removing a node, or an edge, that does not exist is an
-error. `promptTemplates` replaces the template map when supplied; pending
+already exists, and `removeEdges` rejects one that does not. Removing a node, or
+an edge, that does not exist is an error. `promptTemplates` replaces the template map when supplied; pending
 instances are rendered again, started ones keep the prompt they ran with.
 
 `pauseAfter` holds an execution's outgoing scheduling and keeps the job alive,
@@ -315,7 +314,7 @@ The run emits `graph_waiting` when it enters that state because the last active
 execution settled, was held, or suspended: nothing more runs until the graph
 owner resumes, updates, or cancels it. The event has `settledExecutionId`, the
 execution that left nothing active, `pausedExecutionIds`, `suspendedExecutionIds`,
-the run's `pause` if any, and the current `revision`. It is emitted once per
+`limitedExecutionIds` (reruns waiting at their node's `maxRuns`), the run's `pause` if any, and the current `revision`. It is emitted once per
 transition. An update or resume that starts nothing does not repeat it, and
 neither does cancelling an execution that was already suspended; the next one
 follows after some execution runs again. A run that waits before anything ran,
@@ -443,7 +442,7 @@ finishes or its owner stops it. Set a limit only to bound a run:
 
 | Limit | Scope | Under `onLimit: "pause"` | Under `onLimit: "fail"` |
 | --- | --- | --- | --- |
-| `edge.limit` | Times the edge that closes a cycle fires, so rounds after the first | Holds the decision that chose it, with hold source `"edge_limit"` | `EDGE_LIMIT` |
+| `node.maxRuns` | Started executions of one node (lineage), counting cycle rounds and downstream reruns; skipped ones do not count, and an owner's replacement always starts | Keeps the rerun pending with wait reason `"limit"` | `RUN_LIMIT` |
 | `maxExecutions` | Started and skipped instances, across rounds and updates; pending instances do not count | Stops admission (pause source `"execution_limit"`); started executions finish | `EXECUTION_LIMIT` |
 | `graphTimeoutMs` | Wall time from the start of the run, including gates and pauses; never reset by an update or resume | Pauses the run and its running executions (`"graph_timeout"`) | `GRAPH_TIMEOUT` |
 | `maxTokens` | Reported input and output tokens of all executions, checked as each settles, so running executions can exceed it | Pauses the run and its running executions (`"token_limit"`) | `TOKEN_LIMIT` |
@@ -451,23 +450,33 @@ finishes or its owner stops it. Set a limit only to bound a run:
 `onLimit` defaults to `"pause"` in `startBraid`. `braid()` has no handle to
 resume with, so it always fails at a limit and rejects `onLimit: "pause"`.
 
-At an edge limit, the decision is held like `pauseAfter`: it appears in
-`pausedExecutionIds`, and core emits `execution_hold_added`, `limit_reached`
-(with `limit: "edge"`, the edge, and the decision's `nodeId`), and
-`execution_paused`. To run more rounds, replace the edge with a higher limit, or
-none, in an update that resumes the decision; the edge keeps the count of times
-it already fired. Releasing the decision without a higher limit ends the cycle
-there: the edge does not fire, and the decision's other edges stay inactive.
+`maxRuns` limits automatic reruns: the rounds of a cycle and the reruns an
+upstream change cascades downstream. When an edge reaches a settled head that has
+already run `maxRuns` times, the clone is still created, but it stays pending with
+`waitReason: "limit"` instead of starting. Once its inputs are current, core emits
+`limit_reached` (with `limit: "maxRuns"`, the value, the `nodeId`, and the
+waiting `executionId`) and lists it in `limitedExecutionIds` in the snapshot and in
+`graph_waiting`; a run with nothing else active then waits for its owner. A rerun
+that would be skipped is not held, and an owner's replacement of a started node
+always starts, even past the limit.
+
+To let the rerun start, raise `maxRuns` with an update that upserts the node: the
+pending rerun is edited in place, not replaced, and starts. To end it instead,
+release it with `resume` (or `resume` in an update) without raising the limit: the
+rerun is removed (`execution_removed`), the node keeps its last result, and nothing
+downstream reruns for it. In a cycle this ends the cycle there; the decision chose
+the closing edge, so its other edges stay inactive.
 
 ```ts
 const state = run.snapshot();
-const edge = { from: "review", to: "edit", choice: "again" };
+const [rerun] = state.limitedExecutionIds;
+// Allow one more round:
 run.update({
   expectedRevision: state.revision,
-  removeEdges: [edge],
-  addEdges: [{ ...edge, limit: 4 }],
-  resume: state.pausedExecutionIds,
+  upsertNodes: [{ type: "execute", id: "edit", prompt: "Implement the feedback.", maxRuns: 4 }],
 });
+// Or end the cycle here:
+run.resume([rerun], state.revision);
 ```
 
 At a run limit, core emits `limit_reached` and `graph_paused` with the limit's

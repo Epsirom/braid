@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { ExecutionActivityTracker, formatActivityStatus, startBraid, validateGraph, type BraidInput, type BraidLimits, type ExecutionActivity, type ExecutionActivityPage, type BraidRun, type BraidResult, type BraidSnapshot, type Edge, type GraphUpdate, type ExecutionEvent, type NodeResult, type ResumeOptions } from "@chrok/braid";
+import { ExecutionActivityTracker, formatActivityStatus, startBraid, validateGraph, type BraidInput, type BraidLimits, type ExecutionActivity, type ExecutionActivityPage, type BraidRun, type BraidResult, type BraidSnapshot, type GraphUpdate, type ExecutionEvent, type NodeResult, type ResumeOptions } from "@chrok/braid";
 import type { TokenUsage } from "@deepseek-ai/dsh-llm";
 import { createDshRunner, sumUsage, validateBudgets, type NodeProgress, type DshLlm } from "./runner.js";
 
@@ -9,7 +9,7 @@ export interface JobOptions extends BraidLimits {
   nodeTimeoutMs?: number;
   /** Default "pause": a node timeout suspends the execution and wakes the parent. */
   onNodeTimeout?: "pause" | "fail";
-  /** Default "pause": a limit holds the loop's decision or pauses the job, and wakes the parent. */
+  /** Default "pause": a rerun at its node's maxRuns waits, or the job pauses at a job limit, and the parent is woken. */
   onLimit?: "pause" | "fail";
   maxToolRounds?: number;
   maxToolCalls?: number;
@@ -62,9 +62,12 @@ export interface TimeoutPause {
   sequence: number;
 }
 
-/** Work a job with nothing active waits on, and who put it there: "agent", "user", "definition", "replan", or "node_timeout". */
+/**
+ * Work a job with nothing active waits on, and who put it there: "agent", "user", "definition", "replan",
+ * "node_timeout", or "maxRuns" for a rerun at its node's maxRuns.
+ */
 export interface WaitingItem {
-  kind: "held" | "suspended" | "job";
+  kind: "held" | "suspended" | "limited" | "job";
   /** Omitted for the job pause. */
   executionId?: string;
   nodeId?: string;
@@ -95,6 +98,7 @@ function waitingOn(state: BraidSnapshot, event: Extract<ExecutionEvent, { type: 
   const items = [
     ...event.pausedExecutionIds.map(id => execution("held", id, state.executions[id]?.holdAfter?.source)),
     ...event.suspendedExecutionIds.map(id => execution("suspended", id, state.executions[id]?.suspension?.source)),
+    ...event.limitedExecutionIds.map(id => execution("limited", id, "maxRuns")),
     ...event.pause ? [{ kind: "job" as const, source: event.pause.source }] : [],
   ];
   return items.some(item => item.source !== "user") ? items : undefined;
@@ -119,8 +123,6 @@ export interface Completion {
   nodeId?: string;
   paused?: boolean;
   sequence?: number;
-  /** A decision held because the edge it chose is at its limit. */
-  edgeLimit?: Edge;
   /** The execution asked for a replan; its result is held for the parent. */
   replanRequested?: boolean;
 }
@@ -139,12 +141,6 @@ export interface ReplanNotice {
 }
 
 /** One manager per live DSH agent; foreground cancellation never owns these runs. */
-/** The edge at its limit that holds a decision, for its pause reminder. */
-function edgeLimit(state: BraidSnapshot, node: BraidSnapshot["executions"][string]): Pick<Completion, "edgeLimit"> {
-  if (node.holdAfter?.source !== "edge_limit") return {};
-  const edge = state.graph.edges.find(edge => edge.from === node.id && edge.choice === node.decision && edge.limit !== undefined);
-  return edge ? { edgeLimit: { ...edge } } : {};
-}
 
 export class BraidJobs {
   private jobs = new Map<string, Job>();
@@ -269,7 +265,7 @@ export class BraidJobs {
     const paused = event.type === "execution_paused";
     if (!paused && (!node.node.notifyOnCompletion || (node.holdAfter && !state?.error))) return;
     this.remind({ jobId, handle, status: node.status, executionId: node.executionId, nodeId: node.id, paused, sequence: event.sequence,
-      ...(node.replan ? { replanRequested: true } : {}), ...edgeLimit(state!, node) });
+      ...(node.replan ? { replanRequested: true } : {}) });
   }
 
   /** A timeout pause always wakes the parent, which must resume or cancel it. */

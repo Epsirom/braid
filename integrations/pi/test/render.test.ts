@@ -312,7 +312,7 @@ test("cycle charts draw forward handoffs dotted and the closing edge solid witho
     edges: [
       { from: "start", to: "inspect" }, { from: "inspect", to: "route" },
       { from: "start", to: "route" },
-      { from: "route", to: "start", choice: "again", limit: 2 },
+      { from: "route", to: "start", choice: "again" },
       { from: "route", to: "end", choice: "done" },
     ],
   };
@@ -356,12 +356,12 @@ test("cycle charts draw forward handoffs dotted and the closing edge solid witho
   const cases: Array<{ name: string; edges: Edge[] }> = [
     { name: "labelled shortcut", edges: graph.edges.map(edge => edge.from === "start" && edge.to === "route" ? { ...edge, choice: "direct" } : edge) },
     { name: "required forward edge", edges: graph.edges.filter(edge => edge.from !== "inspect" && edge.to !== "inspect") },
-    { name: "ordinary DAG shortcut", edges: graph.edges.filter(edge => edge.limit === undefined) },
+    { name: "ordinary DAG shortcut", edges: graph.edges.filter(edge => edge.choice !== "again") },
   ];
   for (const { name, edges } of cases) {
     const rendered = chart({ ...live, edges });
     assert.notEqual(rendered, chart({ ...live, edges: withoutShortcut(edges) }), name);
-    if (edges.some(edge => edge.limit !== undefined)) assert.match(rendered, /[╎╌]/, name);
+    if (edges.some(edge => edge.choice === "again")) assert.match(rendered, /[╎╌]/, name);
     else assert.doesNotMatch(rendered, /[╎╌]/, name);
     if (name === "labelled shortcut") assert.match(rendered, /direct/);
     const fromEvents = createLiveState();
@@ -546,4 +546,19 @@ test("node details render at the observation time and show recoverable workspace
   const archived = render({ id: "a", status: "completed", workspace: { ...workspace, state: "archived" } }, 0);
   assert.match(archived, /workspace: worktree · archived · refs\/braid\/checkpoint/);
   assert.doesNotMatch(archived, /\/tmp\/wt/);
+});
+
+test("the live view restores a node's head when its rerun ends at maxRuns", () => {
+  const live = createLiveState();
+  const at = (sequence: number) => ({ sequence, timestamp: 0 });
+  applyEvent(live, { type: "execution_created", nodeId: "work", nodeType: "execute", generation: 1, cause: "submitted", executionId: "work@1", ...at(1) });
+  applyEvent(live, { type: "node_started", nodeId: "work", executionId: "work@1", ...at(2) });
+  applyEvent(live, { type: "node_completed", nodeId: "work", executionId: "work@1", output: "first", latencyMs: 1, ...at(3) });
+  applyEvent(live, { type: "execution_created", nodeId: "work", nodeType: "execute", generation: 2, cause: "cloned", executionId: "work@2", ...at(4) });
+  assert.equal(live.nodes.work!.status, "pending");
+  applyEvent(live, { type: "execution_removed", nodeId: "work", executionId: "work@2", ...at(5) });
+  assert.equal(live.nodes.work!.executionId, "work@1");
+  assert.equal(live.nodes.work!.status, "completed");
+  assert.equal(live.nodes.work!.output, "first");
+  assert.equal(live.generations!.work, 1);
 });

@@ -186,13 +186,15 @@ for independent roots.
 
 A retry cycle is closed by a decision's choice edge back to the node where each
 round starts, such as `{ "from": "check", "to": "work", "choice": "retry" }`. The
-decision needs another choice to exit. The optional `limit` on that edge counts
-how many times it may fire, so `limit: 2` allows three rounds; omit it unless
-the user asks for a limit. When the decision chooses the edge at its limit, the
-job holds that decision and sends the parent a pause reminder: replace the edge
-with a higher limit (`removeEdges` and `addEdges`) in `braid_update` with
-`resume` to run more rounds, or release it with `braid_resume` to end the cycle
-without taking its exits. Edges enter a cycle only at its start node and leave
+decision needs another choice to exit. To bound the rounds, set `maxRuns` on a
+node in the cycle, so `maxRuns: 3` on `work` allows three rounds; omit it unless
+the user asks for a limit. `maxRuns` counts every run of that node, including
+reruns after an upstream change, but never blocks your own replacement of it. A
+rerun past the limit waits instead of starting, and once nothing else is active
+the parent gets the waiting reminder: upsert the node with a higher `maxRuns` in
+`braid_update` to let the waiting rerun start (it is edited in place), or release
+it with `braid_resume` to end the rerun, which in a cycle ends the cycle without
+taking its exits. Edges enter a cycle only at its start node and leave
 only from its decision; cycles cannot nest or overlap. Each round runs new
 executions, named `<nodeId>@<generation>`. See the
 [cycle example](../../docs/execution-control.md#cycles).
@@ -300,14 +302,14 @@ the event log still records where pauses occurred.
 `promptTemplates` replaces the entire map when supplied; omitting it preserves
 the current templates. `removeNodeIds` removes nodes with their edges and cancels
 a running execution; finished executions stay in `braid_status`. `removeEdges`
-identifies edges by `from`, `to`, and `choice` (`limit` is ignored); an omitted
-`choice` is not a wildcard, and removing a node or edge that does not exist is an
-error. `resume` and `braid_resume.executionIds` take paused execution
-IDs, not node IDs.
+identifies edges by `from`, `to`, and `choice`; an omitted `choice` is not a
+wildcard, and removing a node or edge that does not exist is an error. `resume`
+and `braid_resume.executionIds` take paused, suspended, or limited execution IDs,
+not node IDs.
 
 `requireSuccess` defaults to false. Optional failures retain artifacts and allow
 unconditional recovery; required failures cancel siblings and fail the job after
-cleanup. Edge `limit`, total `maxExecutions`, `maxTokens`, and the
+cleanup. A node's `maxRuns`, total `maxExecutions`, `maxTokens`, and the
 timeouts are unlimited unless set; `maxExecutions` spans updates. Deadlines keep
 running through pauses. The graph timeout includes time waiting for the parent
 to inspect and update a paused graph, and resuming does not extend it.
@@ -317,7 +319,8 @@ of failing it (`options.onLimit: "fail"` fails it). `maxExecutions` only stops n
 executions; the other two also pause running ones. Once nothing is active, the
 parent gets the waiting reminder, and `braid_resume({ jobId, limits })` raises the
 limit and resumes the job. The job does not resume while the limit is still
-reached. `/braid:review` keeps failing at its round limit.
+reached. `/braid:review` bounds its rounds with `maxRuns` on its writer node and
+keeps failing at that limit.
 
 See [execution control](../../docs/execution-control.md) for cycle schemas, exact
 update and rerun semantics, and workspace lineage. There is no
@@ -741,7 +744,7 @@ pass any of these fields in the `braid` tool's `options`:
 | `graphTimeoutMs` | Time allowed for the entire graph, including queueing and pauses, in milliseconds |
 | `maxExecutions` | Total started and skipped executions; unlimited by default, positive safe integer |
 | `maxTokens` | Total input and output tokens reported by all executions, checked as each finishes; unlimited by default |
-| `onLimit` | `pause` (default) holds a decision that chose an edge at its `limit`, or pauses the job at the other limits, and wakes the parent; `fail` fails the job |
+| `onLimit` | `pause` (default) keeps a rerun past its node's `maxRuns` waiting, or pauses the job at the other limits, and wakes the parent; `fail` fails the job |
 
 For example, `options: { maxToolRounds: 20, maxToolCalls: 60, nodeTimeoutMs: 120000 }`.
 Omit tool, time, execution, and token fields for no limit; programmatic options also accept `Infinity`.

@@ -83,7 +83,8 @@ test("/braid:review registers a bounded background graph and trims its target", 
   assert.ok(input);
   assert.match(input.goal, /HEAD~2\.\.HEAD/);
   assert.doesNotMatch(input.goal, /  HEAD/);
-  assert.deepEqual(input.edges.find(edge => edge.to === "scope"), { from: "check", to: "scope", choice: "retry", limit: 2 });
+  assert.deepEqual(input.edges.find(edge => edge.to === "scope"), { from: "check", to: "scope", choice: "retry" });
+  assert.equal(input.nodes.find(node => node.id === "scope")!.maxRuns, 3);
   assert.deepEqual(input.edges.filter(edge => edge.to === "check").map(edge => edge.from).sort(), ["review-1", "review-2", "review-3", "scope"]);
   assert.ok(input.nodes.every(node => node.requireSuccess));
   assert.deepEqual(options, { maxConcurrency: 3, maxExecutions: 16, onLimit: "fail" });
@@ -244,12 +245,13 @@ for (const outcome of ["clean", "capped", "limit", "reviewer failure"] as const)
       if (outcome === "capped") assert.match(result.terminalOutputs.apply!.output, /Round limit reached; unresolved P1/);
     } else {
       assert.equal(result.status, "failed");
-      assert.equal(result.error!.code, outcome === "limit" ? "EDGE_LIMIT" : "REQUIRED_NODE_FAILED");
+      assert.equal(result.error!.code, outcome === "limit" ? "RUN_LIMIT" : "REQUIRED_NODE_FAILED");
       assert.ok(!calls.has("apply"));
       if (outcome === "limit") {
-        // 15 started executions, and apply, skipped when the run failed.
-        assert.equal(Object.keys(result.executions).length, 16);
+        // 15 started executions; apply and the rerun of scope beyond its maxRuns were skipped when the run failed.
+        assert.equal(Object.keys(result.executions).length, 17);
         assert.equal(result.executions["apply@1"]!.skipReason, "run_failed");
+        assert.equal(result.executions["scope@4"]!.skipReason, "run_failed");
         assert.deepEqual(Object.values(result.executions).filter(node => node.id === "check").map(node => node.generation), [1, 2, 3]);
       } else assert.ok(!calls.has("check"));
     }

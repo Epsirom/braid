@@ -193,8 +193,8 @@ test("merge context previews only node changes, bounds large diffs, and preserve
 test("loop executions derive fresh worktrees from the preceding result and never mutate the caller", async t => {
   const cwd = await repository(t);
   const paths: string[] = [];
-  const result = await braid({ goal: "iterate", nodes: [execute("edit"), { ...decision("check", ["again", "done"]), workspace: "read-only" }],
-    edges: [{ from: "edit", to: "check" }, { from: "check", to: "edit", choice: "again", limit: 2 }],
+  const result = await braid({ goal: "iterate", nodes: [{ ...execute("edit"), maxRuns: 3 }, { ...decision("check", ["again", "done"]), workspace: "read-only" }],
+    edges: [{ from: "edit", to: "check" }, { from: "check", to: "edit", choice: "again" }],
   }, { cwd, runner: async request => {
     paths.push(request.workspace!.worktreeRoot!);
     const contents = await readFile(join(request.workspace!.workingDirectory, "file.txt"), "utf8");

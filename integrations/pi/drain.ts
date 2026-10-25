@@ -13,7 +13,7 @@ export const isSingleShot = (ctx: Pick<ExtensionContext, "mode">) => ctx.mode ==
 
 export const BRAID_DRAIN_GUIDANCE =
   "This is a single-shot run. It stays open until every Braid job finishes and its reminder is delivered, so submit, end your turn, and continue from the reminder as usual. " +
-  "Paused executions, including results held by a node's replan request, and paused jobs are not resumed automatically: resume or cancel them before ending your turn. If only paused work remains when you end a turn, you get one warning; ending the next turn without resuming it cancels those jobs and the run exits with a failure status.";
+  "Paused executions, including results held by a node's replan request, reruns waiting at a node's maxRuns, and paused jobs are not resumed automatically: resume or cancel them before ending your turn. If only paused work remains when you end a turn, you get one warning; ending the next turn without resuming it cancels those jobs and the run exits with a failure status.";
 
 export const BRAID_FINISH_GUIDANCE =
   "When the task is done and no Braid job is outstanding, call braid_finish once with status success or failure and a short summary of the outcome, then end your turn with your final response. " +
@@ -37,13 +37,14 @@ const waitingOn = (job: OutstandingJob) => [
   job.pausedExecutionIds.length ? `paused executions ${JSON.stringify(job.pausedExecutionIds)}` : "",
   job.suspendedExecutionIds.length ? `suspended executions ${JSON.stringify(job.suspendedExecutionIds)}` +
     (job.timedOutExecutionIds?.length ? ` (paused by their node timeout: ${JSON.stringify(job.timedOutExecutionIds)})` : "") : "",
+  job.limitedExecutionIds.length ? `reruns at their node's maxRuns ${JSON.stringify(job.limitedExecutionIds)}` : "",
   job.paused ? "its job pause" : "",
 ].filter(Boolean).join(" and ") || "paused work";
 
 const stalledReminder = (jobs: OutstandingJob[]) =>
   `[system-reminder] This single-shot run cannot end while Braid jobs are outstanding, and nothing can progress: ` +
   jobs.map(job => `${job.handle} is waiting on ${waitingOn(job)} at revision ${job.revision}`).join("; ") +
-  `. Resume executions with braid_resume or braid_update with resume, resume a paused job with braid_resume({jobId}), fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel, then continue the original task. ` +
+  `. Resume executions with braid_resume or braid_update with resume, raise a node's maxRuns with braid_update, resume a paused job with braid_resume({jobId}), fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel, then continue the original task. ` +
   `If you end your turn again without doing so, Braid cancels these jobs and the run exits with a failure status. [/system-reminder]`;
 
 /**

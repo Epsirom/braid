@@ -54,7 +54,7 @@ test("braid_pause suspends before the next model request and braid_resume contin
   assert.deepEqual(jobs.progress(handle)!.running, [], "a suspended execution is not running");
   assert.equal(jobs.progress(handle)!.paused, 1);
   assert.deepEqual(jobs.outstanding(), [{
-    jobId: submitted.details!.jobId, handle, stalled: true, revision: 0, pausedExecutionIds: [], suspendedExecutionIds: [executionId],
+    jobId: submitted.details!.jobId, handle, stalled: true, revision: 0, pausedExecutionIds: [], suspendedExecutionIds: [executionId], limitedExecutionIds: [],
   }]);
   const status = textOf(await tools.statusTool.execute("status", { jobId: handle, executionId }, undefined, undefined, ctx));
   assert.match(status, /suspended executions: /);

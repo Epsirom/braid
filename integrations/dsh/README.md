@@ -235,18 +235,20 @@ execution, keeping finished ones in history. An edge added into a finished node
 reruns it once its new input finishes. Include new nodes and their dependencies
 in the same update: a disconnected root can start immediately. Rejected
 revisions/patches change nothing. Supplied templates replace the whole map.
-`removeEdges` identifies edges by `from`, `to`, and `choice` (`limit` is
-ignored); an omitted `choice` is not a wildcard. Finalized jobs cannot be
+`removeEdges` identifies edges by `from`, `to`, and `choice`; an omitted
+`choice` is not a wildcard. Finalized jobs cannot be
 reopened.
 
 A cycle is closed by a decision's choice edge back to the node where each round
-starts, and the decision needs an exit choice. The optional `limit` on that edge
-counts how many times it may fire, so `limit: 2` allows three rounds; without it
-the decision alone ends the cycle. A decision that chooses the edge at its limit
-is held and the parent gets a pause reminder: replace the edge with a higher
-limit (`removeEdges` and `addEdges`) in `braid_update` with `resume` to run more
-rounds, or release it with `braid_resume` to end the cycle without taking its
-exits. Cycles cannot overlap or nest. Prompt
+starts, and the decision needs an exit choice. Without a limit the decision alone
+ends the cycle; to bound the rounds, set `maxRuns` on a node in the cycle, so
+`maxRuns: 3` allows three rounds. `maxRuns` counts every run of that node,
+including reruns after an upstream change, but never blocks the parent's own
+replacement of it. A rerun past the limit waits instead of starting, and once
+nothing else is active the parent gets the waiting reminder: upsert the node with
+a higher `maxRuns` in `braid_update` to let the waiting rerun start (it is edited
+in place), or release it with `braid_resume` to end the rerun, which in a cycle
+ends the cycle without taking its exits. Cycles cannot overlap or nest. Prompt
 templates use `{{name}}` placeholders and node prompts such as
 `{ "template": "review", "variables": { "target": "src/runtime.ts" } }`.
 Variable names must match exactly; values are inserted literally.
@@ -328,7 +330,7 @@ they do not survive a DSH restart.
 `options` accepts `maxConcurrency` (default 4), `maxExecutions`, `maxTokens`,
 `maxToolRounds`, `maxToolCalls`, `nodeTimeoutMs`, `graphTimeoutMs`,
 `onNodeTimeout` (`pause` by default, or `fail`), and `onLimit` (`pause` by
-default, or `fail`). Every limit is unlimited when omitted. Reaching
+default, or `fail`); nodes accept `maxRuns`. Every limit is unlimited when omitted. Reaching
 `maxExecutions`, `graphTimeoutMs`, or `maxTokens` pauses the job; once nothing is
 active the parent gets the waiting reminder, and `braid_resume({ jobId, limits })`
 raises the limit and resumes the job. Limits count rejected tool calls too. Workers

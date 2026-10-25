@@ -43,9 +43,9 @@ export interface PanelJob extends PanelRow {
   revision: number; phase: string; error?: string;
   /** Host clock when this frame was built, for elapsed and idle times. */
   observedAt: number;
-  nodes: { id: string; type: string; status: string }[];
+  nodes: { id: string; type: string; status: string; maxRuns?: number }[];
   /** closesCycle marks the decision's choice edge back to where each round of a cycle starts. */
-  edges: { from: string; to: string; choice?: string; limit?: number; closesCycle?: boolean }[];
+  edges: { from: string; to: string; choice?: string; closesCycle?: boolean }[];
   executions: PanelExecution[];
   pausedExecutionIds: string[];
   suspendedExecutionIds: string[];

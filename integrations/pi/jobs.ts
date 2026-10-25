@@ -14,7 +14,6 @@ import {
   validateGraph,
   type BraidInput,
   type BraidResult,
-  type Edge,
   type ExecutionError,
   type ExecutionEvent,
   type NodeResult,
@@ -37,7 +36,7 @@ export interface JobOptions extends BraidLimits {
   nodeTimeoutMs?: number;
   /** Default "pause": a node timeout suspends the execution and wakes the parent. */
   onNodeTimeout?: "pause" | "fail";
-  /** Default "pause": a limit holds the loop's decision or pauses the job, and wakes the parent. */
+  /** Default "pause": a rerun at its node's maxRuns waits, or the job pauses at a job limit, and the parent is woken. */
   onLimit?: "pause" | "fail";
   maxToolRounds?: number;
   maxToolCalls?: number;
@@ -88,8 +87,6 @@ export interface NodeCompletion {
   errorCode?: ExecutionError["code"];
   /** The execution asked for a replan; its result is held for the parent. */
   replanRequested?: boolean;
-  /** A decision held because the edge it chose is at its limit. */
-  edgeLimit?: Edge;
 }
 
 /** A running execution asked the parent to replan; its result will be held when it finishes. */
@@ -121,9 +118,12 @@ export interface TimeoutPause {
   eventSequence: number;
 }
 
-/** Work a job with nothing active waits on, and who put it there: "agent", "user", "definition", "replan", or "node_timeout". */
+/**
+ * Work a job with nothing active waits on, and who put it there: "agent", "user", "definition", "replan",
+ * "node_timeout", or "maxRuns" for a rerun at its node's maxRuns.
+ */
 export interface WaitingItem {
-  kind: "held" | "suspended" | "job";
+  kind: "held" | "suspended" | "limited" | "job";
   /** Omitted for the job pause. */
   executionId?: string;
   nodeId?: string;
@@ -154,6 +154,7 @@ function waitingOn(state: BraidSnapshot, event: Extract<ExecutionEvent, { type: 
   const items = [
     ...event.pausedExecutionIds.map(id => execution("held", id, state.executions[id]?.holdAfter?.source)),
     ...event.suspendedExecutionIds.map(id => execution("suspended", id, state.executions[id]?.suspension?.source)),
+    ...event.limitedExecutionIds.map(id => execution("limited", id, "maxRuns")),
     ...event.pause ? [{ kind: "job" as const, source: event.pause.source }] : [],
   ];
   return items.some(item => item.source !== "user") ? items : undefined;
@@ -177,17 +178,12 @@ export interface OutstandingJob {
   revision?: number;
   pausedExecutionIds: string[];
   suspendedExecutionIds: string[];
+  /** Reruns waiting at their node's maxRuns. */
+  limitedExecutionIds: string[];
   /** Suspended executions their node timeout paused; they wait for the parent. */
   timedOutExecutionIds?: string[];
   /** The whole job is paused and admits no new executions. */
   paused?: boolean;
-}
-
-/** The edge at its limit that holds a decision, for its pause reminder. */
-function edgeLimit(state: BraidSnapshot, instance: BraidSnapshot["executions"][string]): Pick<NodeCompletion, "edgeLimit"> {
-  if (instance.holdAfter?.source !== "edge_limit") return {};
-  const edge = state.graph.edges.find(edge => edge.from === instance.id && edge.choice === instance.decision && edge.limit !== undefined);
-  return edge ? { edgeLimit: { ...edge } } : {};
 }
 
 function timedOut(state: BraidSnapshot | undefined): Pick<OutstandingJob, "timedOutExecutionIds"> {
@@ -431,7 +427,6 @@ export class BraidJobs {
                 eventSequence: event.sequence,
                 ...(instance.error ? { errorCode: instance.error.code } : {}),
                 ...(instance.replan ? { replanRequested: true } : {}),
-                ...edgeLimit(state!, instance),
               })).catch(() => {});
             } catch {
               /* Notification failures must not affect scheduling or results. */
@@ -648,6 +643,7 @@ export class BraidJobs {
         ...(state ? { revision: state.revision } : {}),
         pausedExecutionIds: state?.pausedExecutionIds ?? [],
         suspendedExecutionIds: state?.suspendedExecutionIds ?? [],
+        limitedExecutionIds: state?.limitedExecutionIds ?? [],
         ...timedOut(state),
         ...(state?.pause ? { paused: true } : {}),
       };

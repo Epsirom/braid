@@ -157,7 +157,7 @@ test("g switches the panel between live and timeline; selection and Enter follow
     { type: "execute", id: "ship", prompt: "ship" },
     { type: "execute", id: "human", prompt: "ask" },
   ], edges: [
-    { from: "work", to: "review" }, { from: "review", to: "work", choice: "again", limit: 5 },
+    { from: "work", to: "review" }, { from: "review", to: "work", choice: "again" },
     { from: "review", to: "ship", choice: "done" }, { from: "review", to: "human", choice: "escalate" },
   ] }, {}, ctx);
   await started.promise;

@@ -9,7 +9,7 @@ import type { BraidInput } from "@chrok/braid";
 import { assertCoreVersion } from "./core-version.js";
 import { BraidJobs, type ControlNotice, type JobOptions, type JobSnapshot } from "./jobs.js";
 import { createBraidTools } from "./tools.js";
-import { formatControlNotice, formatJobList, formatEdgeLimit, formatReceipt, formatReplanRequest, formatTimeoutPause, formatWaiting } from "./status-text.js";
+import { formatControlNotice, formatJobList, formatReceipt, formatReplanRequest, formatTimeoutPause, formatWaiting } from "./status-text.js";
 import { BRAID_USAGE_GUIDANCE, BRAID_WAIT_REMINDER } from "./schema.js";
 import { renderPanel } from "./display.js";
 import { BraidPanel } from "./panel.js";
@@ -72,13 +72,13 @@ export function apply(ctx: Context): void {
     if (existing) return existing;
     const pending = new Map<string, UserMessage>();
     const jobs = new BraidJobs(ctx.llm, completion => {
-      const { jobId, handle, status, executionId, nodeId, paused, sequence, replanRequested, edgeLimit } = completion;
+      const { jobId, handle, status, executionId, nodeId, paused, sequence, replanRequested } = completion;
       const reminderId = JSON.stringify([jobId, executionId ?? "job", sequence ?? 0]);
       const lookup = JSON.stringify({ jobId: handle, ...(executionId ? { executionId } : {}) });
       const summary = `Braid ${handle}${nodeId ? ` / ${nodeId}` : ""}: ${paused ? "paused" : status}`.slice(0, 120);
       const message = createUserMessage({
         source: { kind: "braid", reminderId, form: "notice", summary },
-        content: [{ type: "text", text: `[system-reminder] ${summary}.${replanRequested ? " It asked you to replan; braid_status shows its request." : ""} Retrieve results with braid_status(${lookup}) and continue the original task. Failed or cancelled jobs may contain successful partial results. ${edgeLimit && executionId ? formatEdgeLimit(handle, executionId, edgeLimit) : paused ? "Outgoing scheduling was paused; if nothing else is running, nothing more runs until you act. Inspect CURRENT execution.revision and pausedExecutionIds before braid_update with resume or braid_resume. Deadlines continue; finalized jobs cannot resume." : "This reminder does not pause scheduling."} [/system-reminder]` }],
+        content: [{ type: "text", text: `[system-reminder] ${summary}.${replanRequested ? " It asked you to replan; braid_status shows its request." : ""} Retrieve results with braid_status(${lookup}) and continue the original task. Failed or cancelled jobs may contain successful partial results. ${paused ? "Outgoing scheduling was paused; if nothing else is running, nothing more runs until you act. Inspect CURRENT execution.revision and pausedExecutionIds before braid_update with resume or braid_resume. Deadlines continue; finalized jobs cannot resume." : "This reminder does not pause scheduling."} [/system-reminder]` }],
       });
       pending.set(reminderId, message); send(agent, message);
     }, notice => { noteControl(agent, notice); }, pause => {

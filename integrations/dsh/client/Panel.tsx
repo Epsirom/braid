@@ -78,17 +78,17 @@ export function Graph({ job, selected, select }: { job: PanelJob; selected: stri
             if (!a || !b) return null;
             const x = a.x + 77, y = a.y + 72, endX = b.x + 77, endY = b.y;
             const d = edge.closesCycle ? `M ${a.x} ${a.y + 36} C 6 ${a.y + 36}, 6 ${b.y + 36}, ${b.x} ${b.y + 36}` : `M ${x} ${y} C ${x} ${y + 26}, ${endX} ${endY - 26}, ${endX} ${endY}`;
-            return <g key={i}><path d={d} strokeDasharray={edge.closesCycle ? "4 4" : undefined} markerEnd={`url(#${arrow})`}><title>{edge.from} → {edge.to}{edge.choice ? ` (${edge.choice})` : ""}{edge.closesCycle ? " · starts another round" : ""}{edge.limit === undefined ? "" : ` · limit ${edge.limit}`}</title></path>
+            return <g key={i}><path d={d} strokeDasharray={edge.closesCycle ? "4 4" : undefined} markerEnd={`url(#${arrow})`}><title>{edge.from} → {edge.to}{edge.choice ? ` (${edge.choice})` : ""}{edge.closesCycle ? " · starts another round" : ""}</title></path>
               {edge.choice && !edge.closesCycle && <text x={(x + endX) / 2 + 5} y={(y + endY) / 2 - 4}>{edge.choice.slice(0, 22)}</text>}</g>;
           })}
         </svg>
-        {job.nodes.map(node => { const p = layout.positions.get(node.id)!; return <button key={node.id} ref={selected === node.id ? selectedButton : undefined} className="br-node" style={{ left: p.x, top: p.y }} aria-pressed={selected === node.id} onClick={() => select(node.id)} title={`${node.id} · ${node.type} · ${node.status}`}>
+        {job.nodes.map(node => { const p = layout.positions.get(node.id)!; return <button key={node.id} ref={selected === node.id ? selectedButton : undefined} className="br-node" style={{ left: p.x, top: p.y }} aria-pressed={selected === node.id} onClick={() => select(node.id)} title={`${node.id} · ${node.type} · ${node.status}${node.maxRuns === undefined ? "" : ` · at most ${node.maxRuns} runs`}`}>
           <small>{node.type}</small><strong>{node.id}</strong><Status status={node.status}/>
         </button>; })}
       </div>
     </div></div>
     <div className="br-legend"><span>Solid · dependency</span><span>Dashed · back to the start of a cycle</span><span>Click a node to inspect</span></div>
-    {job.edges.filter(edge => edge.closesCycle).map(edge => <p className="br-note" key={`${edge.from}→${edge.to}`}>Cycle {edge.from} → {edge.to} · {edge.limit === undefined ? "no round limit" : `at most ${edge.limit} more rounds`}</p>)}
+    {job.edges.filter(edge => edge.closesCycle).map(edge => <p className="br-note" key={`${edge.from}→${edge.to}`}>Cycle {edge.from} → {edge.to}</p>)}
   </section>;
 }
 
