@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.2 — 2026-10-25
 
 ### Features
 
@@ -16,7 +16,19 @@
   reminder when the user paused the job or everything that remains, or when the
   parent's own suspension, a held result, or a timeout pause left nothing active,
   since the parent knows or already gets that reminder
-  ([#109](https://github.com/Epsirom/braid/issues/109)) — @Epsirom.
+  ([#110](https://github.com/Epsirom/braid/pull/110), closes
+  [#109](https://github.com/Epsirom/braid/issues/109)) — @Epsirom.
+
+No migration from 0.5.1 is required; new event types follow the
+[versioning policy](docs/compatibility.md#versioning). After upgrading, restart
+Pi or DSH so it loads the matching core. Pi 1.2.0 and DSH 0.2.0-rc.2 remain the
+tested host versions; integrations require Node.js 22.19+.
+
+### New Contributors
+
+No first-time human contributors in this release.
+
+[Full comparison](https://github.com/Epsirom/braid/compare/v0.5.1...v0.5.2).
 
 ## 0.5.1 — 2026-10-20
 

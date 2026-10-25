@@ -1,7 +1,7 @@
 import * as core from "@chrok/braid";
 
 /** The exact core release this plugin depends on; they release together. */
-export const REQUIRED_CORE_VERSION = "0.5.1";
+export const REQUIRED_CORE_VERSION = "0.5.2";
 
 /**
  * A host process that loaded core before an upgrade can keep it while loading the new plugin,

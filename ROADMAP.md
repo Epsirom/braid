@@ -20,7 +20,8 @@ run outcomes, and deprecates blocking mode. The 0.5.0 release adds running-execu
 pause/resume, result holds, timeout recovery, Pi model retries, and clearer loop
 handoffs, and removes deprecated Pi blocking mode. The 0.5.1 release lets running
 nodes ask the parent agent to replan, and makes Pi and DSH fail fast on a
-mismatched core version. Source availability
+mismatched core version. The 0.5.2 release wakes the parent agent when a graph
+has no active work left but paused work remains. Source availability
 and npm availability are separate milestones. Check
 [GitHub releases](https://github.com/Epsirom/braid/releases),
 [@chrok/braid](https://www.npmjs.com/package/@chrok/braid),
@@ -38,6 +39,7 @@ and npm availability are separate milestones. Check
 - [x] Remove Pi blocking mode, including its CLI flag and session command.
 - [x] Let running nodes report findings and ask the parent agent to replan.
 - [x] Fail fast in Pi and DSH when the loaded core version does not match.
+- [x] Wake the parent agent when a graph waits on paused work with nothing active.
 
 Read the [0.4 → 0.5 migration guide](docs/compatibility.md#migrating-from-04-to-05)
 for timeout behavior and TypeScript interface changes.
