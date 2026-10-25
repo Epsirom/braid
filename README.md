@@ -638,8 +638,8 @@ and recursive Braid calls from model nodes.
 
 ## Releases and upgrades
 
-The 0.5 API is experimental. See the [changelog](CHANGELOG.md) for version changes
-and [GitHub releases](https://github.com/Epsirom/braid/releases) for published releases.
+The 0.5 API is experimental. See [GitHub releases](https://github.com/Epsirom/braid/releases)
+for release and upgrade notes.
 
 - Upgrading from 0.4: read the [0.4 → 0.5 migration guide](docs/compatibility.md#migrating-from-04-to-05).
 - Upgrading from 0.3: also follow the [0.3 → 0.4 migration guide](docs/compatibility.md#migrating-from-03-to-04).
@@ -650,7 +650,7 @@ and [GitHub releases](https://github.com/Epsirom/braid/releases) for published r
 ## Contributing and project status
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md) for setup and verification,
-[ROADMAP.md](ROADMAP.md) for scope, and [CHANGELOG.md](CHANGELOG.md) for changes.
+[ROADMAP.md](ROADMAP.md) for scope, and [GitHub releases](https://github.com/Epsirom/braid/releases) for changes.
 See [compatibility](docs/compatibility.md), [resource limits](docs/resource-limits.md),
 and [scheduler benchmarks](docs/benchmark.md) before adopting Braid for a service.
 Questions and bugs belong in [GitHub issues](https://github.com/Epsirom/braid/issues);

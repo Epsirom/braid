@@ -1,0 +1,49 @@
+name: Label Pull Requests
+# Applies the release-note category that .github/release.yml groups PRs by.
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, edited]
+permissions:
+  contents: read
+concurrency:
+  group: label-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  label:
+    name: Apply release-note category
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Adding a label to a PR through the issues endpoint needs pull-requests write.
+      issues: write
+      pull-requests: write
+    steps:
+      # pull_request_target runs with a write token: check out the trusted base, never PR code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Classify pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          release_labels="$(node --input-type=module -e 'import { RELEASE_LABELS } from "./scripts/classify-pr-label.mjs"; console.log(RELEASE_LABELS.join("\n"))')"
+          existing="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER" --jq '.labels[].name')"
+          if kept="$(grep -Fxf <(printf '%s\n' "$release_labels") <<< "$existing" | head -n 1)" && [ -n "$kept" ]; then
+            echo "Keeping release-note label: $kept"
+            exit 0
+          fi
+          files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename' | jq -R -s 'split("\n") | map(select(length > 0))')"
+          label="$(jq -n --arg title "$PR_TITLE" --arg author "$PR_AUTHOR" --argjson changedFiles "$PR_CHANGED_FILES" --argjson files "$files" \
+            '{ title: $title, author: $author, changedFiles: $changedFiles, files: $files }' | node scripts/classify-pr-label.mjs)"
+          jq -n --arg label "$label" '{ labels: [$label] }' | gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" --input - > /dev/null
+          echo "Applied release-note label: $label"

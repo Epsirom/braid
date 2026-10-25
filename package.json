@@ -21,7 +21,6 @@
     "dist",
     "README.md",
     "LICENSE",
-    "CHANGELOG.md",
     "docs",
     "examples",
     "CONTRIBUTING.md",
@@ -47,7 +46,8 @@
     "test:pi:live": "npm run build:pi && node integrations/pi/test/live/run.mjs",
     "check:dsh": "npm run build && npm run check --workspace @chrok/dsh-braid",
     "test:dsh": "npm run build && npm test --workspace @chrok/dsh-braid",
-    "build:dsh": "npm run build --workspace @chrok/dsh-braid"
+    "build:dsh": "npm run build --workspace @chrok/dsh-braid",
+    "release:prepare": "node scripts/prepare-release.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

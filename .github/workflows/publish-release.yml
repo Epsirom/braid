@@ -1,0 +1,90 @@
+name: Publish Release
+# Run after the release PR from `npm run release:prepare` has merged. Tags the
+# commit on main that set the version, then dispatches Publish (release.yml) on
+# that tag. Version tags are immutable, so everything is checked before tagging.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish (X.Y.Z)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+jobs:
+  tag:
+    name: Tag release commit and start Publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Find and check the release commit
+        id: commit
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must be X.Y.Z" >&2
+            exit 1
+          fi
+          version_at() {
+            git show "$1:package.json" 2> /dev/null | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).version)' || true
+          }
+          # The first-parent commit that changed the core version to VERSION.
+          sha=""
+          while read -r candidate; do
+            if [ "$(version_at "$candidate")" = "$VERSION" ] && [ "$(version_at "$candidate^1")" != "$VERSION" ]; then
+              sha="$candidate"
+              break
+            fi
+          done < <(git rev-list --first-parent origin/main -- package.json)
+          if [ -z "$sha" ]; then
+            echo "::error::No commit on main sets version $VERSION; merge its release PR first" >&2
+            exit 1
+          fi
+          git checkout --quiet "$sha"
+          RELEASE_TAG="v$VERSION" node scripts/check-release.mjs
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Create the version tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.commit.outputs.sha }}
+          TAG: v${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if git rev-parse --verify --quiet "refs/tags/$TAG" > /dev/null; then
+            test "$(git rev-list -n 1 "$TAG")" = "$SHA" || { echo "::error::$TAG exists on another commit" >&2; exit 1; }
+            echo "$TAG already points to $SHA"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Braid ${TAG#v}" "$SHA"
+            gh auth setup-git
+            git push origin "refs/tags/$TAG"
+          fi
+      - name: Start Publish on the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ inputs.version }}
+        run: |
+          # A tag pushed with GITHUB_TOKEN does not trigger workflows; dispatch explicitly.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "$TAG is already released; nothing to publish."
+          else
+            gh workflow run release.yml --ref "$TAG"
+            echo "Started Publish for $TAG: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/release.yml"
+          fi

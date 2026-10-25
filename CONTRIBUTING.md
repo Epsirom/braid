@@ -63,7 +63,12 @@ the current single-maintainer review policy.
 - Preserve decision-tool validation, join semantics, cancellation, context
   isolation, partial results, and provider usage accounting.
 - Explain the observable change, why it is needed, and how it was verified in
-  the PR. Update relevant docs and the Unreleased changelog for user-facing work.
+  the PR, and update relevant docs for user-facing work. Release notes are
+  generated from PR titles and labels, so write the title as an imperative
+  summary of the user-visible change. Unlabeled PRs get a category label
+  automatically (`enhancement`, `bug`, `documentation`, `dependencies`,
+  `maintenance`, or `breaking-change`); maintainers correct it before merging. See
+  [release notes](docs/releasing.md#release-notes).
 - Read [compatibility](docs/compatibility.md) before changing public fields or
   error/event shapes. Discuss breaking changes before implementing them.
 
