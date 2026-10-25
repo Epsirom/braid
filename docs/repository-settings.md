@@ -52,7 +52,9 @@ including administrators, with no bypass actors:
   approvals.
 - The branch must be up to date and all seven CI checks must pass: `core-minimum`
   and `verify` on Ubuntu, macOS, and Windows with Node 22.19.0 and 24. Checks must
-  originate from the GitHub Actions app.
+  originate from the GitHub Actions app. On Windows, `verify:checks` runs as one
+  `windows suite` job per suite (core, Pi, DSH), and each Windows `verify` check
+  passes only when all three suites for its Node version pass.
 - CodeQL must supply analysis results. Code scanning errors and new security
   findings rated high or critical block merging.
 - Squash is the only merge method, keeping a linear history. The squash commit

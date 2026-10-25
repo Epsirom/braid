@@ -35,8 +35,10 @@ tarballs, credentials, or provider output containing private data.
 
 `verify` type-checks core and both integrations, runs deterministic tests and offline examples,
 then builds tarballs and installs them into a temporary consumer outside the
-checkout. That last check needs registry access for integration dependencies but never
-calls a model. `npm test` is the fast core-only loop; `npm run test:pi` tests Pi; `npm run test:dsh` tests DeepSeek Harness.
+checkout. That last check (`npm run test:package`) needs registry access for integration
+dependencies but never calls a model; `npm run verify:checks` runs everything before it,
+and `verify:core`, `verify:pi`, and `verify:dsh` run its parts (the latter two after `npm run build`).
+CI runs the package check on Linux only. `npm test` is the fast core-only loop; `npm run test:pi` tests Pi; `npm run test:dsh` tests DeepSeek Harness.
 `npm run bench` measures the scheduler without a provider.
 
 Run `npm run audit:dependencies` after `npm ci` to scan the complete dependency

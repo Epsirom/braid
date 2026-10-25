@@ -15,9 +15,9 @@ const piManifest = JSON.parse(readFileSync(join(piRoot, "package.json"), "utf8")
 const npm = process.env.npm_execpath;
 assert.ok(npm, "Run this check with npm run test:package");
 const temp = mkdtempSync(join(tmpdir(), "braid-package-"));
-function run(args, cwd = root) {
+function run(args, cwd = root, env = process.env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, { cwd, stdio: ["ignore", "pipe", "inherit"] });
+    const child = spawn(process.execPath, args, { cwd, env, stdio: ["ignore", "pipe", "inherit"] });
     let output = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", chunk => { output += chunk; });
@@ -25,8 +25,8 @@ function run(args, cwd = root) {
     child.on("close", code => code === 0 ? resolve(output) : reject(new Error(`Command failed (${code}): ${args.join(" ")}\n${output}`)));
   });
 }
-async function pack(cwd) {
-  const [result] = JSON.parse(await run([npm, "pack", "--silent", "--json", "--pack-destination", temp], cwd));
+async function pack(cwd, env) {
+  const [result] = JSON.parse(await run([npm, "pack", "--silent", "--json", "--pack-destination", temp], cwd, env));
   assert.ok(result.files.some(file => file.path === "LICENSE"));
   assert.ok(!result.files.some(file => /(?:^|\/)(?:node_modules|test|\.env)(?:\/|$)/.test(file.path)));
   return result;
@@ -40,8 +40,10 @@ try {
     writeFileSync(join(cwd, "dist/__stale_build_sentinel.js"), "throw new Error('stale build');\n");
   }
   const core = await pack(root);
-  const pi = await pack(piRoot);
-  const dsh = await pack(dshRoot);
+  // Core's prepack just rebuilt it, so the integrations' prepacks reuse that build.
+  const coreBuilt = { ...process.env, BRAID_CORE_BUILT: "1" };
+  const pi = await pack(piRoot, coreBuilt);
+  const dsh = await pack(dshRoot, coreBuilt);
   assert.ok(dsh.files.some(file => file.path === "cordis.patch.yml"));
   assert.ok(dsh.files.some(file => file.path === "dist/index.d.ts"));
   assert.ok(dsh.files.some(file => file.path === "dist/client.js"));
