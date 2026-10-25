@@ -1,6 +1,6 @@
 # Roadmap
 
-Braid is a small runtime for mutable agent graphs with loops, isolated
+Braid is a small runtime for mutable agent graphs with cycles, isolated
 executions, and explicit workspace integration. The goal is a predictable core
 and thin host adapters, with runs that can keep going until their owner stops
 them. This is a direction for discussion, not a delivery schedule.
@@ -190,7 +190,7 @@ graphical workflow editor ([#57](https://github.com/Epsirom/braid/issues/57)). E
 
 | Supported | Outside the current scope |
 | --- | --- |
-| Declared loops with optional limits; sequential and independent loops | Arbitrary cycles and nested/overlapping loops |
+| Cycles closed by a decision's choice edge, with optional edge limits; sequential and independent cycles | Other cycles, and nested/overlapping cycles |
 | In-memory updates and pause/resume before finalization | Durable workflow recovery, restart/resume, or reopening finalized jobs |
 | Git checkpoints and backup refs for inspecting/recovering files | Persistence of scheduler state or host sessions |
 | Per-execution workspace capabilities and isolated model context | A security sandbox, arbitrary code nodes, or recursive worker delegation |

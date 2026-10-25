@@ -1258,6 +1258,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
         if (skip || (active() < maxConcurrency && !resumeQueue.length)) {
           if (!admit(record)) return true;
           progressed = true;
+          // A skipped record's event may have submitted an update.
+          if (revision !== startRevision) return true;
         }
       }
       dirt.set(id, lineageDirt(id, upstream));

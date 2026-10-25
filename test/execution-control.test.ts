@@ -282,6 +282,21 @@ test("rerunning a decision records skipped instances for branches it no longer t
   assert.equal(result.executions["left@2"]!.skipReason, "inactive");
 });
 
+test("an observer may remove a node from inside its skipped event", async t => {
+  let run!: BraidRun;
+  run = startBraid({ goal: "skip", nodes: [{ type: "decision", id: "route", prompt: "pick", choices: ["left", "right"] }, node("left"), node("right")],
+    edges: [{ from: "route", to: "left", choice: "left" }, { from: "route", to: "right", choice: "right" }] }, {
+    cwd: await outsideGit(t), runner: async request => { request.decide?.("left"); return { output: request.node.id }; },
+    onEvent(event) {
+      if (event.type === "node_skipped" && event.nodeId === "right") run.update({ expectedRevision: 0, removeNodeIds: ["right"] });
+    },
+  });
+  const result = await run.result;
+  assert.equal(result.status, "completed", result.error?.message);
+  assert.equal(result.nodes.right, undefined);
+  assert.equal(result.executions["right@1"]!.skipReason, "inactive");
+});
+
 test("optional failures continue; a required failure aborts running siblings", async t => {
   const cwd = await outsideGit(t);
   const input: BraidInput = { goal: "recover", nodes: [node("bad"), node("recover")], edges: [{ from: "bad", to: "recover" }] };
