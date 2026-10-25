@@ -188,7 +188,7 @@ type BraidInput = {
   goal: string;
   nodes: readonly BraidInputNode[];
   edges: readonly Edge[];
-  loops?: readonly { id: string; entry: string; maxIterations: number }[];
+  loops?: readonly { id: string; entry: string; maxIterations?: number }[];
   promptTemplates?: Readonly<Record<string, string>>;
 };
 ```
@@ -282,17 +282,22 @@ length or token cap (see [resource limits](docs/resource-limits.md)).
 | `runner` | Required | A fresh, isolated invocation for each call |
 | `defaultModel` | Adapter default | Overridden by each node's `model` |
 | `cwd` | `process.cwd()` | Source checkout for core-managed worktrees; non-Git directories grant read-only capabilities |
-| `maxExecutions` | `1000` | Total materialized executions, including skipped branches, across all rounds and updates; positive safe integer |
+| `maxExecutions` | Unlimited | Total materialized executions, including skipped branches, across all rounds and updates; positive safe integer |
+| `maxTokens` | Unlimited | Total reported input and output tokens across all executions, checked as executions settle; positive safe integer |
 | `maxConcurrency` | `4` | Maximum simultaneous runtime-managed node invocations; positive integer |
-| `nodeTimeoutMs` | `60_000` | Separate deadline for each node, starting when it runs (not while queued or suspended) |
-| `graphTimeoutMs` | `300_000` | Whole execution deadline, including node queueing, paused gates, and suspensions; starts after validation |
+| `nodeTimeoutMs` | Unlimited | Separate deadline for each node, starting when it runs (not while queued or suspended) |
+| `graphTimeoutMs` | Unlimited | Whole execution deadline, including node queueing, paused gates, and suspensions; starts after validation |
 | `onNodeTimeout` | `"pause"` (`"fail"` in `braid()`) | `"pause"` suspends a timed-out execution with its work until it is resumed or cancelled (needs an interruptible runner); `"fail"` fails it with `NODE_TIMEOUT` |
+| `onLimit` | `"pause"` (`"fail"` in `braid()`) | What reaching a loop's `maxIterations`, `maxExecutions`, `graphTimeoutMs`, or `maxTokens` does: `"pause"` holds the loop's decision or pauses the run until the owner raises the limit; `"fail"` fails the run with `LOOP_LIMIT`, `EXECUTION_LIMIT`, `GRAPH_TIMEOUT`, or `TOKEN_LIMIT` |
 | `signal` | None | Caller cancellation signal; aborts running nodes and marks queued nodes cancelled |
 | `onEvent` | None | Live observer for graph/node creation, readiness, starts, handoffs, completions, skips, failures, and graph completion |
 
-Timeouts must be positive finite milliseconds, at most `2_147_483_647`, or
-`Infinity` to disable that deadline. Set both timeouts to `Infinity` to run
-without a time limit; caller cancellation still works.
+Every limit is unlimited by default, so a run can keep going until its graph
+finishes or the owner stops it. Timeouts must be positive finite milliseconds, at
+most `2_147_483_647`, or `Infinity`; `maxExecutions` and `maxTokens` take a
+positive safe integer or `Infinity`. `startBraid` returns `setLimits` to change
+`maxExecutions`, `graphTimeoutMs`, and `maxTokens` while the run is active; see
+[limits](docs/execution-control.md#limits).
 
 ## Scheduling and routing semantics
 
@@ -336,13 +341,14 @@ cannot activate choice-labelled edges; their unconditional successors can run.
 There are no automatic retries. Failures are optional by default; a
 `requireSuccess: true` execution failure aborts the whole run, cancels siblings,
 and drains writes and cleanup. The policy is captured when the instance is admitted.
-Graph deadlines and execution limits remain active while paused.
+Graph deadlines and execution limits remain active while paused; reaching one
+pauses the run unless `onLimit` is `"fail"`.
 
 Nodes are mutable definitions; execution instances retain captured prompts and
 inputs. `startBraid` exposes revision-checked `update`, `resume`, `snapshot`, and
 `cancel`, plus `pause`/`pauseRun`/`resumeRun` to suspend running executions at
-their next model request without losing their work, and `holdAfter` to hold a
-running execution's result once it settles. Execute and decision nodes can call
+their next model request without losing their work, `holdAfter` to hold a
+running execution's result once it settles, and `setLimits` to raise run limits. Execute and decision nodes can call
 `request.requestReplan` to ask the graph owner to change the plan; it holds their
 result and never edits the graph itself. Updates can change running nodes, completed nodes, edges, templates, and
 loop topology at any time before finalization. Completion uses the latest graph.

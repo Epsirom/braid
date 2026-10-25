@@ -2,7 +2,7 @@ import { Type, type TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { GraphUpdate } from "@chrok/braid";
-import { BRAID_ASYNC_GUIDANCE, braidParameters, nodeParameters, updateEdgeParameters, loopParameters } from "./schema.js";
+import { BRAID_ASYNC_GUIDANCE, braidParameters, limitFields, nodeParameters, updateEdgeParameters, loopParameters } from "./schema.js";
 import type { BraidJobs, JobSnapshot } from "./jobs.js";
 import { boundedText, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUpdate } from "./status-text.js";
 
@@ -116,11 +116,16 @@ export function createBraidTools(
       catch (error) { throw new Error(`Braid update rejected; no changes or resumes applied. ${error instanceof Error ? error.message : String(error)}. Retry the complete corrected patch with dependencies, loops, and resume IDs.`); }
       return { text: formatUpdate(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision, pausedExecutionIds: job.execution.pausedExecutionIds };
     }),
-    tool("braid_resume", "Release paused (pauseAfter) executions, or resume suspended ones in the same conversation, by execution ID at expectedRevision. Omit executionIds to resume a job paused with braid_pause; executions paused separately stay suspended. This does not reset tool budgets or the graph deadline. An execution paused by its node timeout gets the job's nodeTimeoutMs again, or nodeTimeoutMs if given; resuming the job does not resume it. With after=true it instead removes the hold on still-running executions. Do not resume work the user paused or held unless the user asks.", Type.Object({
+    tool("braid_resume", "Release paused (pauseAfter) executions, or resume suspended ones in the same conversation, by execution ID at expectedRevision. Omit executionIds to resume a job paused with braid_pause or at a job limit; executions paused separately stay suspended. A job paused at a limit resumes only once limits raises that limit. This does not reset tool budgets or the graph deadline. An execution paused by its node timeout gets the job's nodeTimeoutMs again, or nodeTimeoutMs if given; resuming the job does not resume it. With after=true it instead removes the hold on still-running executions. Do not resume work the user paused or held unless the user asks.", Type.Object({
       jobId: id, expectedRevision: Type.Optional(revision), executionIds: Type.Optional(Type.Array(id, { minItems: 1, uniqueItems: true })),
       after: Type.Optional(Type.Boolean({ description: "true: remove the hold that braid_pause after=true or pauseAfter put on these still-running executions, so their results go downstream when they finish. Requires executionIds; expectedRevision is not needed. A result that is already held is released without after." })),
       nodeTimeoutMs: Type.Optional(nodeTimeoutMs),
+      limits: Type.Optional(Type.Object({
+        ...limitFields,
+        graphTimeoutMs: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 2_147_483_647, description: "Total wall-clock timeout in milliseconds, counted from the start of the job." })),
+      }, { additionalProperties: false, minProperties: 1, description: "Only without executionIds: raise or set job limits, then resume the job. Use it when the job paused at maxExecutions, graphTimeoutMs, or maxTokens; omitted limits stay as they are." })),
     }, { additionalProperties: false }), (args, context) => {
+      if (args.limits && (args.executionIds || args.after)) throw new Error("limits applies to the whole job; omit executionIds and after");
       if (args.after) {
         if (args.nodeTimeoutMs !== undefined) throw new Error("nodeTimeoutMs cannot be combined with after");
         const job = hold(getJobs(context), args.jobId, args.executionIds, false);
@@ -132,7 +137,7 @@ export function createBraidTools(
       if (!args.executionIds && args.nodeTimeoutMs !== undefined) throw new Error("nodeTimeoutMs requires executionIds");
       const job = args.executionIds
         ? jobs.resume(args.jobId, args.executionIds, args.expectedRevision!, "agent", args.nodeTimeoutMs === undefined ? undefined : { nodeTimeoutMs: args.nodeTimeoutMs })
-        : jobs.resumeJob(args.jobId);
+        : jobs.resumeJob(args.jobId, "agent", args.limits);
       return { text: formatResume(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision,
         pausedExecutionIds: job.execution.pausedExecutionIds, suspendedExecutionIds: job.execution.suspendedExecutionIds };
     }),

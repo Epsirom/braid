@@ -166,7 +166,7 @@ test("suspension stops the node timeout and moves the node deadline", async t =>
 });
 
 test("the graph deadline and cancellation still end a suspended execution", async t => {
-  for (const [code, options] of [["GRAPH_TIMEOUT", { graphTimeoutMs: 100 }], ["CANCELLED", {}]] as const) {
+  for (const [code, options] of [["GRAPH_TIMEOUT", { graphTimeoutMs: 100, onLimit: "fail" }], ["CANCELLED", {}]] as const) {
     const gate = deferred();
     const { runner, log } = stepper(2, { a: gate.promise });
     const run = await start(t, input(["a"]), { runner, ...options });

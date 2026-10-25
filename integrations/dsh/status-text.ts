@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TokenUsage } from "@deepseek-ai/dsh-llm";
-import type { ControlNotice, JobSnapshot, ReplanNotice, TimeoutPause, WaitingItem, WaitingNotice } from "./jobs.js";
+import type { Completion, ControlNotice, JobSnapshot, ReplanNotice, TimeoutPause, WaitingItem, WaitingNotice } from "./jobs.js";
 
 /** Model-facing text documents for the parent Braid tools. */
 
@@ -57,7 +57,8 @@ export function formatGraph(graph: Pick<BraidInput, "nodes" | "edges" | "loops">
     const labels = [edge.choice && `choice=${edge.choice}`, edge.feedback && `feedback=${edge.feedback}`, edge.executionId && `execution=${edge.executionId}`].filter(Boolean);
     return `- ${edge.from} -> ${edge.to}${labels.length ? ` [${labels.join(", ")}]` : ""}`;
   }) : ["- none"]);
-  if (graph.loops?.length) lines.push("Loops:", ...graph.loops.map(loop => `- ${loop.id}: entry ${loop.entry}, at most ${loop.maxIterations} iterations`));
+  if (graph.loops?.length) lines.push("Loops:", ...graph.loops.map(loop =>
+    `- ${loop.id}: entry ${loop.entry}, ${loop.maxIterations === undefined ? "no iteration limit" : `at most ${loop.maxIterations} iterations`}`));
   return lines.join("\n");
 }
 
@@ -90,13 +91,15 @@ export function formatJobList(jobs: readonly Pick<JobSnapshot, "jobId" | "handle
     ...jobs.map(job => `- ${job.handle} · ${job.status} · started ${iso(job.createdAt)} · id ${job.jobId}\n  Goal: ${job.goal}`)].join("\n");
 }
 
-type Control = Pick<BraidSnapshot, "status" | "revision" | "pausedExecutionIds"> & Partial<Pick<BraidSnapshot, "suspendedExecutionIds" | "pause">>;
+type Control = Pick<BraidSnapshot, "status" | "revision" | "pausedExecutionIds"> & Partial<Pick<BraidSnapshot, "suspendedExecutionIds" | "pause" | "limits">>;
 
 /** Held (pauseAfter) and suspended executions are resumed the same way; a job pause has its own resume. */
 function control(execution: Control): string {
   const parts = [`Graph ${execution.status}`, `revision ${execution.revision}`, `paused executions: ${ids(execution.pausedExecutionIds)}`];
   if (execution.suspendedExecutionIds?.length) parts.push(`suspended executions: ${ids(execution.suspendedExecutionIds)}`);
   if (execution.pause) parts.push(`job paused by ${execution.pause.source} at ${iso(execution.pause.pausedAt)}`);
+  const limits = Object.entries(execution.limits ?? {});
+  if (limits.length) parts.push(`limits: ${limits.map(([key, value]) => `${key} ${value}`).join(", ")}`);
   return parts.join(" · ");
 }
 
@@ -108,7 +111,8 @@ const USER_HOLD_NOTE = "The user set this hold; do not remove it or release the 
 function pendingHold(execution: NodeResult): boolean {
   return Boolean(execution.holdAfter) && (execution.status === "running" || execution.status === "runnable");
 }
-const holdSource = (hold: ExecutionHold) => hold.source === "definition" ? "pauseAfter" : hold.source === "replan" ? "its replan request" : hold.source;
+const holdSource = (hold: ExecutionHold) => hold.source === "definition" ? "pauseAfter" : hold.source === "replan" ? "its replan request"
+  : hold.source === "loop_limit" ? "its loop's maxIterations" : hold.source;
 
 /** A node timeout pause waits for the parent's decision. */
 const TIMEOUT_PAUSE_NOTE = "Its node timeout ran out. Resume it with braid_resume (optionally with nodeTimeoutMs; the default is the job's nodeTimeoutMs again), or fail only this execution with braid_cancel and executionIds. Its successors wait until then.";
@@ -284,25 +288,40 @@ export function formatTimeoutPause(pause: TimeoutPause): string {
   ].filter(Boolean).join(" ");
 }
 
+/** The job option each limit pause raises, by pause source. */
+const jobLimits: Record<string, string> = { execution_limit: "maxExecutions", graph_timeout: "graphTimeoutMs", token_limit: "maxTokens" };
 const waitingSource = (source: string) =>
-  ({ definition: "pauseAfter", replan: "its replan request", node_timeout: "node timeout", agent: "you" } as Record<string, string>)[source] ?? source;
+  ({ definition: "pauseAfter", replan: "its replan request", node_timeout: "node timeout", agent: "you", loop_limit: "its loop's maxIterations",
+    ...Object.fromEntries(Object.entries(jobLimits).map(([key, limit]) => [key, `its ${limit} limit`])) } as Record<string, string>)[source] ?? source;
 const waitingItem = (item: WaitingItem) => item.kind === "job" ? `the job pause (by ${waitingSource(item.source)})`
   : `${item.kind === "held" ? "the held result of" : "suspended"} node ${JSON.stringify(item.nodeId)} execution ${item.executionId} (${waitingSource(item.source)})`;
 
 /** The waking reminder for a job with nothing active that waits on paused work. */
 export function formatWaiting(notice: WaitingNotice): string {
   const users = notice.waitingOn.filter(item => item.source === "user");
-  const job = notice.waitingOn.some(item => item.kind === "job");
+  const job = notice.waitingOn.find(item => item.kind === "job");
+  const limit = job && jobLimits[job.source];
   return [
     `Braid job ${notice.handle} has no active work at revision ${notice.revision}: nothing more runs until you act.`,
     `It waits on ${notice.waitingOn.filter(item => item.source !== "user").map(waitingItem).join("; ")}.`,
     users.length ? `The user paused ${users.map(waitingItem).join("; ")}: leave those unless the user asks.` : "",
     `Check it with braid_status({"jobId":"${notice.handle}"}), then release held results or resume executions with`,
     `braid_resume({"jobId":"${notice.handle}","expectedRevision":${notice.revision},"executionIds":[...]}) or braid_update with resume,`,
-    job ? `resume the job with braid_resume({"jobId":"${notice.handle}"}),` : "",
+    limit ? `raise its ${limit} and resume the job with braid_resume({"jobId":"${notice.handle}","limits":{"${limit}":<higher>}}) (the job does not resume while the limit is still reached),`
+      : job ? `resume the job with braid_resume({"jobId":"${notice.handle}"}),` : "",
     "fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel.",
     "The graph timeout keeps running while it waits.",
   ].filter(Boolean).join(" ");
+}
+
+/** Reminder text for a loop decision held at its loop's maxIterations. */
+export function formatLoopLimit(handle: string, executionId: string, limit: NonNullable<Completion["loopLimit"]>): string {
+  return [
+    `It chose to repeat loop ${JSON.stringify(limit.loopId)}, which reached its maxIterations of ${limit.maxIterations}, so the job holds it instead of starting another round.`,
+    `To run more rounds, call braid_update with loops (every loop, with this one's maxIterations raised or removed) and resume ["${executionId}"] in the same update.`,
+    `To stop iterating, release it with braid_resume({"jobId":"${handle}","expectedRevision":<current>,"executionIds":["${executionId}"]}): the loop ends and its exits are skipped.`,
+    "Or cancel the job with braid_cancel. Nothing in this loop runs until you act.",
+  ].join(" ");
 }
 
 /** The waking reminder for a running execution that asked the parent to replan. */

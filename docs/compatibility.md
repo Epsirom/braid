@@ -221,6 +221,44 @@ accepts `nodeTimeoutMs`, `braid_update` accepts `resumeOptions`, and submissions
 accept `options.onNodeTimeout`. The `BraidJobs` constructors take a fourth
 callback for timeout pauses, and `ControlNotice.action` adds `"cancelled"`.
 
+## Migrating from 0.5 to 0.6
+
+Version 0.6 removes default limits, so a run can keep going until its graph
+finishes or its owner stops it, and reaching a limit pauses a `startBraid` run
+instead of failing it.
+
+- **Defaults.** Core's `maxExecutions` (was 1000), `nodeTimeoutMs` (was 60
+  seconds), and `graphTimeoutMs` (was 5 minutes) are now unlimited, and loops may
+  omit `maxIterations`. Callers that relied on the old bounds, including
+  `braid()` callers, must set them explicitly. Pi and DSH already defaulted both
+  timeouts to unlimited; their jobs also lose the 1000-execution bound.
+- **Limits pause by default.** With `startBraid`, a loop decision that chooses
+  feedback at `maxIterations` is held, `maxExecutions` stops admission, and
+  `graphTimeoutMs` pauses the run, instead of failing with `LOOP_LIMIT`,
+  `EXECUTION_LIMIT`, or `GRAPH_TIMEOUT`. Pass `onLimit: "fail"` to keep failing.
+  Otherwise, raise the limit and continue as described in
+  [limits](execution-control.md#limits), or cancel the run. `braid()` still fails
+  and rejects `onLimit: "pause"`.
+
+TypeScript consumers may need small changes:
+
+- `BraidSnapshot` adds a required `limits` object and `BraidRun` adds
+  `setLimits`. Code that constructs or implements these types, such as test
+  fakes, must supply them.
+- `ExecutionEvent` adds `limit_reached` and `limits_updated`, and
+  `ExecutionError.code` adds `"TOKEN_LIMIT"`. An exhaustive `switch` needs cases
+  (or a default) for them.
+- `LoopDefinition.maxIterations` is optional. Code that reads it must handle
+  `undefined`, which means unlimited.
+- New optional members: `BraidOptions.onLimit` and `BraidOptions.maxTokens`.
+  `BraidOptions` now extends the exported `BraidLimits`.
+
+In Pi and DSH, submissions accept `options.maxTokens` and `options.onLimit`,
+loops accept a missing `maxIterations`, and `braid_resume` accepts `limits`
+without `executionIds`. `JobOptions` extends `BraidLimits`, `resumeJob` takes
+optional limits, and node completion notices add `loopLimit`. `/braid:review`
+passes `onLimit: "fail"`, so it still fails at its round limit.
+
 ## Versioning
 
 Core, Pi, and DSH release together with matching versions. During 0.x, patch releases

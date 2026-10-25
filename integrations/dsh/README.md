@@ -53,6 +53,7 @@ agent's model captured at submission.
 | Atomically edit/resume | `braid_update({ jobId, expectedRevision, ...patch })` |
 | Resume without edits | `braid_resume({ jobId, expectedRevision, executionIds, nodeTimeoutMs? })` |
 | Pause running executions or the whole job | `braid_pause({ jobId, executionIds? })`; resume a paused job with `braid_resume({ jobId })` |
+| Raise job limits and resume a job paused at one | `braid_resume({ jobId, limits: { maxExecutions?, graphTimeoutMs?, maxTokens? } })` |
 | Hold a running execution's result once it finishes | `braid_pause({ jobId, executionIds, after: true })`; remove the hold with `braid_resume({ jobId, executionIds, after: true })` |
 | Cancel | `braid_cancel({ jobId })` or `/braid cancel <jobId>`; `braid_cancel({ jobId, executionIds })` fails only those executions |
 | Human progress snapshot | `/braid [jobId]`, `/braid list` |
@@ -232,9 +233,13 @@ node definitions; supplied templates/loops replace their whole map/list.
 wildcards. Existing invocations retain their captured inputs and policies.
 Finalized jobs cannot be reopened.
 
-Bounded loops use a `loops` entry `{ id, entry, maxIterations }` and one feedback
+Loops use a `loops` entry `{ id, entry, maxIterations? }` and one feedback
 edge from a decision to that entry carrying `choice` and `feedback: "<loop-id>"`.
-`maxIterations` includes the first round. Loops cannot overlap or nest. Prompt
+The optional `maxIterations` includes the first round; without it the decision
+alone ends the loop. A decision that chooses feedback at the limit is held and
+the parent gets a pause reminder: raise `maxIterations` in `braid_update` with
+`resume` to run more rounds, or release it with `braid_resume` to end the loop
+without taking its exits. Loops cannot overlap or nest. Prompt
 templates use `{{name}}` placeholders and node prompts such as
 `{ "template": "review", "variables": { "target": "src/runtime.ts" } }`.
 Variable names must match exactly; values are inserted literally.
@@ -314,10 +319,13 @@ they do not survive a DSH restart.
 
 ## Budgets and accounting
 
-`options` accepts `maxConcurrency` (default 4), `maxExecutions` (default 1000),
-`maxToolRounds`, `maxToolCalls`, `nodeTimeoutMs`, `graphTimeoutMs`, and
-`onNodeTimeout` (`pause` by default, or `fail`). Tool/time
-budgets are unlimited when omitted. Limits count rejected tool calls too. Workers
+`options` accepts `maxConcurrency` (default 4), `maxExecutions`, `maxTokens`,
+`maxToolRounds`, `maxToolCalls`, `nodeTimeoutMs`, `graphTimeoutMs`,
+`onNodeTimeout` (`pause` by default, or `fail`), and `onLimit` (`pause` by
+default, or `fail`). Every limit is unlimited when omitted. Reaching
+`maxExecutions`, `graphTimeoutMs`, or `maxTokens` pauses the job; once nothing is
+active the parent gets the waiting reminder, and `braid_resume({ jobId, limits })`
+raises the limit and resumes the job. Limits count rejected tool calls too. Workers
 receive remaining budget/deadline reminders before model requests. Graph deadlines
 continue during pauses and do not reset on resume or update.
 

@@ -132,7 +132,7 @@ the core. The following boundaries still apply:
 
 | Supported | Outside the current scope |
 | --- | --- |
-| Declared loops with finite limits; sequential and independent loops | Arbitrary cycles and nested/overlapping loops |
+| Declared loops with optional limits; sequential and independent loops | Arbitrary cycles and nested/overlapping loops |
 | In-memory updates and pause/resume before finalization | Durable workflow recovery, restart/resume, or reopening finalized jobs |
 | Git checkpoints and backup refs for inspecting/recovering files | Persistence of scheduler state or host sessions |
 | Per-execution workspace capabilities and isolated model context | A security sandbox, arbitrary code nodes, or recursive worker delegation |

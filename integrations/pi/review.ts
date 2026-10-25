@@ -58,7 +58,8 @@ Inspect the final diff and run or confirm focused validation without changing co
         ],
         loops: [{ id: "review-loop", entry: "scope", maxIterations: maxRounds }],
       };
-      const job = jobs.start(input, { maxConcurrency: 3, maxExecutions: maxRounds * 5 + 1 }, ctx);
+      // The round count is this command's contract: reaching it ends the review instead of waiting for the parent.
+      const job = jobs.start(input, { maxConcurrency: 3, maxExecutions: maxRounds * 5 + 1, onLimit: "fail" }, ctx);
       pi.sendMessage({
         customType: "braid-review-started", display: true,
         content: `Review started as Braid ${job.handle}: ${target}\nUp to ${maxRounds} parallel review rounds and ${maxRounds - 1} fix passes. Only reviewed fixes are integrated. Open /braid ${job.handle} for progress, or braid_cancel to stop. Wait for the completion reminder, then retrieve braid_status({"jobId":"${job.handle}"}) and summarize; do not start a replacement review loop.`,

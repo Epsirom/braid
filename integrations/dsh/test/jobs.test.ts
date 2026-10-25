@@ -73,12 +73,17 @@ test("cancellation and disposal abort providers, wait for cleanup, and suppress 
   }
 });
 
-test("graph timeout keeps running through pauses", async () => {
+test("graph timeout keeps running through holds, then pauses the job, or fails it with onLimit fail", async () => {
+  const held = { ...input, nodes: [{ ...input.nodes[0]!, pauseAfter: true }] };
   const jobs = new BraidJobs(llm());
-  const job = jobs.start({ ...input, nodes: [{ ...input.nodes[0]!, pauseAfter: true }] }, { graphTimeoutMs: 60 }, context());
-  await jobs.wait(job.handle);
-  assert.equal(jobs.get(job.handle).status, "failed");
-  assert.equal(jobs.get(job.handle).execution.pausedExecutionIds.length, 0);
+  const failing = jobs.start(held, { graphTimeoutMs: 60, onLimit: "fail" }, context());
+  await jobs.wait(failing.handle);
+  assert.equal(jobs.get(failing.handle).status, "failed");
+  assert.equal(jobs.get(failing.handle).execution.pausedExecutionIds.length, 0);
+  const pausing = jobs.start(held, { graphTimeoutMs: 60 }, context());
+  await until(() => jobs.get(pausing.handle).execution.pause?.source === "graph_timeout");
+  assert.equal(jobs.get(pausing.handle).status, "running");
+  assert.equal(jobs.get(pausing.handle).execution.pausedExecutionIds.length, 1);
   await jobs.dispose();
 });
 

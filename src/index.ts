@@ -3,6 +3,7 @@ export { BRAID_VERSION } from "./version.js";
 export { validateGraph, GraphValidationError } from "./validate.js";
 export type {
   BraidInput,
+  BraidLimits,
   BraidRun,
   BraidSnapshot,
   CancelExecutionsOptions,

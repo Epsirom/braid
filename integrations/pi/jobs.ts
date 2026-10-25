@@ -5,6 +5,7 @@ import {
   ExecutionActivityTracker,
   formatActivityStatus,
   startBraid,
+  type BraidLimits,
   type BraidRun,
   type ExecutionActivity,
   type ExecutionActivityPage,
@@ -30,13 +31,13 @@ import { PiTranscripts, type PiTranscript } from "./transcript.js";
 import { PiHumanInputs, type PiPendingInput } from "./human-input.js";
 import { BraidAssistant } from "./assistant.js";
 
-export interface JobOptions {
+export interface JobOptions extends BraidLimits {
   maxConcurrency?: number;
-  maxExecutions?: number;
   nodeTimeoutMs?: number;
-  graphTimeoutMs?: number;
   /** Default "pause": a node timeout suspends the execution and wakes the parent. */
   onNodeTimeout?: "pause" | "fail";
+  /** Default "pause": a limit holds the loop's decision or pauses the job, and wakes the parent. */
+  onLimit?: "pause" | "fail";
   maxToolRounds?: number;
   maxToolCalls?: number;
   maxModelRetries?: number;
@@ -87,6 +88,8 @@ export interface NodeCompletion {
   errorCode?: ExecutionError["code"];
   /** The execution asked for a replan; its result is held for the parent. */
   replanRequested?: boolean;
+  /** A loop decision held because it chose feedback at its loop's maxIterations. */
+  loopLimit?: { loopId: string; maxIterations: number };
 }
 
 /** A running execution asked the parent to replan; its result will be held when it finishes. */
@@ -180,6 +183,13 @@ export interface OutstandingJob {
   timedOutExecutionIds?: string[];
   /** The whole job is paused and admits no new executions. */
   paused?: boolean;
+}
+
+/** The loop limit that holds a feedback decision, for its pause reminder. */
+function loopLimit(state: BraidSnapshot, instance: BraidSnapshot["executions"][string]): Pick<NodeCompletion, "loopLimit"> {
+  if (instance.holdAfter?.source !== "loop_limit" || !instance.loopId) return {};
+  const maxIterations = state.graph.loops?.find(loop => loop.id === instance.loopId)?.maxIterations;
+  return maxIterations === undefined ? {} : { loopLimit: { loopId: instance.loopId, maxIterations } };
 }
 
 function timedOut(state: BraidSnapshot | undefined): Pick<OutstandingJob, "timedOutExecutionIds"> {
@@ -426,6 +436,7 @@ export class BraidJobs {
                 eventSequence: event.sequence,
                 ...(instance.error ? { errorCode: instance.error.code } : {}),
                 ...(instance.replan ? { replanRequested: true } : {}),
+                ...loopLimit(state!, instance),
               })).catch(() => {});
             } catch {
               /* Notification failures must not affect scheduling or results. */
@@ -603,10 +614,11 @@ export class BraidJobs {
   }
 
   /** Admit work again and resume the executions the job pause paused. */
-  resumeJob(jobId: string, source = "agent"): JobSnapshot {
+  resumeJob(jobId: string, source = "agent", limits?: BraidLimits): JobSnapshot {
     const job = this.lookup(jobId);
     if (!job) throw this.unknownJob(jobId);
     if (!job.run || job.status !== "running") throw new Error("Job is not accepting updates");
+    if (limits) job.run.setLimits(limits);
     job.run.resumeRun();
     this.notify(job, "resumed", source);
     this.changed();

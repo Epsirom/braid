@@ -22,7 +22,8 @@ for (const scenario of [
   },
   {
     name: "explicit graph timeout applies",
-    options: { graphTimeoutMs: 1_000 },
+    // Under "pause" the job pauses at the deadline instead; core's limits tests cover that path.
+    options: { graphTimeoutMs: 1_000, onLimit: "fail" },
     error: "GRAPH_TIMEOUT",
   },
 ]) {
