@@ -1,6 +1,6 @@
 export { braid, startBraid } from "./runtime.js";
 export { BRAID_VERSION } from "./version.js";
-export { validateGraph, GraphValidationError } from "./validate.js";
+export { validateGraph, closingEdges, GraphValidationError } from "./validate.js";
 export type {
   BraidInput,
   BraidLimits,

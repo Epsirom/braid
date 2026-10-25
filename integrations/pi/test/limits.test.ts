@@ -3,7 +3,7 @@ import test from "node:test";
 import { validateToolArguments, type Context, type Tool } from "@earendil-works/pi-ai";
 import { BraidJobs, type NodeCompletion, type WaitingNotice } from "../jobs.js";
 import { createBraidTools } from "../index.js";
-import { formatLoopLimit, formatWaiting } from "../status-text.js";
+import { formatEdgeLimit, formatWaiting } from "../status-text.js";
 import { context, deferred, response } from "./helpers.js";
 
 const until = async (condition: () => boolean, timeoutMs = 5_000) => {
@@ -17,12 +17,11 @@ function validate(tool: Tool, args: Record<string, unknown>) {
 }
 const node = (id: string) => ({ type: "execute" as const, id, prompt: `task:${id}` });
 
-test("Pi schemas accept loops without maxIterations, job limits, and limits on job resume", () => {
+test("Pi schemas accept cycles without an edge limit, job limits, and limits on job resume", () => {
   const tools = createBraidTools(new BraidJobs());
   const graph = {
     goal: "refine", nodes: [node("work"), { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }],
-    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", feedback: "refine" }],
-    loops: [{ id: "refine", entry: "work" }],
+    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }],
     options: { maxExecutions: 10, maxTokens: 1_000, onLimit: "pause" },
   };
   assert.deepEqual(validate(tools.braidTool, graph), graph);
@@ -63,7 +62,7 @@ test("a job paused at maxExecutions wakes the parent and resumes once braid_resu
   assert.equal(jobs.get(handle)!.result!.nodes.c!.status, "completed");
 });
 
-test("a loop decision held at maxIterations sends a pause reminder that says how to continue or stop", { timeout: 10_000 }, async t => {
+test("a decision held at an edge limit sends a pause reminder that says how to continue or stop", { timeout: 10_000 }, async t => {
   const ctx = context(async (_signal, worker: Context) => {
     const payload = JSON.parse(worker.messages[0]!.content as string) as { nodeId: string };
     if (payload.nodeId === "check" && worker.messages.length === 1) return {
@@ -78,16 +77,15 @@ test("a loop decision held at maxIterations sends a pause reminder that says how
   const { braidTool } = createBraidTools(jobs);
   const handle = (await braidTool.execute("loop", {
     goal: "refine", nodes: [node("work"), { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }],
-    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", feedback: "refine" }],
-    loops: [{ id: "refine", entry: "work", maxIterations: 1 }],
+    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", limit: 1 }],
   }, undefined, undefined, ctx)).details!.handle;
   await until(() => completions.length === 1);
   const [held] = completions;
   assert.equal(held!.paused, true);
-  assert.equal(held!.nodeId, "check");
-  assert.deepEqual(held!.loopLimit, { loopId: "refine", maxIterations: 1 });
-  assert.match(formatLoopLimit(handle, held!.executionId, held!.loopLimit!),
-    /reached its maxIterations of 1.*braid_update with loops .*resume \[.*\].*release it with braid_resume.*the loop ends and its exits are skipped/);
+  assert.equal(held!.executionId, "check@2");
+  assert.deepEqual(held!.edgeLimit, { from: "check", to: "work", choice: "again", limit: 1 });
+  assert.match(formatEdgeLimit(handle, held!.executionId, held!.edgeLimit!),
+    /already fired its limit of 1 times.*removeEdges \[\{"from":"check","to":"work","choice":"again"\}\].*resume \["check@2"\].*release it with braid_resume.*the cycle ends/);
 
   jobs.resume(handle, [held!.executionId], 0);
   await jobs.wait(handle);

@@ -234,24 +234,15 @@ export function compileGraph(input: BraidInput): Graph {
   const order = new Map(nodes.map((node, index) => [node.id, index]));
   const cycles: CompiledCycle[] = [];
   const closing = new Set<Edge>();
-  for (const component of stronglyConnected(nodes, outgoing, incoming)) {
-    const members = new Set(component);
-    const inside = (edge: Edge) => members.has(edge.from) && members.has(edge.to);
-    if (members.size === 1 && !outgoing.get(component[0]!)!.some(inside)) continue;
+  for (const cycle of findCycles(nodes, edges, outgoing, incoming)) {
+    const { members, breaks, entries, candidates } = cycle;
     const label = `Cycle through ${[...members].sort((a, b) => order.get(a)! - order.get(b)!).map(id => `'${id}'`).join(", ")}`;
-    const internal = edges.filter(inside);
-    // Removing the closing edge must leave the cycle acyclic; otherwise cycles nest or overlap.
-    const breaks = internal.filter(edge => acyclic(members, internal.filter(other => other !== edge)));
     requireValid(breaks.length > 0, `${label}: nested or overlapping cycles are unsupported`);
-    const entries = new Set(edges.filter(edge => !members.has(edge.from) && members.has(edge.to)).map(edge => edge.to));
     requireValid(entries.size <= 1, `${label} has multiple entries (${[...entries].map(id => `'${id}'`).join(", ")}). Route external dependencies to one entry node`);
-    const candidates = breaks.filter(edge => byId.get(edge.from)!.type === "decision" && edge.choice !== undefined &&
-      (!entries.size || entries.has(edge.to)));
     const entry = [...entries][0];
     requireValid(candidates.length > 0, entry
       ? `${label} must return to its entry '${entry}' through a decision's choice edge. Route the edge back to '${entry}' from a decision and set its choice`
       : `${label} must be closed by a decision's choice edge back to the node where each round starts`);
-    candidates.sort((a, b) => order.get(a.to)! - order.get(b.to)!);
     const back = candidates[0]!;
     const decision = byId.get(back.from)! as DecisionNode;
     requireValid(decision.choices.some(choice => choice !== back.choice), `${label}: decision '${back.from}' needs an exit choice besides '${back.choice}'`);
@@ -290,13 +281,62 @@ export function compileGraph(input: BraidInput): Graph {
   };
 }
 
+interface CycleCandidates {
+  members: Set<string>;
+  /** Internal edges whose removal leaves the cycle acyclic. */
+  breaks: Edge[];
+  /** Cycle nodes that edges from outside enter. */
+  entries: Set<string>;
+  /** Decision choice edges that could close the cycle, best first. */
+  candidates: Edge[];
+}
+
+function findCycles(nodes: readonly Pick<BraidNode, "id" | "type">[], edges: readonly Edge[],
+  outgoing: Map<string, Edge[]>, incoming: Map<string, Edge[]>): CycleCandidates[] {
+  const types = new Map(nodes.map(node => [node.id, node.type]));
+  const order = new Map(nodes.map((node, index) => [node.id, index]));
+  const cycles: CycleCandidates[] = [];
+  for (const component of stronglyConnected(nodes, outgoing, incoming)) {
+    const members = new Set(component);
+    const inside = (edge: Edge) => members.has(edge.from) && members.has(edge.to);
+    if (members.size === 1 && !outgoing.get(component[0]!)!.some(inside)) continue;
+    const internal = edges.filter(inside);
+    // Removing the closing edge must leave the cycle acyclic; otherwise cycles nest or overlap.
+    const breaks = internal.filter(edge => acyclic(members, internal.filter(other => other !== edge)));
+    const entries = new Set(edges.filter(edge => !members.has(edge.from) && members.has(edge.to)).map(edge => edge.to));
+    // The closing edge enters the cycle's entry; without an external input, the entry listed first wins.
+    const candidates = breaks.filter(edge => types.get(edge.from) === "decision" && edge.choice !== undefined &&
+      (!entries.size || entries.has(edge.to))).sort((a, b) => order.get(a.to)! - order.get(b.to)!);
+    cycles.push({ members, breaks, entries, candidates });
+  }
+  return cycles;
+}
+
+/**
+ * The edge that closes each cycle in a graph, for displays and tools. Each round
+ * of a cycle starts at the closing edge's target. Best effort: it does not
+ * validate the graph, and skips cycles that validation would reject.
+ */
+export function closingEdges(graph: { nodes: readonly Pick<BraidNode, "id" | "type">[]; edges: readonly Edge[] }): Edge[] {
+  const outgoing = new Map(graph.nodes.map(node => [node.id, [] as Edge[]]));
+  const incoming = new Map(graph.nodes.map(node => [node.id, [] as Edge[]]));
+  const edges = graph.edges.filter(edge => outgoing.has(edge.from) && incoming.has(edge.to));
+  for (const edge of edges) {
+    outgoing.get(edge.from)!.push(edge);
+    incoming.get(edge.to)!.push(edge);
+  }
+  return findCycles(graph.nodes, edges, outgoing, incoming)
+    .filter(cycle => cycle.breaks.length && cycle.entries.size <= 1 && cycle.candidates.length)
+    .map(cycle => cycle.candidates[0]!);
+}
+
 /** Edges are identified by source, target, and choice; `limit` is an attribute. */
 export function edgeIdentity(edge: Pick<Edge, "from" | "to" | "choice">): string {
   return JSON.stringify([edge.from, edge.to, edge.choice ?? null]);
 }
 
 /** Iterative Kosaraju, so very deep graphs do not overflow the stack. */
-function stronglyConnected(nodes: BraidNode[], outgoing: Map<string, Edge[]>, incoming: Map<string, Edge[]>): string[][] {
+function stronglyConnected(nodes: readonly Pick<BraidNode, "id">[], outgoing: Map<string, Edge[]>, incoming: Map<string, Edge[]>): string[][] {
   const finished: string[] = [];
   const visited = new Set<string>();
   for (const { id: start } of nodes) {

@@ -9,6 +9,7 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import {
+  closingEdges,
   formatActivityStatus,
   formatPauseSource,
   type BraidResult,
@@ -40,7 +41,8 @@ export interface BraidLiveState {
   suspendedExecutionIds?: string[];
   /** Present while the whole job is paused. */
   pause?: { source: string; pausedAt: number };
-  iterations?: Record<string, number>;
+  /** The generation of each node's head, from its execution ID. */
+  generations?: Record<string, number>;
 }
 export type BraidToolDetails =
   | ((BraidResult | BraidLiveState) & {
@@ -158,7 +160,7 @@ function graphParts(result: BraidResult | BraidLiveState): {
         Object.defineProperty(nodeTypes, node.id, { value: node.type, enumerable: true, configurable: true });
       }
       for (const id of Object.keys(nodes)) if (!event.graph.nodes.some(node => node.id === id)) { delete nodes[id]; delete nodeTypes[id]; }
-    } else if (event.type === "node_created") {
+    } else if (event.type === "execution_created") {
       nodes[event.nodeId] ??= { id: event.nodeId, status: "pending" };
       if (
         event.model !== undefined &&
@@ -176,8 +178,7 @@ function graphParts(result: BraidResult | BraidLiveState): {
         from: event.from,
         to: event.to,
         ...(event.choice ? { choice: event.choice } : {}),
-        ...(event.feedback ? { feedback: event.feedback } : {}),
-        ...(event.executionId ? { executionId: event.executionId } : {}),
+        ...(event.limit !== undefined ? { limit: event.limit } : {}),
       });
     }
   }
@@ -233,7 +234,6 @@ function mermaidLabelLines(
           completed: "✓",
           failed: "✗",
           skipped: "·",
-          runnable: "◇",
           pending: "○",
         }[node.status];
   const status = node.suspension
@@ -242,10 +242,10 @@ function mermaidLabelLines(
   const decision =
     node.decision === undefined ? "" : ` → ${compact(node.decision, 16)}`;
   const now = "observedAt" in result ? result.observedAt : Date.now();
-  const iteration = "executions" in result ? result.executions[node.executionId ?? ""]?.iteration : result.iterations?.[id];
+  const generation = "executions" in result ? result.executions[node.executionId ?? ""]?.generation : result.generations?.[id];
   const lines = [
-    `${selected ? SELECTED_NODE_MARK + icon.slice(1) : icon} ${compact(id, 24)}${iteration ? ` #${iteration}` : ""}`,
-    `${status}${node.holdAfter && (node.status === "running" || node.status === "runnable") ? " · hold" : ""}${decision} · ${nodeElapsed(node, now)}`,
+    `${selected ? SELECTED_NODE_MARK + icon.slice(1) : icon} ${compact(id, 24)}${generation && generation > 1 ? ` #${generation}` : ""}`,
+    `${status}${node.holdAfter && node.status === "running" ? " · hold" : ""}${decision} · ${nodeElapsed(node, now)}`,
   ];
   if (progress) {
     const window =
@@ -262,7 +262,8 @@ function mermaidLabelLines(
 
 function mermaidSource(result: BraidResult | BraidLiveState, selected?: string): string {
   const parts = graphParts(result);
-  const feedbackSources = new Map(parts.edges.filter(edge => edge.feedback !== undefined).map(edge => [edge.to, edge.from]));
+  const closing = new Set(closingEdges({ nodes: Object.entries(parts.nodeTypes).map(([id, type]) => ({ id, type })), edges: parts.edges }));
+  const closingSources = new Map([...closing].map(edge => [edge.to, edge.from]));
   const ids = Object.keys(parts.nodes);
   const names = new Map(ids.map((id, index) => [id, `n${index}`]));
   const escapeMermaidText = (value: string) =>
@@ -293,7 +294,7 @@ function mermaidSource(result: BraidResult | BraidLiveState, selected?: string):
   }
   for (const edge of parts.edges) {
     // Distinguish the direct data handoff from its reverse retry edge.
-    const arrow = edge.feedback === undefined && feedbackSources.get(edge.from) === edge.to ? "-.->" : "-->";
+    const arrow = !closing.has(edge) && closingSources.get(edge.from) === edge.to ? "-.->" : "-->";
     lines.push(
       `  ${names.get(edge.from)} ${arrow}${edge.choice ? `|${escapeMermaidText(edge.choice)}|` : ""} ${names.get(edge.to)}`,
     );
@@ -399,21 +400,21 @@ function eventText(event: ExecutionEvent): string {
     case "replan_requested": return `replan requested · ${compact(event.nodeId, 40)}: ${compact(event.reason, 64)}`;
     case "graph_paused": return `job paused · by ${compact(event.source, 20)}`;
     case "graph_resumed": return "job resumed";
-    case "limit_reached": return `limit reached · ${event.limit} ${event.value}${event.nodeId ? ` · holds ${compact(event.nodeId, 40)}` : ""}`;
+    case "limit_reached": return `limit reached · ${event.edge ? `edge ${compact(event.edge.from, 30)} → ${compact(event.edge.to, 30)}` : event.limit} ${event.value}${event.nodeId ? ` · holds ${compact(event.nodeId, 40)}` : ""}`;
     case "limits_updated": return `limits updated · ${Object.entries(event.limits).map(([key, value]) => `${key} ${value}`).join(", ") || "none"}`;
     case "graph_waiting": return `nothing active · ${event.pausedExecutionIds.length} held · ${event.suspendedExecutionIds.length} suspended${event.pause ? " · job paused" : ""}`;
-    case "loop_started": return `loop ${compact(event.loopId, 40)} · iteration ${event.iteration}`;
-    case "loop_completed": return `loop ${compact(event.loopId, 40)} completed · iteration ${event.iteration}`;
     case "graph_created":
       return `graph created · ${event.nodeCount} nodes · ${event.edgeCount} edges`;
-    case "node_created":
-      return `node created · ${compact(event.nodeId, 40)} (${event.nodeType})${event.model ? ` · ${compact(event.model, 50)}` : ""}`;
+    case "execution_created":
+      return `${event.cause === "submitted" || event.cause === "added" ? "node created" : event.cause === "cloned" ? "rerun" : "replaced"} · ${compact(event.executionId ?? event.nodeId, 40)} (${event.nodeType})${event.model ? ` · ${compact(event.model, 50)}` : ""}`;
+    case "execution_removed":
+      return `removed · ${compact(event.executionId ?? event.nodeId, 40)}`;
+    case "execution_superseded":
+      return `superseded · ${compact(event.executionId ?? event.nodeId, 40)} by ${compact(event.supersededBy, 40)}`;
     case "edge_created":
       return `edge created · ${compact(event.from, 40)}${event.choice ? ` -${compact(event.choice, 30)}->` : " →"} ${compact(event.to, 40)}`;
     case "workspace_updated":
       return `workspace · ${compact(event.workspace.nodeId, 40)} · ${event.workspace.state}`;
-    case "node_runnable":
-      return `runnable · ${compact(event.nodeId, 40)}`;
     case "handoff":
       return `handoff · ${compact(event.from, 40)} → ${compact(event.to, 40)}: ${compact(event.output, 64)}`;
     case "node_started":
@@ -479,7 +480,7 @@ export function createLiveState(): BraidLiveState {
     progress: Object.create(null),
     events: [],
     latencyMs: 0,
-    observedAt: Date.now(), revision: 0, pausedExecutionIds: [], suspendedExecutionIds: [], iterations: Object.create(null),
+    observedAt: Date.now(), revision: 0, pausedExecutionIds: [], suspendedExecutionIds: [], generations: Object.create(null),
   };
 }
 
@@ -495,7 +496,7 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
       message: compact(preview.error.message, 180),
     };
   state.events.push(preview);
-  if (event.type === "node_created")
+  if (event.type === "execution_created")
     Object.defineProperty(state.nodeTypes, event.nodeId, {
       value: event.nodeType,
       enumerable: true,
@@ -506,8 +507,7 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
       from: event.from,
       to: event.to,
       ...(event.choice ? { choice: event.choice } : {}),
-      ...(event.feedback ? { feedback: event.feedback } : {}),
-      ...(event.executionId ? { executionId: event.executionId } : {}),
+      ...(event.limit !== undefined ? { limit: event.limit } : {}),
     });
   if (state.events.length > MAX_VISIBLE_EVENTS) state.events.shift();
   if (event.type === "graph_completed" || event.type === "graph_failed") {
@@ -518,17 +518,22 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
     if (event.type === "graph_failed") state.error = { ...event.error };
     return;
   }
-  if (event.type === "node_created") {
+  if (event.type === "execution_created") {
+    // The new instance becomes the node's head.
     Object.defineProperty(state.nodes, event.nodeId, {
       value: {
         id: event.nodeId,
         status: "pending",
+        ...(event.executionId ? { executionId: event.executionId } : {}),
         ...(event.model ? { model: event.model } : {}),
       },
       enumerable: true,
       configurable: true,
       writable: true,
     });
+    delete state.progress[event.nodeId];
+    state.generations ??= Object.create(null) as Record<string, number>;
+    state.generations[event.nodeId] = event.generation;
     return;
   }
   if (event.type === "graph_updated") {
@@ -556,19 +561,9 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
       ? state.nodes[event.nodeId]
       : undefined;
   if (!node) return;
-  if (event.type === "node_runnable" || event.type === "node_skipped") {
-    for (const key of Object.keys(node)) if (key !== "id") delete (node as unknown as Record<string, unknown>)[key];
-    if (event.executionId) node.executionId = event.executionId;
-    delete state.progress[node.id];
-    if (event.iteration !== undefined) {
-      state.iterations ??= Object.create(null) as Record<string, number>;
-      state.iterations[node.id] = event.iteration;
-    }
-  } else if (event.executionId && node.executionId && event.executionId !== node.executionId) return;
+  // Events of an earlier instance, such as a replaced one that is still stopping, do not change the head.
+  if (event.executionId && node.executionId && event.executionId !== node.executionId) return;
   switch (event.type) {
-    case "node_runnable":
-      node.status = "runnable";
-      break;
     case "node_started":
       node.status = "running";
       node.startedAt = event.timestamp;
@@ -671,7 +666,7 @@ export function renderActivity(
 
 /** Focused status reads must show the requested execution, including historical ones. */
 export function renderNodeResult(
-  node: NodeResult & { iteration?: number },
+  node: NodeResult,
   expanded: boolean,
   theme: Palette,
   fullOutputPath?: string,
@@ -683,7 +678,8 @@ export function renderNodeResult(
   const clean = (value: string) => stripTerminalSequences(value).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, "");
   const timing = [
     ...(node.model ? [`model ${compact(node.model, 60)}`] : []),
-    ...(node.iteration ? [`iteration #${node.iteration}`] : []),
+    ...(node.supersededBy ? [`superseded by ${compact(node.supersededBy, 80)}`] : []),
+    ...(node.waitReason ? [`waiting: ${node.waitReason.replace("_", " ")}`] : []),
     ...(node.startedAt !== undefined || node.latencyMs !== undefined ? [`elapsed ${nodeElapsed(node, now)}`] : []),
     ...(node.usage ? [`${compactCount(node.usage.inputTokens)} in / ${compactCount(node.usage.outputTokens)} out tokens`] : []),
   ];
@@ -713,7 +709,7 @@ export function renderNodeResult(
 
 /** Status, timing, and live waits above a node's session transcript. */
 export function renderSessionHeader(
-  node: NodeResult & { iteration?: number },
+  node: NodeResult,
   theme: Palette,
   now: number,
   progress?: PiNodeProgress,
@@ -723,7 +719,7 @@ export function renderSessionHeader(
   const live = progress && (!progress.executionId || progress.executionId === node.executionId) ? progress : undefined;
   const facts = [
     ...(node.executionId ? [compact(node.executionId, 80)] : []),
-    ...(node.iteration ? [`iteration #${node.iteration}`] : []),
+    ...(node.supersededBy ? [`superseded by ${compact(node.supersededBy, 80)}`] : []),
     ...(node.model ? [compact(node.model, 60)] : []),
     ...(node.startedAt !== undefined || node.latencyMs !== undefined ? [`elapsed ${nodeElapsed(node, now)}`] : []),
     ...(node.usage ? [`${compactCount(node.usage.inputTokens)} in / ${compactCount(node.usage.outputTokens)} out tokens`] : []),
@@ -789,9 +785,7 @@ export function renderGraphResult(
   const skipped = nodes.filter((node) => node.status === "skipped").length;
   const failed = nodes.filter((node) => node.status === "failed").length;
   const active = nodes.filter((node) => node.status === "running").length;
-  const pending = nodes.filter(
-    (node) => node.status === "pending" || node.status === "runnable",
-  ).length;
+  const pending = nodes.filter((node) => node.status === "pending").length;
   const elapsedMs =
     "metadata" in result ? result.metadata.latencyMs : result.latencyMs;
   const title =

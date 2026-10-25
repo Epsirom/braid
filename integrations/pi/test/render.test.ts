@@ -300,7 +300,7 @@ test("the built-in review chart distinguishes the direct handoff from retry", as
   assert.match(chart, /retry/);
 });
 
-test("loop charts draw forward handoffs dotted and feedback solid without changing dependencies", () => {
+test("cycle charts draw forward handoffs dotted and the closing edge solid without changing dependencies", () => {
   const graph: BraidInput = {
     goal: "loop",
     nodes: [
@@ -312,13 +312,13 @@ test("loop charts draw forward handoffs dotted and feedback solid without changi
     edges: [
       { from: "start", to: "inspect" }, { from: "inspect", to: "route" },
       { from: "start", to: "route" },
-      { from: "route", to: "start", choice: "again", feedback: "loop" },
+      { from: "route", to: "start", choice: "again", limit: 2 },
       { from: "route", to: "end", choice: "done" },
     ],
-    loops: [{ id: "loop", entry: "start", maxIterations: 3 }],
   };
   const events: ExecutionEvent[] = [
-    ...graph.nodes.map((node, index) => ({ type: "node_created" as const, nodeId: node.id, nodeType: node.type, sequence: index, timestamp: 0 })),
+    ...graph.nodes.map((node, index) => ({ type: "execution_created" as const, nodeId: node.id, nodeType: node.type, generation: 1, cause: "submitted" as const,
+      executionId: `${node.id}@1`, sequence: index, timestamp: 0 })),
     ...graph.edges.map((edge, index) => ({ type: "edge_created" as const, ...edge, sequence: graph.nodes.length + index, timestamp: 0 })),
   ];
   const live = createLiveState();
@@ -355,18 +355,17 @@ test("loop charts draw forward handoffs dotted and feedback solid without changi
 
   const cases: Array<{ name: string; edges: Edge[] }> = [
     { name: "labelled shortcut", edges: graph.edges.map(edge => edge.from === "start" && edge.to === "route" ? { ...edge, choice: "direct" } : edge) },
-    { name: "historical shortcut", edges: graph.edges.map(edge => edge.from === "start" && edge.to === "route" ? { ...edge, executionId: "old-start" } : edge) },
     { name: "required forward edge", edges: graph.edges.filter(edge => edge.from !== "inspect" && edge.to !== "inspect") },
-    { name: "ordinary DAG shortcut", edges: graph.edges.filter(edge => !edge.feedback) },
+    { name: "ordinary DAG shortcut", edges: graph.edges.filter(edge => edge.limit === undefined) },
   ];
   for (const { name, edges } of cases) {
     const rendered = chart({ ...live, edges });
     assert.notEqual(rendered, chart({ ...live, edges: withoutShortcut(edges) }), name);
-    if (edges.some(edge => edge.feedback)) assert.match(rendered, /[╎╌]/, name);
+    if (edges.some(edge => edge.limit !== undefined)) assert.match(rendered, /[╎╌]/, name);
     else assert.doesNotMatch(rendered, /[╎╌]/, name);
     if (name === "labelled shortcut") assert.match(rendered, /direct/);
     const fromEvents = createLiveState();
-    for (const node of events.filter(event => event.type === "node_created")) applyEvent(fromEvents, node);
+    for (const node of events.filter(event => event.type === "execution_created")) applyEvent(fromEvents, node);
     for (const edge of edges) applyEvent(fromEvents, { type: "edge_created", ...edge, sequence: 20, timestamp: 0 });
     assert.deepEqual(fromEvents.edges, edges, name);
   }
@@ -535,8 +534,9 @@ test("node details render at the observation time and show recoverable workspace
   const plainTheme = { fg: (_c: string, v: string) => v, bg: (_c: string, v: string) => v, bold: (v: string) => v };
   const render = (node: Parameters<typeof renderNodeResult>[0], now: number) =>
     renderNodeResult(node, true, plainTheme, undefined, undefined, now).render(200).join("\n");
-  const running = { id: "a", status: "running" as const, startedAt: 1_000, iteration: 2 };
-  assert.match(render(running, 3_500), /iteration #2 · elapsed 2s/);
+  const running = { id: "a", executionId: "a@2", status: "running" as const, startedAt: 1_000, supersededBy: "a@3" };
+  assert.match(render(running, 3_500), /superseded by a@3 · elapsed 2s/);
+  assert.match(render({ id: "a", status: "pending", waitReason: "run_paused" }, 0), /waiting: run paused/);
   assert.match(render(running, 3_500), /elapsed 2s/, "the same observation renders the same elapsed time");
   const workspace = {
     nodeId: "a", mode: "worktree" as const, workingDirectory: "/tmp/wt", worktreeRoot: "/tmp/wt",

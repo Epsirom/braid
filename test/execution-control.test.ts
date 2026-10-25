@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { braid, startBraid, validateGraph, type BraidInput, type BraidRun, type ExecutionEvent, type ModelRunner } from "../src/index.js";
+import { braid, closingEdges, startBraid, validateGraph, type BraidInput, type BraidRun, type ExecutionEvent, type ModelRunner } from "../src/index.js";
 import { deferred } from "./helpers.js";
 
 const node = (id: string) => ({ type: "execute" as const, id, prompt: id });
@@ -342,6 +342,15 @@ test("cycles must be closed by a decision's choice edge, and only that edge take
   // Two cycles sharing check overlap.
   assert.throws(() => validateGraph({ goal: "overlap", nodes: [node("a"), node("b"), { type: "decision", id: "check", prompt: "p", choices: ["a", "b", "done"] }],
     edges: [{ from: "a", to: "check" }, { from: "b", to: "check" }, { from: "check", to: "a", choice: "a" }, { from: "check", to: "b", choice: "b" }] }), /nested or overlapping/);
+});
+
+test("closingEdges finds the edge that closes each cycle for displays", () => {
+  assert.deepEqual(closingEdges(loop()), [{ from: "check", to: "work", choice: "again", limit: 2 }]);
+  // Without an external input, the entry listed first wins between two choice edges.
+  const decisions = ["a", "b"].map(id => ({ type: "decision" as const, id, prompt: id, choices: ["next", "stop"] }));
+  assert.deepEqual(closingEdges({ nodes: decisions, edges: [{ from: "a", to: "b", choice: "next" }, { from: "b", to: "a", choice: "next" }] }),
+    [{ from: "b", to: "a", choice: "next" }]);
+  assert.deepEqual(closingEdges({ nodes: [node("a"), node("b")], edges: [{ from: "a", to: "b" }, { from: "b", to: "a" }] }), []);
 });
 
 test("cycle validation names the entry and an exit from another node", () => {
