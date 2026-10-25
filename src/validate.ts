@@ -20,6 +20,8 @@ export interface Graph {
 }
 
 export interface CompiledLoop extends LoopDefinition {
+  /** Infinity when the definition sets no limit. */
+  maxIterations: number;
   feedback: Edge;
   members: Set<string>;
 }
@@ -280,7 +282,9 @@ export function compileGraph(input: BraidInput): Graph {
     fields(loop, ["id", "entry", "maxIterations"], "Loop");
     requireValid(text(loop.id) && !loops.has(loop.id), "Loop ids must be non-empty and unique");
     requireValid(text(loop.entry) && byId.has(loop.entry), `Unknown loop entry '${loop.entry}'`);
-    requireValid(typeof loop.maxIterations === "number" && Number.isSafeInteger(loop.maxIterations) && loop.maxIterations > 0, `Loop '${loop.id}' needs a positive maxIterations`);
+    requireValid(loop.maxIterations === undefined || loop.maxIterations === Infinity ||
+      (typeof loop.maxIterations === "number" && Number.isSafeInteger(loop.maxIterations) && loop.maxIterations > 0),
+    `Loop '${loop.id}' maxIterations must be a positive integer, Infinity, or omitted`);
     const feedback = edges.filter(edge => edge.feedback === loop.id);
     requireValid(feedback.length === 1, `Loop '${loop.id}' needs exactly one feedback edge`);
     const back = feedback[0]!;
@@ -302,7 +306,7 @@ export function compileGraph(input: BraidInput): Graph {
       requireValid(!(members.has(edge.from) && !members.has(edge.to) && edge.from !== back.from),
         `Loop '${loop.id}' must exit through its feedback decision '${back.from}': edge '${edge.from}' -> '${edge.to}' leaves from another node`);
     }
-    loops.set(loop.id, { id: loop.id, entry: loop.entry, maxIterations: loop.maxIterations, feedback: back, members });
+    loops.set(loop.id, { id: loop.id, entry: loop.entry, maxIterations: loop.maxIterations ?? Infinity, feedback: back, members });
   }
   for (const edge of edges) requireValid(!edge.feedback || loops.has(edge.feedback), `Unknown feedback loop '${edge.feedback}'`);
   return {

@@ -138,9 +138,12 @@ test("historical dependencies survive definition removal", async t => {
   assert.equal((await run.result).nodes.b!.output, "retained");
 });
 
-test("undeclared cycles and unbounded loops fail validation", () => {
+test("undeclared cycles fail validation, and loops may omit maxIterations", () => {
   assert.throws(() => validateGraph({ goal: "bad", nodes: [node("a")], edges: [{ from: "a", to: "a" }] }), /feedback/);
-  assert.throws(() => validateGraph({ ...loop(), loops: [{ id: "refine", entry: "work", maxIterations: Infinity }] }), /maxIterations/);
+  for (const maxIterations of [0, 1.5, -1, Number.NaN])
+    assert.throws(() => validateGraph({ ...loop(), loops: [{ id: "refine", entry: "work", maxIterations }] }), /maxIterations/);
+  for (const maxIterations of [undefined, Infinity])
+    validateGraph({ ...loop(), loops: [{ id: "refine", entry: "work", ...(maxIterations === undefined ? {} : { maxIterations }) }] });
 });
 
 test("loop validation identifies the bad feedback target and an external edge bypassing entry", () => {
@@ -185,7 +188,7 @@ test("updates share a finite execution budget and cannot mutate retained event h
   let run!: BraidRun;
   let edits = 0;
   run = startBraid({ goal: "bounded JIT", nodes: [{ ...node("one"), pauseAfter: true }], edges: [] }, {
-    cwd: await outsideGit(t), maxExecutions: 2,
+    cwd: await outsideGit(t), maxExecutions: 2, onLimit: "fail",
     runner: async () => ({ output: "done" }),
     onEvent(event) {
       if (event.type === "graph_updated") {

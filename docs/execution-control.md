@@ -38,10 +38,11 @@ const graph = {
 };
 ```
 
-Each loop declares one entry, one decision feedback edge, and a finite positive
-iteration limit. Ignoring feedback and historical references, the graph must be
-acyclic. Loop bodies may fork and join; external edges enter only through the
-entry and leave only through the feedback decision. Nested/overlapping loops and
+Each loop declares one entry, one decision feedback edge, and an optional
+iteration limit; without `maxIterations` the decision alone ends the loop.
+Ignoring feedback and historical references, the graph must be acyclic. Loop
+bodies may fork and join; external edges enter only through the entry and leave
+only through the feedback decision. Nested/overlapping loops and
 arbitrary cycles are rejected. Sequential and independent loops are supported.
 
 The first round uses external predecessors or the job's root snapshot. A feedback
@@ -49,7 +50,8 @@ choice creates another round only after all admitted instances in the current
 round have settled and their pause gates have been released. The next entry also
 receives the previous feedback execution. External inputs remain available in
 subsequent rounds. Exits wait for the loop to finish and use the final round.
-Choosing feedback at `maxIterations` fails the job with `LOOP_LIMIT`.
+Choosing feedback at `maxIterations` holds the decision for the graph owner, or
+fails the job with `LOOP_LIMIT` under `onLimit: "fail"` (see [limits](#limits)).
 
 Loops do not overlap their own rounds. Live updates can change definitions,
 edges, and loop topology during an iteration; no boundary pause is required.
@@ -229,9 +231,9 @@ snapshot carries `pause: { source, pausedAt }`.
 
 The node timeout stops while an execution is suspended or waiting for a slot.
 Core moves `request.deadlines.node` later in place, so runners must read it each
-time. The graph timeout keeps running, so a pause that is never resumed ends the
-run with `GRAPH_TIMEOUT`; with an unlimited graph timeout it waits until resumed
-or cancelled. Cancellation and run failure end suspended executions as failed.
+time. The graph timeout keeps running, so a pause that is never resumed reaches
+it, if one is set: the run then pauses at the graph timeout, or fails with
+`GRAPH_TIMEOUT` under `onLimit: "fail"`. Cancellation and run failure end suspended executions as failed.
 A paused run with nothing running reports `status: "waiting"` and does not finish.
 
 The run emits `graph_waiting` when it enters that state because the last active
@@ -297,8 +299,8 @@ before. The Pi, DSH, and OpenAI-compatible runners are interruptible.
 
 A timeout pause never fails the run, even for `requireSuccess` nodes; only
 cancelling the execution does. The graph timeout keeps running, so a timeout
-pause that is never resumed ends the run with `GRAPH_TIMEOUT`; with an unlimited
-graph timeout the run waits until it is resumed or cancelled.
+pause that is never resumed reaches it, if one is set, as described above; without
+one the run waits until the execution is resumed or cancelled.
 
 ### Cancelling one execution
 
@@ -359,6 +361,46 @@ archives/removes owned worktrees while retaining checkpoint refs. Cancelled or
 failed integration may leave partial source edits or conflicts for inspection;
 it does not reset the caller's checkout.
 
+## Limits
+
+Every limit is unlimited by default, so a run can keep going until its graph
+finishes or its owner stops it. Set a limit only to bound a run:
+
+| Limit | Scope | Under `onLimit: "pause"` | Under `onLimit: "fail"` |
+| --- | --- | --- | --- |
+| `loops[].maxIterations` | Rounds of one loop, including the first | Holds the feedback decision with hold source `"loop_limit"` | `LOOP_LIMIT` |
+| `maxExecutions` | All materialized execution records, including skipped branches, across rounds and updates | Stops admission (pause source `"execution_limit"`); admitted executions finish | `EXECUTION_LIMIT` |
+| `graphTimeoutMs` | Wall time from the start of the run, including gates and pauses; never reset by an update or resume | Pauses the run and its running executions (`"graph_timeout"`) | `GRAPH_TIMEOUT` |
+| `maxTokens` | Reported input and output tokens of all executions, checked as each settles, so running executions can exceed it | Pauses the run and its running executions (`"token_limit"`) | `TOKEN_LIMIT` |
+
+`onLimit` defaults to `"pause"` in `startBraid`. `braid()` has no handle to
+resume with, so it always fails at a limit and rejects `onLimit: "pause"`.
+
+At a loop limit, the decision is held like `pauseAfter`: it appears in
+`pausedExecutionIds`, and core emits `execution_hold_added`, `limit_reached`, and
+`execution_paused`. To run more rounds, raise or remove the loop's
+`maxIterations` with `update({ loops, resume: [decisionId] })`. Releasing the
+decision without a higher limit ends the loop there: its exits are not taken.
+
+```ts
+const state = run.snapshot();
+run.update({
+  expectedRevision: state.revision,
+  loops: [{ id: "refinement", entry: "edit", maxIterations: 5 }],
+  resume: state.pausedExecutionIds,
+});
+```
+
+At a run limit, core emits `limit_reached` and `graph_paused` with the limit's
+pause source, and the snapshot carries that `pause`. Raise the limit with
+`run.setLimits({ maxExecutions, graphTimeoutMs, maxTokens })`, then call
+`run.resumeRun()`; `resumeRun` throws while the limit is still reached. Each given
+limit replaces the current one and `Infinity` removes it; `graphTimeoutMs` still
+counts from the start of the run. `setLimits` works at any time while the run is
+active, emits `limits_updated`, and never resumes the run by itself. A run already
+paused for another reason keeps that pause; reaching a limit then takes effect
+when it is resumed. `snapshot().limits` lists the finite limits.
+
 ## Failure and budgets
 
 `requireSuccess` defaults to false. Optional failures keep their errors and partial
@@ -368,11 +410,7 @@ a choice edge. A job can complete with failed optional executions.
 A captured `requireSuccess: true` failure immediately stops admission, aborts
 running siblings, waits for tracked writes and cleanup, and fails the job with
 `REQUIRED_NODE_FAILED`. Editing the definition's policy later has no effect on
-that instance. Infrastructure, checkpoint/cleanup, cancellation, graph deadline,
-loop limit, and total execution limit failures always fail the job.
+that instance. Infrastructure, checkpoint/cleanup, and cancellation failures
+always fail the job, as do limits under `onLimit: "fail"`.
 
-`maxExecutions` defaults to 1000 and must be a positive safe integer. It bounds
-all materialized execution records, including skipped branches, across all rounds
-and graph updates. `maxIterations` bounds each loop. The graph deadline includes
-waiting at gates and is never reset by an update or resume. Usage sums all
-instances once; Pi only claims job usage on the first terminal job retrieval.
+Usage sums all instances once; Pi only claims job usage on the first terminal job retrieval.

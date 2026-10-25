@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { ExecutionActivityTracker, formatActivityStatus, startBraid, validateGraph, type BraidInput, type ExecutionActivity, type ExecutionActivityPage, type BraidRun, type BraidResult, type BraidSnapshot, type GraphUpdate, type ExecutionEvent, type NodeResult, type ResumeOptions } from "@chrok/braid";
+import { ExecutionActivityTracker, formatActivityStatus, startBraid, validateGraph, type BraidInput, type BraidLimits, type ExecutionActivity, type ExecutionActivityPage, type BraidRun, type BraidResult, type BraidSnapshot, type GraphUpdate, type ExecutionEvent, type NodeResult, type ResumeOptions } from "@chrok/braid";
 import type { TokenUsage } from "@deepseek-ai/dsh-llm";
 import { createDshRunner, sumUsage, validateBudgets, type NodeProgress, type DshLlm } from "./runner.js";
 
-export interface JobOptions {
+export interface JobOptions extends BraidLimits {
   maxConcurrency?: number;
-  maxExecutions?: number;
   nodeTimeoutMs?: number;
-  graphTimeoutMs?: number;
   /** Default "pause": a node timeout suspends the execution and wakes the parent. */
   onNodeTimeout?: "pause" | "fail";
+  /** Default "pause": a limit holds the loop's decision or pauses the job, and wakes the parent. */
+  onLimit?: "pause" | "fail";
   maxToolRounds?: number;
   maxToolCalls?: number;
 }
@@ -121,6 +121,8 @@ export interface Completion {
   iteration?: number;
   paused?: boolean;
   sequence?: number;
+  /** A loop decision held because it chose feedback at its loop's maxIterations. */
+  loopLimit?: { loopId: string; maxIterations: number };
   /** The execution asked for a replan; its result is held for the parent. */
   replanRequested?: boolean;
 }
@@ -140,6 +142,13 @@ export interface ReplanNotice {
 }
 
 /** One manager per live DSH agent; foreground cancellation never owns these runs. */
+/** The loop limit that holds a feedback decision, for its pause reminder. */
+function loopLimit(state: BraidSnapshot, node: BraidSnapshot["executions"][string]): Pick<Completion, "loopLimit"> {
+  if (node.holdAfter?.source !== "loop_limit" || !node.loopId) return {};
+  const maxIterations = state.graph.loops?.find(loop => loop.id === node.loopId)?.maxIterations;
+  return maxIterations === undefined ? {} : { loopLimit: { loopId: node.loopId, maxIterations } };
+}
+
 export class BraidJobs {
   private jobs = new Map<string, Job>();
   private handles = new Map<string, string>();
@@ -265,7 +274,7 @@ export class BraidJobs {
     if (!paused && (!node.node.notifyOnCompletion || (node.holdAfter && !state?.error))) return;
     this.remind({ jobId, handle, status: node.status, executionId: node.executionId, nodeId: node.id,
       ...(node.iteration === undefined ? {} : { iteration: node.iteration }), paused, sequence: event.sequence,
-      ...(node.replan ? { replanRequested: true } : {}) });
+      ...(node.replan ? { replanRequested: true } : {}), ...loopLimit(state!, node) });
   }
 
   /** A timeout pause always wakes the parent, which must resume or cancel it. */
@@ -346,8 +355,9 @@ export class BraidJobs {
   }
 
   /** Admit work again and resume the executions the job pause paused. */
-  resumeJob(id: string, source = "agent"): JobSnapshot {
+  resumeJob(id: string, source = "agent", limits?: BraidLimits): JobSnapshot {
     const job = this.lookup(id);
+    if (limits) job.run.setLimits(limits);
     job.run.resumeRun();
     this.control(job, "resumed", source);
     this.changed(); return this.get(id);

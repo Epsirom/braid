@@ -38,7 +38,7 @@ export interface PanelJob extends PanelRow {
   observedAt: number;
   nodes: { id: string; type: string; status: string }[];
   edges: { from: string; to: string; choice?: string; feedback?: string; executionId?: string }[];
-  loops: { id: string; entry: string; maxIterations: number }[];
+  loops: { id: string; entry: string; maxIterations?: number }[];
   executions: PanelExecution[];
   pausedExecutionIds: string[];
   suspendedExecutionIds: string[];

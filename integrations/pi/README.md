@@ -187,10 +187,15 @@ for independent roots. Historical `executionId` pins are available only in
 
 A retry cycle needs a `loops` definition and exactly one feedback edge from a
 decision back to the loop entry, carrying both `choice` and `feedback: "<loop-id>"`.
-The decision needs another choice to exit. `maxIterations` counts the first round
-as well as retries. The body must be acyclic after removing the feedback edge;
-external edges enter only at the entry and leave only through that decision.
-Loops cannot nest or overlap. See the [loop example](../../docs/execution-control.md#structured-loops).
+The decision needs another choice to exit. The optional `maxIterations` counts
+the first round as well as retries; omit it unless the user asks for a limit.
+When the decision chooses feedback on the last allowed round, the job holds that
+decision and sends the parent a pause reminder: raise the loop's `maxIterations`
+in `braid_update` with `resume` to run more rounds, or release it with
+`braid_resume` to end the loop without taking its exits. The body must be
+acyclic after removing the feedback edge; external edges enter only at the entry
+and leave only through that decision. Loops cannot nest or overlap. See the
+[loop example](../../docs/execution-control.md#structured-loops).
 
 ## Shared prompts
 
@@ -294,10 +299,17 @@ IDs, not node IDs.
 
 `requireSuccess` defaults to false. Optional failures retain artifacts and allow
 unconditional recovery; required failures cancel siblings and fail the job after
-cleanup. All loops declare a finite `maxIterations`; total `maxExecutions`
-defaults to 1000 and spans updates. Deadlines keep running through pauses.
-The graph timeout includes time waiting for the parent to inspect and update a
-paused graph, and resuming does not extend it. Reserve time for integration.
+cleanup. Loop `maxIterations`, total `maxExecutions`, `maxTokens`, and the
+timeouts are unlimited unless set; `maxExecutions` spans updates. Deadlines keep
+running through pauses. The graph timeout includes time waiting for the parent
+to inspect and update a paused graph, and resuming does not extend it.
+
+Reaching `maxExecutions`, `graphTimeoutMs`, or `maxTokens` pauses the job instead
+of failing it (`options.onLimit: "fail"` fails it). `maxExecutions` only stops new
+executions; the other two also pause running ones. Once nothing is active, the
+parent gets the waiting reminder, and `braid_resume({ jobId, limits })` raises the
+limit and resumes the job. The job does not resume while the limit is still
+reached. `/braid:review` keeps failing at its round limit.
 
 See [execution control](../../docs/execution-control.md) for loop schemas, exact
 update semantics, historical dependencies, and workspace lineage. There is no
@@ -681,10 +693,12 @@ pass any of these fields in the `braid` tool's `options`:
 | `nodeTimeoutMs` | Active time allowed for each node after it starts, excluding pauses, in milliseconds |
 | `onNodeTimeout` | `pause` (default) suspends a timed-out node and wakes the parent; `fail` fails it with `NODE_TIMEOUT` |
 | `graphTimeoutMs` | Time allowed for the entire graph, including queueing and pauses, in milliseconds |
-| `maxExecutions` | Total materialized execution records, including skips; default 1000, positive safe integer |
+| `maxExecutions` | Total materialized execution records, including skips; unlimited by default, positive safe integer |
+| `maxTokens` | Total input and output tokens reported by all executions, checked as each finishes; unlimited by default |
+| `onLimit` | `pause` (default) holds a loop decision at its `maxIterations` or pauses the job at the other limits and wakes the parent; `fail` fails the job |
 
 For example, `options: { maxToolRounds: 20, maxToolCalls: 60, nodeTimeoutMs: 120000 }`.
-Omit tool/time fields for no tool/time limit; programmatic time/tool options also accept `Infinity`. The total execution limit is always finite.
+Omit tool, time, execution, and token fields for no limit; programmatic options also accept `Infinity`.
 Tool limits must be positive safe integers. Counts include `decide`, `git`,
 `finish_merge`, and rejected
 tool requests. A batch exceeding either tool limit is rejected before execution
