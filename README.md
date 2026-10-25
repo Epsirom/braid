@@ -555,8 +555,8 @@ budgets before every model call. The OpenAI-compatible adapter also refreshes
 finite time-budget reminders before each request. The core supplies optional
 `request.deadlines` on the `performance.now()` clock for adapters to calculate
 remaining node and shared graph time. Reminders do not extend hard limits or
-interrupt a model response already in progress. The core API's default timeouts
-remain 60 seconds per node and 5 minutes per graph.
+interrupt a model response already in progress. The core API sets no node or
+graph timeout unless you pass one.
 
 ## Results, timeouts, and accounting
 
@@ -585,9 +585,12 @@ its successors wait until it is resumed, with a new time budget, or cancelled wi
 `cancelExecutions`. See [pausing on node timeout](docs/execution-control.md#pausing-on-node-timeout).
 Otherwise, and always with `braid()` or `onNodeTimeout: "fail"`, a node timeout
 marks the running node `failed: NODE_TIMEOUT`; unconditional successors can
-consume its error and partial workspace. A graph timeout marks running nodes `failed: GRAPH_TIMEOUT`,
-skips queued/pending nodes with `graph_timeout`, and retains already completed
-terminal outputs. Timers are cleared when no longer needed.
+consume its error and partial workspace. A graph timeout pauses a `startBraid`
+run and its running executions until `setLimits` raises it (see
+[limits](docs/execution-control.md#limits)). With `braid()` or `onLimit: "fail"`,
+it marks running nodes `failed: GRAPH_TIMEOUT`, skips queued/pending nodes with
+`graph_timeout`, and retains already completed terminal outputs. Timers are
+cleared when no longer needed.
 
 Timeouts abort the invocation signal and stop waiting for the model even if it
 ignores cancellation. Workspace setup, tracked writes, and cleanup are awaited
@@ -649,14 +652,16 @@ scheduler event bus.
 
 Out of scope: cycles not closed by a decision's choice edge, nested/overlapping cycles, arbitrary
 code nodes, durable workflow recovery, saved templates, a graphical editing UI,
-and recursive Braid calls from model nodes.
+and recursive Braid calls from model nodes. The RSI Mode and Zen Mode milestones
+revisit some of these boundaries; see [ROADMAP.md](ROADMAP.md#milestones).
 
 ## Releases and upgrades
 
 The 0.5 API is experimental. See [GitHub releases](https://github.com/Epsirom/braid/releases)
 for release and upgrade notes.
 
-- Upgrading from 0.4: read the [0.4 → 0.5 migration guide](docs/compatibility.md#migrating-from-04-to-05).
+- Upgrading from 0.5: read the [0.5 → 0.6 migration guide](docs/compatibility.md#migrating-from-05-to-06).
+- Upgrading from 0.4: also follow the [0.4 → 0.5 migration guide](docs/compatibility.md#migrating-from-04-to-05).
 - Upgrading from 0.3: also follow the [0.3 → 0.4 migration guide](docs/compatibility.md#migrating-from-03-to-04).
 - Upgrading from 0.2: also follow the [0.2 → 0.3 migration guide](docs/compatibility.md#migrating-from-02-to-03).
 - Upgrading from 0.1: also follow the [0.1 → 0.2 guide](docs/compatibility.md#migrating-from-01-to-02).

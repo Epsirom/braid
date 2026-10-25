@@ -18,18 +18,20 @@ well as the compact definition.
 | --- | --- | --- |
 | Active runtime-managed invocations per graph | 4 | 4 |
 | Started and skipped executions across rounds/updates | Unlimited (`maxExecutions`) | Unlimited (`maxExecutions`) |
-| Node timeout (starts at admission, stops while suspended) | 60 seconds | Unlimited |
+| Node timeout (starts at admission, stops while suspended) | Unlimited | Unlimited |
 | On node timeout (`onNodeTimeout`) | Pause with `startBraid` and an interruptible runner; fail with `braid()` | Pause; the parent gets a reminder to resume or cancel |
-| Graph timeout (includes queueing, paused gates, and suspensions) | 5 minutes | Unlimited |
+| Graph timeout (includes queueing, paused gates, and suspensions) | Unlimited | Unlimited |
+| On reaching a limit that is set (`onLimit`) | Pause with `startBraid` (hold the decision at an edge `limit`, or pause the run); fail with `braid()` | Pause; the parent gets a reminder to raise the limit or stop |
 | Caller cancellation | `AbortSignal`; `cancelExecutions` for single executions | `braid_cancel` / panel `c`; `braid_cancel` with `executionIds` / panel `x` |
 | Pause running work | `pause` / `pauseRun` | `braid_pause` / panel `p` |
 | Worker tool loop | Decision continuation / merge Git-tool loop, bounded by deadlines | Unlimited by default; optional `maxToolRounds` and `maxToolCalls` |
 | Transient model error retries | Runner-defined | 3 per model request (`maxModelRetries`), within the current execution |
 | Result preview | Full result | 50 KB / 2,000 lines of text, then temporary full-text file |
-| Token / monetary budget | Not enforced | Not enforced |
+| Token budget | Unlimited (`maxTokens`, checked as executions settle) | Unlimited (`maxTokens`) |
+| Monetary budget | Not enforced | Not enforced |
 
-Pi keeps unlimited timeouts for interactive background work. For bounded work,
-submit explicit `options`, for example:
+Core and Pi set no time, execution, or token limit by default, which suits
+background work. For bounded work, submit explicit `options`, for example:
 
 ```json
 { "maxConcurrency": 2, "nodeTimeoutMs": 30000, "graphTimeoutMs": 120000, "maxToolRounds": 12, "maxToolCalls": 32 }
@@ -43,8 +45,8 @@ after validation; it does not bound validation CPU or input allocation.
 
 Token counts report only usage returned by runners. Missing counts, failed
 requests, or timeout-aborted calls can still incur charges. There is no hard cost
-ceiling, and adding a token counter after completion cannot prevent concurrent
-calls from overspending. Use provider account quotas, output-token limits in a
+ceiling: `maxTokens` counts reported usage as executions settle, so it cannot
+prevent running or concurrent calls from overspending. Use provider account quotas, output-token limits in a
 custom runner, host admission controls, and finite deadlines where needed.
 
 All events and full results live in memory; handoff events retain output for each
