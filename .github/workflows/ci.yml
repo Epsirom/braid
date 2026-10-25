@@ -24,18 +24,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: package-lock.json
-      # The workspace links stay out of the cache: the core link points back at the checkout.
-      - id: modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            node_modules
-            !node_modules/@chrok
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ matrix.node }}-${{ hashFiles('package-lock.json') }}
-      - if: steps.modules.outputs.cache-hit != 'true'
-        run: npm ci
-      - if: steps.modules.outputs.cache-hit == 'true'
-        run: node scripts/link-workspaces.mjs
+      - run: npm ci
       # Same as npm run verify, but the package smoke runs on Linux only: the tarballs are
       # identical on every OS, and its uncached consumer installs take minutes on Windows.
       - run: npm run verify:checks
@@ -57,18 +46,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: package-lock.json
-      # The workspace links stay out of the cache: the core link points back at the checkout.
-      - id: modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            node_modules
-            !node_modules/@chrok
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ matrix.node }}-${{ hashFiles('package-lock.json') }}
-      - if: steps.modules.outputs.cache-hit != 'true'
-        run: npm ci
-      - if: steps.modules.outputs.cache-hit == 'true'
-        run: node scripts/link-workspaces.mjs
+      - run: npm ci
       - if: matrix.suite != 'core'
         run: npm run build
       - run: npm run verify:${{ matrix.suite }}
