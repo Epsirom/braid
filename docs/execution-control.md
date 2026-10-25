@@ -1,24 +1,88 @@
 # Execution control
 
-Braid 0.2 separates mutable node definitions from execution instances. This is a
-breaking change from 0.1, covering bounded loops (#30) and live graph updates (#31).
+Since 0.6 the graph holds only execution instances. There is no separate,
+mutable definition graph: each node is a lineage of instances, and its latest
+instance doubles as the template for the next one. This is a breaking change
+from 0.5; see the [0.5 → 0.6 migration guide](compatibility.md#the-execution-only-graph).
 
-## Definitions and instances
+## Lineages and instances
 
-A node is a reusable definition identified by `id`. An execution has a unique
-`executionId`, a captured node definition, graph `revision`, predecessor execution
-IDs, and, within a loop, `loopId` and a one-based `iteration`. Editing or deleting
-a definition never changes or cancels an already admitted execution. Failure,
-notification, pause, model, prompt, and workspace policies are captured at admission.
+A node ID such as `review` names a **lineage**. Each instance in it has the
+execution ID `<nodeId>@<generation>`: `review@1`, `review@2`, and so on, counted
+from 1 and never reused, even after the node is removed and added again. Node
+IDs therefore cannot contain `@`. Execution IDs are unique within a run, not
+across runs. The latest instance is the lineage's **head**.
 
-`result.executions` retains every instance, including earlier rounds and deleted
-nodes. `result.nodes` is a convenience projection of the latest instance per node.
-Workspace records are keyed by execution ID. `terminalExecutionIds` identifies
-successful instances whose outputs were not consumed by another admitted instance;
-`terminalOutputs` provides their latest outputs keyed by node ID. Failed instances
-remain available separately, even when the overall job completes.
+Submitting a graph creates one pending instance per node at once, so every node
+has an execution ID before it runs. An instance records its `node` definition,
+the graph `revision` that created or last edited it, and, once it starts, the
+exact `predecessorExecutionIds` it ran with. A pending instance can still change;
+a started one never does.
 
-## Structured loops
+`result.executions` (and `snapshot().executions`) holds every instance, oldest
+first, including superseded ones and those of removed nodes. `result.nodes` holds
+the head of each node that was not removed. Workspace records are keyed by
+execution ID. `terminalExecutionIds` lists completed heads that no other
+instance consumed; `terminalOutputs` holds their outputs keyed by node ID. Failed
+instances remain available separately, even when the job completes.
+
+| Status | Meaning |
+| --- | --- |
+| `pending` | Not started. Snapshots add `waitReason` (see below) |
+| `running` | Started. A pause adds `suspension` with state `pausing`, `suspended`, or `resuming` |
+| `completed` | Finished with a valid result; may be `held` |
+| `failed` | Finished with an error, including cancelled instances and running ones that were replaced; may be `held` |
+| `skipped` | Never ran; `skipReason` says why |
+
+Markers: `held: true` while a settled instance's result is held (it is also in
+`pausedExecutionIds`), `supersededBy` on a started instance that was replaced,
+and `supersedes` on its replacement. Staleness is derived, not stored.
+
+`waitReason` on a pending instance is one of:
+
+| Reason | The instance waits because |
+| --- | --- |
+| `predecessors` | An input has not run yet |
+| `stale` | An input has a newer instance that has not settled, or will get one because something upstream of it is rerunning |
+| `hold` | An input, or something upstream of it, is held |
+| `run_paused` | The run is paused, by `pauseRun` or at a run limit |
+| `slot` | No concurrency slot is free, or the instance it replaces is still stopping |
+
+## Scheduling
+
+Edges connect lineages. When an instance starts, each incoming edge resolves to
+its source's head. An instance starts when all of its inputs have settled, no
+input is stale, no input is held, the run is not paused, a slot is free, and no
+other instance of its lineage is running: each lineage runs at most one instance
+at a time. If an input is blocked (a failed decision, or a skipped instance that
+is not merely inactive), the instance is skipped with `upstream_failed`; if no
+edge into it is active, it is skipped with `inactive`.
+
+An edge **reaches** a head when its source settles with a new result: a new
+instance of the source, or an edge that is new. What happens depends on the head:
+
+| Head | Action |
+| --- | --- |
+| Not started | It uses the new result when it starts |
+| Started | Once the head has settled and any hold on it is released, it is **cloned** into a new pending instance, which runs with the current heads of its inputs |
+
+A clone copies the head's definition, with any prompt template rendered from the
+current `promptTemplates`. When several edges reach a settled head, the first
+clones it and the others feed that clone. A clone of a failed head is a retry. A
+clone whose inputs are now all inactive is recorded as a skipped instance, which
+also ends any wait on it: if a decision reruns and no longer chooses a branch,
+the branch gets a skipped instance instead of keeping its old result.
+
+Inputs wait for stale upstream work, so fan-in stays consistent when paths have
+different lengths. In `edit → testA → review` alongside `edit → slow → testB →
+review`, rerunning `edit` reruns both paths, and `review@2` waits for `testB@2`
+instead of starting with `testB@1`. Replacing an instance therefore cascades
+downstream: each lineage below it reruns once its inputs are current.
+
+Edges do not steer running executions. Changing a running instance is always an
+explicit operation: human input, a hold, a replacement, or cancellation.
+
+## Cycles
 
 ```ts
 const graph = {
@@ -29,35 +93,37 @@ const graph = {
       choices: ["again", "done"], workspace: "read-only" },
     { type: "integrate", id: "apply" },
   ],
-  loops: [{ id: "refinement", entry: "edit", maxIterations: 3 }],
   edges: [
     { from: "edit", to: "review" },
-    { from: "review", to: "edit", choice: "again", feedback: "refinement" },
+    { from: "review", to: "edit", choice: "again", limit: 2 },
     { from: "review", to: "apply", choice: "done" },
   ],
 };
 ```
 
-Each loop declares one entry, one decision feedback edge, and an optional
-iteration limit; without `maxIterations` the decision alone ends the loop.
-Ignoring feedback and historical references, the graph must be acyclic. Loop
-bodies may fork and join; external edges enter only through the entry and leave
-only through the feedback decision. Nested/overlapping loops and
-arbitrary cycles are rejected. Sequential and independent loops are supported.
+A cycle is a loop. It must be closed by a decision's choice edge back to the node
+where each round starts, its **entry**: the cycle node that edges from outside
+enter, or, when none does, the target of the closing edge listed first in
+`nodes`. The decision also needs an exit choice. Edges enter a cycle only at its
+entry and leave only from its decision. Nested and overlapping cycles are
+rejected; sequential and independent cycles are supported. `closingEdges(graph)`
+returns the closing edge of each cycle, for displays and tools.
 
-The first round uses external predecessors or the job's root snapshot. A feedback
-choice creates another round only after all admitted instances in the current
-round have settled and their pause gates have been released. The next entry also
-receives the previous feedback execution. External inputs remain available in
-subsequent rounds. Exits wait for the loop to finish and use the final round.
-Choosing feedback at `maxIterations` holds the decision for the graph owner, or
-fails the job with `LOOP_LIMIT` under `onLimit: "fail"` (see [limits](#limits)).
+Nothing about a loop is declared, and no loop body is copied. When the decision
+chooses the closing edge, the edge reaches the entry's head and clones it, with
+the decision as an extra input; each instance after it is cloned in turn once
+its inputs are current, which unrolls one round. A new round starts only after
+everything in the previous round that feeds the decision has settled and been
+released. Exits wait while the cycle is rerunning and use the final round.
+Inputs from outside the cycle stay available to every round.
 
-Loops do not overlap their own rounds. Live updates can change definitions,
-edges, and loop topology during an iteration; no boundary pause is required.
-Already admitted instances drain normally. Updates do not replay a completed
-activation just because its definition or incoming edges changed. Use a new node
-ID for new work outside a subsequent loop round.
+The closing edge's optional `limit` counts how many times it may fire, so
+`limit: 2` allows three rounds. Without a limit the decision alone ends the
+cycle. Choosing the edge at its limit holds the decision for the graph owner,
+or fails the job with `EDGE_LIMIT` under `onLimit: "fail"` (see [limits](#limits)).
+
+An edge from a new node into a settled lineage that does not close a cycle
+reruns that lineage once, for example `fix → test` added after `test` finished.
 
 ## Live updates and gates
 
@@ -72,12 +138,11 @@ const run = startBraid({
 
 // After execution_paused (or after obtaining a snapshot from your host):
 const state = run.snapshot();
-const executionId = state.pausedExecutionIds[0];
 run.update({
   expectedRevision: state.revision,
   upsertNodes: [{ type: "execute", id: "fix", prompt: "Implement the fix." }],
-  addEdges: [{ from: "inspect", to: "fix", executionId }],
-  resume: [executionId],
+  addEdges: [{ from: "inspect", to: "fix" }],
+  resume: ["inspect@1"],
 });
 const result = await run.result;
 ```
@@ -88,29 +153,39 @@ const result = await run.result;
 
 Updates require the current `expectedRevision` and commit atomically. A successful
 update increments the graph revision once. A stale revision or invalid candidate
-changes nothing, including pause gates. `upsertNodes` replaces whole definitions;
-`removeNodeIds` also removes incident edges. `addEdges` and `removeEdges` use full
-edge identities, including choice, feedback, and execution ID. `promptTemplates`
-and `loops` replace their respective collections when supplied. Template edits
-are rendered for future admissions; running prompts remain unchanged.
+changes nothing, including pause gates. What an update does to a node depends on
+its head:
 
-Completion routes through the latest graph. If A is running and A→B is replaced
-with A→C, A's completion can admit C. A previously admitted B continues with its
-captured inputs. A historical dependency pins `edge.executionId` and matching
-`from` to a settled execution, even if its definition was removed. Initial
-submissions cannot reference history from another job.
+| Field | Not started | Started (running or settled) |
+| --- | --- | --- |
+| `upsertNodes` (complete definitions) | Edits the instance in place; no history is kept | **Replaces** it: a new pending instance with `supersedes`, and the old one gets `supersededBy`. A running instance is cancelled (`CANCELLED`, "replaced by a graph update"); a held one is released without routing. Once the replacement settles, downstream lineages rerun |
+| `removeNodeIds` | Deletes the instance (`execution_removed`) | Cancels it if running, releases any hold, and keeps it in history |
+
+A new ID in `upsertNodes` adds a node. Upserting an unchanged definition of a
+started node reruns it from there; upsert only the nodes you mean to change or
+rerun. To review a replacement before its downstream lineages rerun, give it
+`pauseAfter: true`: they then wait on the hold. `removeNodeIds` closes the
+lineage together with its edges; the ID may be added again later and continues
+with the next generation. A cancelled instance of a replaced or removed node never
+fails the run, even with `requireSuccess`.
+
+Edges are identified by `from`, `to`, and `choice`. `addEdges` rejects an edge that
+already exists, and `removeEdges` rejects one that does not; `limit` is ignored
+there. To change an edge's limit, remove it and add it again in the same update:
+its firing count is kept. Removing a node, or an edge, that does not exist is an
+error. `promptTemplates` replaces the template map when supplied; pending
+instances are rendered again, started ones keep the prompt they ran with.
 
 `pauseAfter` holds an execution's outgoing scheduling and keeps the job alive,
 even at a leaf. Independent branches continue. Pi sends a pause reminder;
 `notifyOnCompletion` alone only sends a reminder. Resume specific execution IDs,
-either on its own or in the same transaction as a graph update. Removing a paused
-node definition does not discard its gate: explicitly resume or cancel it.
+either on its own or in the same transaction as a graph update.
 
 ### Holding a running execution
 
-`pauseAfter` is captured when an execution is admitted, so a `braid_update` that
-sets it affects only later executions. To hold the result of an execution that is
-already running, add a hold to that execution:
+A started instance never changes, so setting `pauseAfter` with an update on a
+running node would replace it. To hold the result of an execution that is
+already running, add a hold to that execution instead:
 
 ```ts
 run.holdAfter([executionId], true, { source: "agent" });  // hold once it settles
@@ -120,8 +195,8 @@ run.holdAfter([executionId], false, { source: "agent" }); // or let it flow down
 A hold set this way behaves exactly like `pauseAfter`: when the execution settles,
 completed or failed, it is listed in `pausedExecutionIds`, `execution_paused` is
 emitted, and `resume` releases it. It applies to this execution only and changes
-neither its captured `node` nor the graph definition. Removing a hold that came
-from the definition's `pauseAfter` releases only this execution; later ones still
+neither its `node` nor later instances of the node. Removing a hold that came
+from the node's `pauseAfter` releases only this execution; later ones still
 pause. Each execution's `holdAfter` field (`{ source, requestedAt }`, with source
 `"definition"` for `pauseAfter`) is authoritative over `node.pauseAfter`.
 
@@ -321,7 +396,7 @@ including suspensions; there is no restart or crash recovery of the scheduler it
 ## Workspaces and merge operations
 
 Every execution gets a new Git worktree, including read-only executions and
-later loop visits. Root worktrees derive from one initial snapshot; successors
+later rounds of a cycle. Root worktrees derive from one initial snapshot; successors
 derive from predecessor checkpoints. Read-only is a capability restriction,
 not a live view of the caller. Outside Git, filesystem tools remain read-only.
 
@@ -368,25 +443,29 @@ finishes or its owner stops it. Set a limit only to bound a run:
 
 | Limit | Scope | Under `onLimit: "pause"` | Under `onLimit: "fail"` |
 | --- | --- | --- | --- |
-| `loops[].maxIterations` | Rounds of one loop, including the first | Holds the feedback decision with hold source `"loop_limit"` | `LOOP_LIMIT` |
-| `maxExecutions` | All materialized execution records, including skipped branches, across rounds and updates | Stops admission (pause source `"execution_limit"`); admitted executions finish | `EXECUTION_LIMIT` |
+| `edge.limit` | Times the edge that closes a cycle fires, so rounds after the first | Holds the decision that chose it, with hold source `"edge_limit"` | `EDGE_LIMIT` |
+| `maxExecutions` | Started and skipped instances, across rounds and updates; pending instances do not count | Stops admission (pause source `"execution_limit"`); started executions finish | `EXECUTION_LIMIT` |
 | `graphTimeoutMs` | Wall time from the start of the run, including gates and pauses; never reset by an update or resume | Pauses the run and its running executions (`"graph_timeout"`) | `GRAPH_TIMEOUT` |
 | `maxTokens` | Reported input and output tokens of all executions, checked as each settles, so running executions can exceed it | Pauses the run and its running executions (`"token_limit"`) | `TOKEN_LIMIT` |
 
 `onLimit` defaults to `"pause"` in `startBraid`. `braid()` has no handle to
 resume with, so it always fails at a limit and rejects `onLimit: "pause"`.
 
-At a loop limit, the decision is held like `pauseAfter`: it appears in
-`pausedExecutionIds`, and core emits `execution_hold_added`, `limit_reached`, and
-`execution_paused`. To run more rounds, raise or remove the loop's
-`maxIterations` with `update({ loops, resume: [decisionId] })`. Releasing the
-decision without a higher limit ends the loop there: its exits are not taken.
+At an edge limit, the decision is held like `pauseAfter`: it appears in
+`pausedExecutionIds`, and core emits `execution_hold_added`, `limit_reached`
+(with `limit: "edge"`, the edge, and the decision's `nodeId`), and
+`execution_paused`. To run more rounds, replace the edge with a higher limit, or
+none, in an update that resumes the decision; the edge keeps the count of times
+it already fired. Releasing the decision without a higher limit ends the cycle
+there: the edge does not fire, and the decision's other edges stay inactive.
 
 ```ts
 const state = run.snapshot();
+const edge = { from: "review", to: "edit", choice: "again" };
 run.update({
   expectedRevision: state.revision,
-  loops: [{ id: "refinement", entry: "edit", maxIterations: 5 }],
+  removeEdges: [edge],
+  addEdges: [{ ...edge, limit: 4 }],
   resume: state.pausedExecutionIds,
 });
 ```
@@ -407,10 +486,11 @@ when it is resumed. `snapshot().limits` lists the finite limits.
 artifacts; unconditional successors can recover. A failed decision never activates
 a choice edge. A job can complete with failed optional executions.
 
-A captured `requireSuccess: true` failure immediately stops admission, aborts
-running siblings, waits for tracked writes and cleanup, and fails the job with
-`REQUIRED_NODE_FAILED`. Editing the definition's policy later has no effect on
-that instance. Infrastructure, checkpoint/cleanup, and cancellation failures
+A `requireSuccess: true` failure immediately stops admission, aborts running
+siblings, waits for tracked writes and cleanup, and fails the job with
+`REQUIRED_NODE_FAILED`. The policy is the instance's own: replacing a running
+instance to change it cancels that instance, and a cancelled instance of a
+replaced or removed node does not fail the job. Infrastructure, checkpoint/cleanup, and cancellation failures
 always fail the job, as do limits under `onLimit: "fail"`.
 
 Usage sums all instances once; Pi only claims job usage on the first terminal job retrieval.

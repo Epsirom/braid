@@ -98,12 +98,12 @@ const invalid: [string, unknown][] = [
     ),
   ],
   [
-    "conditional cycle",
+    "unconditional cycle",
     graph(
-      [decision(), execute("a")],
+      [execute("a"), execute("b")],
       [
-        { from: "route", to: "a", choice: "left" },
-        { from: "a", to: "route" },
+        { from: "a", to: "b" },
+        { from: "b", to: "a" },
       ],
     ),
   ],
@@ -152,7 +152,7 @@ test("validation errors identify the invalid node or edge and explain undeclared
   assert.throws(() => validateGraph({
     ...graph([execute("a"), execute("b")]), edges: [{ from: "a", to: "b", condition: "ok" }],
   } as unknown as BraidInput), /Edge 'a' -> 'b': unsupported field 'condition'/);
-  assert.throws(() => validateGraph(graph([execute("a")], [{ from: "a", to: "a" }])), /Declare a bounded loop.*choice and feedback=loopId/);
+  assert.throws(() => validateGraph(graph([execute("a")], [{ from: "a", to: "a" }])), /Cycle through 'a' must be closed by a decision's choice edge/);
 });
 
 test("validation allows terminal decisions, unconnected roots, conditional fan-out, and distinct edges to one target", () => {

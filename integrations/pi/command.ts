@@ -378,17 +378,12 @@ export class BraidPanel implements Component {
         this.theme.fg("muted", "Press Esc to return to the graph."),
       ] };
     }
-    // Latest-node results omit the loop iteration; their execution record has it.
-    const executions = job.result?.executions ?? job.execution?.executions;
-    const iteration = (node as { iteration?: number }).iteration ??
-      (node.executionId ? executions?.[node.executionId]?.iteration : undefined);
-    const withIteration = iteration === undefined ? node : { ...node, iteration };
     const activity = node.executionId ? this.jobs.getActivity(job.jobId, node.executionId) : undefined;
     const transcript = node.executionId ? this.jobs.getTranscript(job.jobId, node.executionId) : undefined;
     const siblings = this.executionsOf(job, node.id);
     const position = node.executionId ? siblings.indexOf(node.executionId) : -1;
     const header = [
-      ...renderSessionHeader(withIteration, this.theme, job.live.observedAt, job.live.progress[node.id], activity),
+      ...renderSessionHeader(node, this.theme, job.live.observedAt, job.live.progress[node.id], activity),
       ...(siblings.length > 1 ? [this.theme.fg("dim", `execution ${position + 1} of ${siblings.length} for this node · ←/→ to switch`)] : []),
     ];
     let failure: string | undefined;

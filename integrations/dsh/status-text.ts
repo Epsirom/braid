@@ -1,5 +1,7 @@
-import type {
-  BraidInput, BraidInputNode, BraidSnapshot, ExecutionActivity, ExecutionError, ExecutionHold, ExecutionSuspension, NodeExecution, NodeResult, NodeWorkspace,
+import {
+  closingEdges,
+  type BraidInput, type BraidInputNode, type BraidSnapshot, type Edge, type ExecutionActivity, type ExecutionError, type ExecutionHold,
+  type ExecutionSuspension, type NodeExecution, type NodeResult, type NodeWorkspace,
 } from "@chrok/braid";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -51,14 +53,14 @@ function nodeLine(node: BraidInputNode): string {
 }
 
 /** Accepted definitions without prompts, which the caller already sent. */
-export function formatGraph(graph: Pick<BraidInput, "nodes" | "edges" | "loops">): string {
+export function formatGraph(graph: Pick<BraidInput, "nodes" | "edges">): string {
   const lines = ["Nodes:", ...graph.nodes.map(nodeLine), "Edges:"];
+  const closing = new Set(closingEdges(graph));
   lines.push(...graph.edges.length ? graph.edges.map(edge => {
-    const labels = [edge.choice && `choice=${edge.choice}`, edge.feedback && `feedback=${edge.feedback}`, edge.executionId && `execution=${edge.executionId}`].filter(Boolean);
+    const labels = [edge.choice && `choice=${edge.choice}`, closing.has(edge) && "closes a cycle",
+      edge.limit !== undefined && `limit=${edge.limit}`].filter(Boolean);
     return `- ${edge.from} -> ${edge.to}${labels.length ? ` [${labels.join(", ")}]` : ""}`;
   }) : ["- none"]);
-  if (graph.loops?.length) lines.push("Loops:", ...graph.loops.map(loop =>
-    `- ${loop.id}: entry ${loop.entry}, ${loop.maxIterations === undefined ? "no iteration limit" : `at most ${loop.maxIterations} iterations`}`));
   return lines.join("\n");
 }
 
@@ -72,10 +74,18 @@ function workspaceLine(workspace: NodeWorkspace): string {
   return parts.join(" · ");
 }
 
-function executionLine(execution: NodeResult & Partial<Pick<NodeExecution, "iteration" | "node">>): string {
+const waitReasons = {
+  predecessors: "an input has not run yet", stale: "an input is being rerun", hold: "an input is held",
+  run_paused: "the job is paused", slot: "a free slot",
+} as const;
+
+function executionLine(execution: NodeResult): string {
   const parts = [execution.executionId ?? "(no execution)", `node ${execution.id}`];
-  if (execution.iteration) parts.push(`iteration ${execution.iteration}`);
   parts.push(execution.skipReason ? `${execution.status} (${execution.skipReason})` : execution.status);
+  if (execution.waitReason) parts.push(`waiting: ${waitReasons[execution.waitReason]}`);
+  if (execution.held) parts.push("held");
+  if (execution.supersedes) parts.push(`replaces ${execution.supersedes}`);
+  if (execution.supersededBy) parts.push(`superseded by ${execution.supersededBy}`);
   if (execution.suspension) parts.push(`${execution.suspension.state}, ${pausedBy(execution.suspension)}`);
   if (pendingHold(execution)) parts.push(`holds when finished, set by ${holdSource(execution.holdAfter!)}`);
   if (execution.replan) parts.push("requested a replan");
@@ -109,10 +119,10 @@ const USER_HOLD_NOTE = "The user set this hold; do not remove it or release the 
 
 /** A hold that applies once a still-unsettled execution finishes. Settled holds are paused executions. */
 function pendingHold(execution: NodeResult): boolean {
-  return Boolean(execution.holdAfter) && (execution.status === "running" || execution.status === "runnable");
+  return Boolean(execution.holdAfter) && execution.status === "running";
 }
 const holdSource = (hold: ExecutionHold) => hold.source === "definition" ? "pauseAfter" : hold.source === "replan" ? "its replan request"
-  : hold.source === "loop_limit" ? "its loop's maxIterations" : hold.source;
+  : hold.source === "edge_limit" ? "its edge limit" : hold.source;
 
 /** A node timeout pause waits for the parent's decision. */
 const TIMEOUT_PAUSE_NOTE = "Its node timeout ran out. Resume it with braid_resume (optionally with nodeTimeoutMs; the default is the job's nodeTimeoutMs again), or fail only this execution with braid_cancel and executionIds. Its successors wait until then.";
@@ -213,7 +223,7 @@ export function formatActivity(activity: ExecutionActivity, now: number, jobId: 
 
 export interface NodeStatus {
   job: JobSnapshot;
-  node: NodeResult & Partial<Pick<NodeExecution, "iteration" | "node">>;
+  node: NodeResult & Partial<Pick<NodeExecution, "node">>;
   activity?: ExecutionActivity;
   now: number;
 }
@@ -223,7 +233,10 @@ export function formatNodeStatus({ job, node, activity, now }: NodeStatus): stri
   const lines = [`Braid job ${job.handle} · ${job.status} · ${control(job.execution)}`,
     ...node.suspension ? [`Execution is ${node.suspension.state}, ${pausedBy(node.suspension)}${node.suspension.suspendedAt !== undefined ? ` since ${iso(node.suspension.suspendedAt)}` : ""}.${node.suspension.source === "user" ? ` ${USER_PAUSE_NOTE}` : node.suspension.source === "node_timeout" ? ` ${TIMEOUT_PAUSE_NOTE}` : ""}`] : [],
     ...pendingHold(node) ? [`Its result will be held when it finishes (set by ${holdSource(node.holdAfter!)}).${node.holdAfter!.source === "user" ? ` ${USER_HOLD_NOTE}` : ""}`] : [],
-    `Execution ${node.executionId ?? "(none yet)"} · node ${node.id}${node.node ? ` (${node.node.type})` : ""}${node.iteration ? ` · iteration ${node.iteration}` : ""} · ${node.skipReason ? `${node.status} (${node.skipReason})` : node.status}`];
+    `Execution ${node.executionId ?? "(none yet)"} · node ${node.id}${node.node ? ` (${node.node.type})` : ""} · ${node.skipReason ? `${node.status} (${node.skipReason})` : node.status}` +
+      `${node.waitReason ? ` · waiting: ${waitReasons[node.waitReason]}` : ""}${node.held ? " · held" : ""}`,
+    ...node.supersedes ? [`It replaces ${node.supersedes}.`] : [],
+    ...node.supersededBy ? [`Superseded by ${node.supersededBy}; it no longer feeds successors.`] : []];
   const timing = [node.startedAt !== undefined && `started ${iso(node.startedAt)}`, node.latencyMs !== undefined && `took ${duration(node.latencyMs)}`,
     node.model && `model ${node.model}`, node.usage && `usage input ${node.usage.inputTokens}, output ${node.usage.outputTokens}`].filter(Boolean);
   if (timing.length) lines.push(timing.join(" · "));
@@ -258,9 +271,7 @@ export function formatJobStatus(job: JobSnapshot, now: number): string {
   header.push(`Goal: ${clip(job.goal, GOAL_CHARS)}`);
   const sections = [header.join("\n")];
   const executions = Object.values(state.executions);
-  if (executions.length) sections.push([`Executions (${executions.length}):`, ...executions.map(executionLine)].join("\n"));
-  const pending = Object.values(state.nodes).filter(node => !node.executionId);
-  if (pending.length) sections.push(["Nodes without executions:", ...pending.map(executionLine)].join("\n"));
+  if (executions.length) sections.push([`Executions (${executions.length}), oldest first; each node's latest is its current one:`, ...executions.map(executionLine)].join("\n"));
   const terminal = new Set(job.result?.terminalExecutionIds ?? []);
   const outputs = executions.filter(execution => execution.output !== undefined);
   if (outputs.length) sections.push(["Outputs:", ...outputs.map(execution =>
@@ -273,7 +284,7 @@ export function formatJobStatus(job: JobSnapshot, now: number): string {
 
 /** The waking reminder for an execution its node timeout paused. */
 export function formatTimeoutPause(pause: TimeoutPause): string {
-  const execution = `${pause.executionId}${pause.iteration ? ` (iteration ${pause.iteration})` : ""}`;
+  const execution = pause.executionId;
   return [
     `Braid job ${pause.handle} node ${JSON.stringify(pause.nodeId)} execution ${execution} was paused because it exceeded its node timeout:`,
     `it ran ${duration(pause.activeMs)} against a budget of ${duration(pause.nodeTimeoutMs)}.`,
@@ -291,7 +302,7 @@ export function formatTimeoutPause(pause: TimeoutPause): string {
 /** The job option each limit pause raises, by pause source. */
 const jobLimits: Record<string, string> = { execution_limit: "maxExecutions", graph_timeout: "graphTimeoutMs", token_limit: "maxTokens" };
 const waitingSource = (source: string) =>
-  ({ definition: "pauseAfter", replan: "its replan request", node_timeout: "node timeout", agent: "you", loop_limit: "its loop's maxIterations",
+  ({ definition: "pauseAfter", replan: "its replan request", node_timeout: "node timeout", agent: "you", edge_limit: "its edge limit",
     ...Object.fromEntries(Object.entries(jobLimits).map(([key, limit]) => [key, `its ${limit} limit`])) } as Record<string, string>)[source] ?? source;
 const waitingItem = (item: WaitingItem) => item.kind === "job" ? `the job pause (by ${waitingSource(item.source)})`
   : `${item.kind === "held" ? "the held result of" : "suspended"} node ${JSON.stringify(item.nodeId)} execution ${item.executionId} (${waitingSource(item.source)})`;
@@ -314,19 +325,20 @@ export function formatWaiting(notice: WaitingNotice): string {
   ].filter(Boolean).join(" ");
 }
 
-/** Reminder text for a loop decision held at its loop's maxIterations. */
-export function formatLoopLimit(handle: string, executionId: string, limit: NonNullable<Completion["loopLimit"]>): string {
+/** Reminder text for a decision held because the edge it chose is at its limit. */
+export function formatEdgeLimit(handle: string, executionId: string, edge: Edge): string {
+  const identity = JSON.stringify({ from: edge.from, to: edge.to, ...(edge.choice !== undefined ? { choice: edge.choice } : {}) });
   return [
-    `It chose to repeat loop ${JSON.stringify(limit.loopId)}, which reached its maxIterations of ${limit.maxIterations}, so the job holds it instead of starting another round.`,
-    `To run more rounds, call braid_update with loops (every loop, with this one's maxIterations raised or removed) and resume ["${executionId}"] in the same update.`,
-    `To stop iterating, release it with braid_resume({"jobId":"${handle}","expectedRevision":<current>,"executionIds":["${executionId}"]}): the loop ends and its exits are skipped.`,
-    "Or cancel the job with braid_cancel. Nothing in this loop runs until you act.",
+    `It chose ${JSON.stringify(edge.choice)}, but the edge back to ${JSON.stringify(edge.to)} already fired its limit of ${edge.limit} times, so the job holds it instead of starting another round.`,
+    `To run more rounds, call braid_update with removeEdges [${identity}], addEdges [the same edge with a higher limit, or without limit], and resume ["${executionId}"] in the same update.`,
+    `To stop, release it with braid_resume({"jobId":"${handle}","expectedRevision":<current>,"executionIds":["${executionId}"]}): the cycle ends and its other edges stay inactive.`,
+    "Or cancel the job with braid_cancel. Nothing in this cycle runs until you act.",
   ].join(" ");
 }
 
 /** The waking reminder for a running execution that asked the parent to replan. */
 export function formatReplanRequest(notice: ReplanNotice): string {
-  const execution = `${notice.executionId}${notice.iteration ? ` (iteration ${notice.iteration})` : ""}`;
+  const execution = notice.executionId;
   const lookup = JSON.stringify({ jobId: notice.handle, executionId: notice.executionId });
   return [
     `Braid job ${notice.handle} node ${JSON.stringify(notice.nodeId)} execution ${execution} asks you to replan: ${notice.reason}`,

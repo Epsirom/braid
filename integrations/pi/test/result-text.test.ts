@@ -10,15 +10,14 @@ test("git results read like Pi's bash output and keep output byte-exact", () => 
   assert.equal(formatGitResult({ exitCode: 128, stdout: "", stderr: "fatal: bad revision\n" }), "fatal: bad revision\n\nCommand exited with code 128");
 });
 
-test("graphs list node settings, labelled edges, and loops without prompts", () => {
+test("graphs list node settings and labelled edges, including the edge that closes a cycle, without prompts", () => {
   assert.equal(formatGraph({
     nodes: [
       { type: "execute", id: "work", prompt: { template: "task", variables: {} }, workspace: "read-only", model: "p/m", requireSuccess: true },
       { type: "decision", id: "check", prompt: "secret prompt", choices: ["retry", "done"], pauseAfter: true },
       { type: "merge", id: "join" },
     ],
-    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "retry", feedback: "again" }, { from: "check", to: "join", choice: "done", executionId: "check@1" }],
-    loops: [{ id: "again", entry: "work", maxIterations: 3 }],
+    edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "retry", limit: 2 }, { from: "check", to: "join", choice: "done" }],
   }), [
     "Nodes:",
     "- work: execute, workspace=read-only, model=p/m, template=task, requireSuccess",
@@ -26,9 +25,7 @@ test("graphs list node settings, labelled edges, and loops without prompts", () 
     "- join: merge",
     "Edges:",
     "- work -> check",
-    "- check -> work [choice=retry, feedback=again]",
-    "- check -> join [choice=done, execution=check@1]",
-    "Loops:",
-    "- again: entry work, at most 3 iterations",
+    "- check -> work [choice=retry, closes a cycle, limit=2]",
+    "- check -> join [choice=done]",
   ].join("\n"));
 });

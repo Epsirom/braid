@@ -33,22 +33,19 @@ test("execution log records graph creation, handoffs, routing, skips, and comple
   );
   assert.deepEqual(types(result.events), [
     "graph_created",
-    "node_created",
-    "node_created",
-    "node_created",
-    "node_created",
+    "execution_created",
+    "execution_created",
+    "execution_created",
+    "execution_created",
     "edge_created",
     "edge_created",
     "edge_created",
-    "node_runnable",
     "node_started",
     "node_completed",
     "node_skipped",
-    "node_runnable",
     "node_started",
     "handoff",
     "node_completed",
-    "node_runnable",
     "node_started",
     "handoff",
     "node_completed",
@@ -69,11 +66,15 @@ test("execution log records graph creation, handoffs, routing, skips, and comple
     edgeCount: 3,
   });
   assert.deepEqual(result.events[1], {
-    type: "node_created",
+    type: "execution_created",
     sequence: 2,
     timestamp: result.events[1]!.timestamp,
+    executionId: "route@1",
+    revision: 0,
     nodeId: "route",
     nodeType: "decision",
+    generation: 1,
+    cause: "submitted",
   });
   assert.deepEqual(result.events[5], {
     type: "edge_created",

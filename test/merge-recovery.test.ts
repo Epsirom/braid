@@ -194,12 +194,11 @@ test("loop executions derive fresh worktrees from the preceding result and never
   const cwd = await repository(t);
   const paths: string[] = [];
   const result = await braid({ goal: "iterate", nodes: [execute("edit"), { ...decision("check", ["again", "done"]), workspace: "read-only" }],
-    edges: [{ from: "edit", to: "check" }, { from: "check", to: "edit", choice: "again", feedback: "iteration" }],
-    loops: [{ id: "iteration", entry: "edit", maxIterations: 3 }],
+    edges: [{ from: "edit", to: "check" }, { from: "check", to: "edit", choice: "again", limit: 2 }],
   }, { cwd, runner: async request => {
     paths.push(request.workspace!.worktreeRoot!);
     const contents = await readFile(join(request.workspace!.workingDirectory, "file.txt"), "utf8");
-    const round = request.execution.iteration!;
+    const round = request.execution.generation!;
     if (request.node.id === "edit") {
       assert.equal(contents, round === 1 ? "original\n" : `round ${round - 1}\n`);
       await request.withWorkspaceWrite!(() => writeFile(join(request.workspace!.workingDirectory, "file.txt"), `round ${round}\n`));
@@ -214,7 +213,7 @@ test("loop executions derive fresh worktrees from the preceding result and never
   assert.equal(new Set(paths).size, 6);
   assert.equal(await readFile(join(cwd, "file.txt"), "utf8"), "original\n");
   for (const round of [1, 2, 3]) {
-    const record = Object.values(result.executions).find(value => value.id === "edit" && value.iteration === round)!;
+    const record = Object.values(result.executions).find(value => value.id === "edit" && value.generation === round)!;
     assert.equal(await git(cwd, "show", `${record.workspace!.checkpointRef}:file.txt`), `round ${round}`);
   }
   await noWorktrees(cwd, result);

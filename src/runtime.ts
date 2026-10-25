@@ -22,8 +22,10 @@ import type {
   ReplanSuggestion,
   ResumeOptions,
   CancelExecutionsOptions,
+  BraidNode,
+  WaitReason,
 } from "./types.js";
-import { compileGraph, type Graph } from "./validate.js";
+import { compileGraph, edgeIdentity, type Graph } from "./validate.js";
 import { GitWorkspaces, WorkspaceInputError, WorkspaceCheckpointError } from "./workspaces.js";
 import { resolve } from "node:path";
 
@@ -514,17 +516,25 @@ async function runNode(
   }
 }
 
-interface LoopState {
-  iteration: number;
-  records: Map<string, NodeExecution>;
-  previous?: NodeExecution;
-  done: boolean;
-  /** The feedback decision held at maxIterations under onLimit: "pause". */
-  limitHold?: string;
+/** A cycle-closing edge that fired: its source becomes an input of the target lineage's next instance. */
+interface Firing {
+  edge: Edge;
+  source: NodeExecution;
 }
 
+/** The instances of one node, oldest first; the last is the head. */
+interface Lineage {
+  instances: NodeExecution[];
+  /** Firings that reached the started head; they attach to its clone once it settles and is released. */
+  queued: Firing[];
+}
+
+/** Why a lineage's head cannot be used as an input yet; undefined when it is current. */
+type Dirt = "predecessors" | "stale" | "hold" | undefined;
+const dirtRank = { hold: 3, predecessors: 2, stale: 1 } as const;
+const worse = (a: Dirt, b: Dirt): Dirt => !a ? b : !b ? a : dirtRank[a] >= dirtRank[b] ? a : b;
+
 const settled = (record: NodeResult) => ["completed", "failed", "skipped"].includes(record.status);
-const edgeKey = (edge: Edge) => JSON.stringify([edge.from, edge.to, edge.choice, edge.feedback, edge.executionId]);
 
 /** Execute a graph to completion. Use startBraid for live edits and pause/resume. */
 export async function braid(input: BraidInput, options: BraidOptions): Promise<BraidResult> {
@@ -534,12 +544,12 @@ export async function braid(input: BraidInput, options: BraidOptions): Promise<B
   return startBraid(input, { ...options, onNodeTimeout: "fail", onLimit: "fail" }).result;
 }
 
-/** Definitions are mutable; each admitted execution captures its definition and inputs. */
+/** The graph holds execution instances; each node is a lineage whose latest instance is its head. */
 export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   validateOptions(options);
   let definition = structuredClone(input);
   let graph = compileGraph(definition);
-  if (graph.edges.some(edge => edge.executionId)) throw new TypeError("Initial edges cannot reference historical executions");
+  let nodeById = new Map(graph.nodes.map(node => [node.id, node]));
   const { runner, defaultModel, signal } = options;
   const maxConcurrency = options.maxConcurrency ?? 4;
   const limits: Required<BraidLimits> = {
@@ -556,9 +566,28 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   const runId = crypto.randomUUID();
   const log = createEventLog(options.onEvent);
   const executions = new Map<string, NodeExecution>();
-  const latest = new Map<string, NodeExecution>();
-  const roots = new Map<string, NodeExecution>();
-  const loops = new Map<string, LoopState>();
+  // Open lineages, in graph order. A removed lineage keeps its instances in `executions` only.
+  const lineages = new Map<string, Lineage>();
+  // Generations never restart, so a removed and re-added node gets new execution IDs.
+  const generations = new Map<string, number>();
+  // For each started instance: the upstream instance it used from each non-closing incoming edge's lineage.
+  const consulted = new Map<string, Map<string, string>>();
+  // Cycle-closing firings attached to a pending instance.
+  const attached = new Map<string, Firing[]>();
+  // Times each edge identity fired, for edge limits.
+  const firings = new Map<string, number>();
+  // Settled instances whose cycle-closing edges have not been routed yet.
+  const unrouted = new Set<string>();
+  // Decisions held at an edge limit; releasing one without a higher limit ends the cycle.
+  const limitHeld = new Set<string>();
+  // Running instances per lineage ID: a lineage starts its next instance only after the last one stops.
+  const runningLineages = new Map<string, number>();
+  // Instances cancelled because an update replaced or removed them; their failure is not a run failure.
+  const discarded = new Set<string>();
+  let admitted = 0;
+  // Events from a state change are published only once the change is committed.
+  let batch: EventPayload[] | undefined;
+  const emit = (payload: EventPayload) => { if (batch) batch.push(payload); else log.emit(payload); };
   const paused = new Set<string>();
   const running = new Map<string, Promise<void>>();
   // Suspended and resuming executions stay in `running` but release their slot.
@@ -597,8 +626,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       Math.max(0, Math.ceil(graphDeadline - performance.now()))) : undefined;
   };
   startTimer();
-  const context = (record: NodeExecution) => ({ executionId: record.executionId, revision: record.revision,
-    ...(record.loopId ? { loopId: record.loopId, iteration: record.iteration! } : {}) });
+  const context = (record: NodeExecution) => ({ executionId: record.executionId, revision: record.revision });
   const workspaces = new GitWorkspaces(resolve(options.cwd ?? process.cwd()), workspace => {
     const record = executions.get(workspace.executionId!);
     if (record) record.workspace = { ...workspace };
@@ -606,12 +634,25 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   });
 
   function snapshot(): BraidSnapshot {
-    const nodes: Record<string, NodeResult> = Object.fromEntries(graph.nodes.map(node => [node.id, latest.get(node.id) ?? { id: node.id, status: "pending" }]));
-    for (const [id, record] of latest) Object.defineProperty(nodes, id, { value: record, enumerable: true, writable: true, configurable: true });
-    return structuredClone({ runId, status, revision, graph: definition, nodes: finalNodes ?? nodes,
+    const waits = assess();
+    const state = structuredClone({ runId, status, revision, graph: definition, nodes: finalNodes ?? heads(),
       executions: Object.fromEntries(executions), pausedExecutionIds: [...paused], suspendedExecutionIds: [...suspended],
       ...(runPause ? { pause: runPause } : {}), limits: finiteLimits(),
       ...(controller.signal.aborted ? { error: describeError(controller.signal.reason) } : {}) });
+    if (!finalNodes) for (const record of [...Object.values(state.nodes), ...Object.values(state.executions)]) mark(record, waits);
+    return state;
+  }
+  /** Add the derived markers to a copied record. */
+  function mark(record: NodeResult, waits: Map<string, WaitReason>) {
+    const wait = waits.get(record.executionId!);
+    if (wait) record.waitReason = wait;
+    if (paused.has(record.executionId!)) record.held = true;
+  }
+  function heads(): Record<string, NodeResult> {
+    const nodes: Record<string, NodeResult> = {};
+    // defineProperty keeps IDs such as __proto__ ordinary own properties.
+    for (const [id, lineage] of lineages) Object.defineProperty(nodes, id, { value: lineage.instances.at(-1)!, enumerable: true, writable: true, configurable: true });
+    return nodes;
   }
 
   function finiteLimits(): BraidLimits {
@@ -621,7 +662,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   /** Run limits that are reached, by the pause source they use under onLimit: "pause". */
   const runLimits = {
     execution_limit: { limit: "maxExecutions", error: () => new RunError("EXECUTION_LIMIT", `Graph exceeded ${limits.maxExecutions} executions`),
-      reached: () => executions.size >= limits.maxExecutions },
+      reached: () => admitted >= limits.maxExecutions },
     graph_timeout: { limit: "graphTimeoutMs", error: () => new RunError("GRAPH_TIMEOUT", `Graph exceeded ${limits.graphTimeoutMs}ms`),
       reached: () => performance.now() >= graphDeadline },
     token_limit: { limit: "maxTokens", error: () => new RunError("TOKEN_LIMIT", `Graph used ${tokensUsed()} tokens, reaching its limit of ${limits.maxTokens}`),
@@ -892,236 +933,361 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     log.emit({ type: "replan_requested", nodeId: record.id, reason: request.reason,
       ...(suggestion ? { suggestion: structuredClone(suggestion) } : {}), ...context(record) });
   }
-  function reconcileLoops(previousGraph?: Graph) {
-    // Preserve the already admitted activation when an edit moves a definition
-    // between scopes. Keep removed members until their original round drains.
-    const previousRecords = new Map<string, NodeExecution>();
-    for (const node of previousGraph?.nodes ?? []) {
-      const scope = previousGraph!.membership.get(node.id);
-      const record = scope ? loops.get(scope)?.records.get(node.id) : roots.get(node.id);
-      if (record) previousRecords.set(node.id, record);
-    }
-    for (const [id, state] of loops) {
-      const current = graph.loops.get(id);
-      for (const [nodeId, record] of state.records) {
-        if (!current?.members.has(nodeId) && !graph.membership.has(nodeId)) roots.set(nodeId, record);
-      }
-    }
-    for (const [id, loop] of graph.loops) {
-      let state = loops.get(id);
-      if (!state) {
-        state = { iteration: 1, records: new Map(), done: false };
-        loops.set(id, state);
-      }
-      for (const nodeId of loop.members) {
-        if (!state.records.has(nodeId) && previousGraph?.membership.get(nodeId) !== id) {
-          const record = previousRecords.get(nodeId) ?? roots.get(nodeId);
-          if (record) { state.records.set(nodeId, record); roots.delete(nodeId); }
-        }
-      }
-      if ([...loop.members].some(nodeId => !state.records.has(nodeId))) state.done = false;
-    }
+  const head = (id: string) => lineages.get(id)!.instances.at(-1)!;
+  /** Settled, and its checkpoint is sealed: successors may use it. */
+  const done = (record: NodeExecution) => settled(record) && !running.has(record.executionId);
+  const modelFor = (node: BraidNode) => node.model ?? defaultModel;
+
+  /** Add a pending instance to a lineage, opening the lineage if needed. */
+  function createInstance(id: string, cause: "submitted" | "added" | "cloned" | "replaced", links: { supersedes?: string; trigger?: string } = {}): NodeExecution {
+    const node = nodeById.get(id)!;
+    const generation = (generations.get(id) ?? 0) + 1;
+    generations.set(id, generation);
+    const model = modelFor(node);
+    const record: NodeExecution = {
+      id, executionId: `${id}@${generation}`, generation, node: structuredClone(node), revision,
+      predecessorExecutionIds: [], status: "pending", ...(model ? { model } : {}),
+      ...(links.supersedes ? { supersedes: links.supersedes } : {}),
+    };
+    executions.set(record.executionId, record);
+    let lineage = lineages.get(id);
+    if (!lineage) lineages.set(id, lineage = { instances: [], queued: [] });
+    lineage.instances.push(record);
+    emit({ type: "execution_created", nodeId: id, nodeType: node.type, generation, cause, ...(model ? { model } : {}),
+      ...links, ...context(record) });
+    return record;
   }
-  reconcileLoops();
+  batch = [];
+  for (const node of graph.nodes) createInstance(node.id, "submitted");
+  // Published by execute() after graph_created.
+  const initialEvents = batch;
+  batch = undefined;
+
+  /** Fail a running instance that an update replaced or removed. */
+  function discard(record: NodeExecution, reason: string) {
+    if (!running.has(record.executionId) || settled(record)) return;
+    discarded.add(record.executionId);
+    const error = new RunError("CANCELLED", `Execution ${reason} by a graph update`);
+    const invocation = invocations.get(record.executionId);
+    if (invocation) invocation.abort(error);
+    else pendingAborts.set(record.executionId, error);
+  }
+  /** Drop a settled instance's hold without releasing it downstream. */
+  function dropHold(record: NodeExecution) {
+    paused.delete(record.executionId);
+    limitHeld.delete(record.executionId);
+    unrouted.delete(record.executionId);
+  }
 
   /** Validate a graph edit against the current graph without applying it. */
   function candidateGraph(patch: GraphUpdate | ReplanSuggestion): { candidate: BraidInput; compiled: Graph } {
     const edit = patch as GraphUpdate;
-    for (const key of ["upsertNodes", "removeNodeIds", "addEdges", "removeEdges", "loops"] as const)
+    for (const key of ["upsertNodes", "removeNodeIds", "addEdges", "removeEdges"] as const)
       if (edit[key] !== undefined && !Array.isArray(edit[key])) throw new TypeError(`${key} must be an array`);
-    if (patch.removeNodeIds?.some(id => typeof id !== "string" || !id.trim())) throw new TypeError("removeNodeIds must contain non-empty node IDs");
-    for (const edge of patch.removeEdges ?? []) {
-      if (!edge || typeof edge !== "object" || !edge.from || !edge.to ||
-          Object.entries(edge).some(([key, value]) => !["from", "to", "choice", "feedback", "executionId"].includes(key) || typeof value !== "string" || !value.trim()))
-        throw new TypeError("removeEdges must contain complete edge identities");
+    const removed = new Set<string>();
+    for (const id of patch.removeNodeIds ?? []) {
+      if (typeof id !== "string" || !id.trim()) throw new TypeError("removeNodeIds must contain non-empty node IDs");
+      if (!lineages.has(id) || removed.has(id)) throw new TypeError(`removeNodeIds: unknown or repeated node '${id}'`);
+      removed.add(id);
     }
-    const removed = new Set(patch.removeNodeIds ?? []);
+    const upserted = new Set<string>();
+    for (const node of patch.upsertNodes ?? []) {
+      const id = node && typeof node === "object" ? node.id : undefined;
+      if (typeof id === "string" && upserted.has(id)) throw new TypeError(`upsertNodes: repeated node '${id}'`);
+      if (typeof id === "string") upserted.add(id);
+    }
+    const existing = new Set(definition.edges.map(edgeIdentity));
+    const removedEdges = new Set<string>();
+    for (const edge of patch.removeEdges ?? []) {
+      if (!edge || typeof edge !== "object" || Object.keys(edge).some(key => !["from", "to", "choice", "limit"].includes(key)) ||
+          [edge.from, edge.to, ...(edge.choice === undefined ? [] : [edge.choice])].some(value => typeof value !== "string" || !value.trim()))
+        throw new TypeError("removeEdges must contain edge identities: from, to, and choice when present");
+      const key = edgeIdentity(edge);
+      if (!existing.has(key)) throw new TypeError(`removeEdges: no edge '${edge.from}' -> '${edge.to}'${edge.choice === undefined ? "" : ` with choice '${edge.choice}'`}`);
+      removedEdges.add(key);
+    }
     const nodes = new Map(definition.nodes.filter(node => !removed.has(node.id)).map(node => [node.id, node]));
     for (const node of patch.upsertNodes ?? []) nodes.set(node.id, node);
-    const removedEdges = new Set((patch.removeEdges ?? []).map(edgeKey));
-    const edges = definition.edges.filter(edge => !removed.has(edge.from) && !removed.has(edge.to) && !removedEdges.has(edgeKey(edge)));
+    const edges = definition.edges.filter(edge => !removed.has(edge.from) && !removed.has(edge.to) && !removedEdges.has(edgeIdentity(edge)));
     const candidate: BraidInput = structuredClone({ ...definition, nodes: [...nodes.values()], edges: [...edges, ...(patch.addEdges ?? [])],
-      ...(edit.promptTemplates !== undefined ? { promptTemplates: edit.promptTemplates } : {}),
-      ...(edit.loops !== undefined ? { loops: edit.loops } : {}) });
-    const compiled = compileGraph(candidate);
-    for (const edge of compiled.edges) {
-      if (!edge.executionId) continue;
-      const record = executions.get(edge.executionId);
-      if (!record || record.id !== edge.from || !settled(record)) throw new TypeError(`Unknown or unfinished source execution '${edge.executionId}'`);
-      if (edge.choice && (record.node.type !== "decision" || !record.node.choices.includes(edge.choice)))
-        throw new TypeError(`Invalid choice for execution '${edge.executionId}'`);
-    }
-    return { candidate, compiled };
+      ...(edit.promptTemplates !== undefined ? { promptTemplates: edit.promptTemplates } : {}) });
+    return { candidate, compiled: compileGraph(candidate) };
   }
 
   function update(patch: GraphUpdate): BraidSnapshot {
     assertMutable(patch.expectedRevision);
-    const allowed = ["expectedRevision", "upsertNodes", "removeNodeIds", "addEdges", "removeEdges", "promptTemplates", "loops", "resume", "resumeOptions"];
+    const allowed = ["expectedRevision", "upsertNodes", "removeNodeIds", "addEdges", "removeEdges", "promptTemplates", "resume", "resumeOptions"];
     if (Object.keys(patch).some(key => !allowed.includes(key))) throw new TypeError("Unknown graph update field");
     if (patch.resume !== undefined && !Array.isArray(patch.resume)) throw new TypeError("resume must be an array");
     if (patch.resumeOptions !== undefined && !patch.resume?.length) throw new TypeError("resumeOptions requires resume");
     validateResume(patch.resume ?? [], patch.resumeOptions);
     const { candidate, compiled } = candidateGraph(patch);
-    const previousGraph = graph;
+    // Commit all state before publishing callbacks, which may themselves submit an update.
+    batch = [];
     definition = candidate;
     graph = compiled;
+    nodeById = new Map(graph.nodes.map(node => [node.id, node]));
     revision++;
-    reconcileLoops(previousGraph);
-    // Commit all state before publishing callbacks, which may themselves submit an update.
+    for (const id of patch.removeNodeIds ?? []) {
+      const lineage = lineages.get(id)!;
+      const record = lineage.instances.at(-1)!;
+      lineages.delete(id);
+      if (record.status === "pending") {
+        // Never started: no history is kept.
+        executions.delete(record.executionId);
+        attached.delete(record.executionId);
+        emit({ type: "execution_removed", nodeId: id, ...context(record) });
+      } else {
+        discard(record, "removed");
+        dropHold(record);
+      }
+    }
+    const upserted = new Set((patch.upsertNodes ?? []).map(node => node.id));
+    for (const id of upserted) {
+      const record = lineages.get(id)?.instances.at(-1);
+      if (!record) createInstance(id, "added");
+      else if (record.status !== "pending") {
+        // Started instances are immutable: replace this one, and cancel it if it is still running.
+        const replacement = createInstance(id, "replaced", { supersedes: record.executionId });
+        record.supersededBy = replacement.executionId;
+        discard(record, "replaced");
+        dropHold(record);
+        emit({ type: "execution_superseded", nodeId: id, supersededBy: replacement.executionId, ...context(record) });
+      }
+    }
+    // Not-started heads follow their current definition, including edited templates.
+    for (const [id, lineage] of lineages) {
+      const record = lineage.instances.at(-1)!;
+      const node = nodeById.get(id)!;
+      if (record.status !== "pending" || (!upserted.has(id) && JSON.stringify(record.node) === JSON.stringify(node))) continue;
+      record.node = structuredClone(node);
+      record.revision = revision;
+      const model = modelFor(node);
+      if (model) record.model = model;
+      else delete record.model;
+    }
     const continued = stageResume(patch.resume ?? [], patch.resumeOptions);
     status = "running";
+    const events = batch;
+    batch = undefined;
     log.emit({ type: "graph_updated", graph: definition, revision });
-    for (const [id, loop] of graph.loops) if (!previousGraph.loops.has(id))
-      log.emit({ type: "loop_started", loopId: id, entry: loop.entry, iteration: loops.get(id)!.iteration, revision });
+    for (const event of events) log.emit(event);
     announceResumed(continued);
     grantSlots();
     wake();
     return snapshot();
   }
 
-  function frame(nodeId: string): Map<string, NodeExecution> {
-    const loopId = graph.membership.get(nodeId);
-    return loopId ? loops.get(loopId)!.records : roots;
+  /** True when a newer instance exists, or an edge is new, for any non-closing input lineage. */
+  function outdated(record: NodeExecution): boolean {
+    const used = consulted.get(record.executionId);
+    return graph.incoming.get(record.id)!.some(edge => !graph.closing.has(edge) && used?.get(edge.from) !== head(edge.from).executionId);
   }
-  function sourceFor(edge: Edge, target: string): NodeExecution | undefined {
-    if (edge.executionId) return executions.get(edge.executionId);
-    const sourceLoop = graph.membership.get(edge.from);
-    if (sourceLoop && sourceLoop !== graph.membership.get(target) && !loops.get(sourceLoop)!.done) return undefined;
-    return frame(edge.from).get(edge.from);
+  function upstreamDirt(id: string, dirt: Map<string, Dirt>): Dirt {
+    let result: Dirt;
+    for (const edge of graph.incoming.get(id)!) if (!graph.closing.has(edge)) result = worse(result, dirt.get(edge.from));
+    return result;
   }
-  function dependencies(nodeId: string): { states: EdgeState[]; predecessors: NodeExecution[] } {
-    const inputs = graph.incoming.get(nodeId)!.filter(edge => !edge.feedback).map(edge => ({ edge, record: sourceFor(edge, nodeId) }));
-    const states = inputs.map(({ edge, record }) => record && (running.has(record.executionId) || paused.has(record.executionId)) ? "unresolved" as const : edgeState(edge, record));
-    const predecessors = inputs.filter((_, index) => states[index] === "active").map(value => value.record!);
-    const loopId = graph.membership.get(nodeId);
-    const loop = loopId ? graph.loops.get(loopId)! : undefined;
-    const state = loopId ? loops.get(loopId)! : undefined;
-    if (loop?.entry === nodeId && state?.previous) {
-      states.push("active");
-      predecessors.push(state.previous);
+  /** Whether successors must wait for this lineage, given what its inputs are waiting for. */
+  function lineageDirt(id: string, upstream: Dirt): Dirt {
+    const lineage = lineages.get(id)!;
+    const record = lineage.instances.at(-1)!;
+    const own: Dirt = paused.has(record.executionId) ? "hold"
+      : !done(record) ? (lineage.instances.length > 1 ? "stale" : "predecessors")
+      : lineage.queued.length || outdated(record) ? "stale" : undefined;
+    const result = worse(own, upstream);
+    // A lineage that already has a result will refresh it: its successors wait on a stale input.
+    return result === "predecessors" && own !== "predecessors" ? "stale" : result;
+  }
+  /** Wait reasons of pending heads, without changing anything. */
+  function assess(): Map<string, WaitReason> {
+    const waits = new Map<string, WaitReason>();
+    const dirt = new Map<string, Dirt>();
+    for (const { id } of graph.topologicalOrder) {
+      if (!lineages.has(id)) continue;
+      const upstream = upstreamDirt(id, dirt);
+      const record = head(id);
+      if (record.status === "pending") waits.set(record.executionId, upstream ?? (runPause ? "run_paused" : "slot"));
+      dirt.set(id, lineageDirt(id, upstream));
     }
-    return { states, predecessors: [...new Map(predecessors.map(record => [record.executionId, record])).values()] };
+    return waits;
   }
-  function admit(nodeId: string, predecessors: NodeExecution[], skipReason?: NodeResult["skipReason"]) {
+
+  /** Fire the cycle-closing edges of settled, released instances. */
+  function route(): boolean {
+    let progressed = false;
+    for (const id of [...unrouted]) {
+      const record = executions.get(id)!;
+      if (paused.has(id)) continue;
+      // Superseded and removed instances no longer route.
+      if (lineages.get(record.id)?.instances.at(-1) !== record) { unrouted.delete(id); continue; }
+      let held = false;
+      for (const edge of graph.outgoing.get(record.id)!) {
+        if (!graph.closing.has(edge) || edgeState(edge, record) !== "active") continue;
+        const key = edgeIdentity(edge);
+        const count = firings.get(key) ?? 0;
+        const limit = edge.limit ?? Infinity;
+        if (count >= limit) {
+          if (onLimit === "fail") {
+            controller.abort(new RunError("EDGE_LIMIT", `Edge '${edge.from}' -> '${edge.to}' reached its limit of ${limit}`));
+            return true;
+          }
+          // Released without a higher limit: the cycle ends here, and the decision's other edges stay inactive.
+          if (limitHeld.has(id)) continue;
+          // Hold the decision until the owner raises the limit or releases it to end the cycle.
+          limitHeld.add(id);
+          record.holdAfter = { source: "edge_limit", requestedAt: Date.now() };
+          paused.add(id);
+          log.emit({ type: "execution_hold_added", nodeId: record.id, source: "edge_limit", ...context(record) });
+          log.emit({ type: "limit_reached", limit: "edge", value: limit, nodeId: record.id,
+            edge: { from: edge.from, to: edge.to, ...(edge.choice !== undefined ? { choice: edge.choice } : {}), limit }, ...context(record) });
+          log.emit({ type: "execution_paused", nodeId: record.id, ...context(record) });
+          held = progressed = true;
+          break;
+        }
+        firings.set(key, count + 1);
+        const target = head(edge.to);
+        const firing = { edge, source: record };
+        if (target.status === "pending") (attached.get(target.executionId) ?? attached.set(target.executionId, []).get(target.executionId)!).push(firing);
+        else lineages.get(edge.to)!.queued.push(firing);
+        progressed = true;
+      }
+      if (!held) { unrouted.delete(id); limitHeld.delete(id); }
+    }
+    return progressed;
+  }
+
+  /** Start or skip a pending head whose inputs are settled and current. */
+  function admit(record: NodeExecution): boolean {
     if (runLimits.execution_limit.reached()) {
       reachLimit("execution_limit");
       return false;
     }
-    const node = graph.nodes.find(node => node.id === nodeId)!;
-    const loopId = graph.membership.get(node.id);
-    const record: NodeExecution = {
-      id: node.id, executionId: crypto.randomUUID(), node: structuredClone(node), revision,
-      predecessorExecutionIds: predecessors.map(value => value.executionId), status: skipReason ? "skipped" : "runnable",
-      ...(loopId ? { loopId, iteration: loops.get(loopId)!.iteration } : {}),
-      ...(node.model ?? defaultModel ? { model: node.model ?? defaultModel! } : {}),
-      ...(node.pauseAfter && !skipReason ? { holdAfter: { source: "definition", requestedAt: Date.now() } } : {}),
-    };
-    executions.set(record.executionId, record);
-    latest.set(node.id, record);
-    frame(node.id).set(node.id, record);
+    const used = new Map<string, string>();
+    const states: EdgeState[] = [];
+    const predecessors = new Map<string, NodeExecution>();
+    for (const edge of graph.incoming.get(record.id)!) {
+      if (graph.closing.has(edge)) continue;
+      const source = head(edge.from);
+      used.set(edge.from, source.executionId);
+      const state = edgeState(edge, source);
+      states.push(state);
+      if (state === "active") predecessors.set(source.executionId, source);
+    }
+    for (const { source } of attached.get(record.executionId) ?? []) {
+      states.push("active");
+      predecessors.set(source.executionId, source);
+    }
+    attached.delete(record.executionId);
+    const skipReason = states.includes("blocked") ? "upstream_failed" : states.length && !states.includes("active") ? "inactive" : undefined;
+    admitted++;
+    consulted.set(record.executionId, used);
+    record.predecessorExecutionIds = [...predecessors.keys()];
     if (skipReason) {
+      record.status = "skipped";
       record.skipReason = skipReason;
       record.finishedAt = Date.now();
       log.emit({ type: "node_skipped", nodeId: record.id, reason: skipReason, ...context(record) });
       return true;
     }
+    record.status = "running";
+    if (record.node.pauseAfter) record.holdAfter = { source: "definition", requestedAt: Date.now() };
+    runningLineages.set(record.id, (runningLineages.get(record.id) ?? 0) + 1);
     const scopedLog: EventLog = { events: log.events, emit: event => log.emit({ ...event, ...context(record) }) };
     const request: Omit<ModelRequest, "signal" | "decide"> = {
-      goal: graph.goal, node: structuredClone(record.node), execution: { runId, rootRunId: runId, ...context(record) },
-      predecessors: predecessors.map(value => ({ nodeId: value.id, executionId: value.executionId, ...nodeOutput(value),
+      goal: graph.goal, node: structuredClone(record.node),
+      execution: { runId, rootRunId: runId, ...context(record), generation: record.generation },
+      predecessors: [...predecessors.values()].map(value => ({ nodeId: value.id, executionId: value.executionId, ...nodeOutput(value),
         ...(value.error ? { error: { ...value.error } } : {}), ...(value.workspace ? { workspace: { ...value.workspace } } : {}) })),
       ...(record.model ? { model: record.model } : {}),
     };
+    const failure = (error: ExecutionError, infrastructure?: boolean) => {
+      if (infrastructure) controller.abort(new RunError(error.code, error.message));
+      else if (record.node.requireSuccess && !discarded.has(record.executionId))
+        controller.abort(new RunError("REQUIRED_NODE_FAILED", `Required node '${record.id}' (${record.executionId}) failed: ${error.message}`));
+    };
     // Reserve the slot before publishing events or invoking asynchronous runner code.
     const task = Promise.resolve().then(async () => {
-      scopedLog.emit({ type: "node_runnable", nodeId: record.id });
-      await runNode(request, record, runner, nodeTimeoutMs, controller.signal, () => graphDeadline, onLimit === "fail", scopedLog, workspaces, (error, infrastructure) => {
-        if (infrastructure) controller.abort(new RunError(error.code, error.message));
-        else if (record.node.requireSuccess) controller.abort(new RunError("REQUIRED_NODE_FAILED", `Required node '${record.id}' (${record.executionId}) failed: ${error.message}`));
-      }, suspensionControl(record), onNodeTimeout,
-      record.node.type === "execute" || record.node.type === "decision" ? request => requestReplan(record, request) : undefined);
-      if (record.holdAfter && !controller.signal.aborted) {
+      await runNode(request, record, runner, nodeTimeoutMs, controller.signal, () => graphDeadline, onLimit === "fail", scopedLog, workspaces,
+        failure, suspensionControl(record), onNodeTimeout,
+        record.node.type === "execute" || record.node.type === "decision" ? request => requestReplan(record, request) : undefined);
+      // A replaced or removed instance is history: it is never held.
+      if (record.holdAfter && !controller.signal.aborted && lineages.get(record.id)?.instances.at(-1) === record) {
         paused.add(record.executionId);
         scopedLog.emit({ type: "execution_paused", nodeId: record.id });
       }
     }).catch(error => {
       controller.abort(new RunError("SCHEDULING_ERROR", error instanceof Error ? error.message : String(error)));
-    }).finally(() => { running.delete(record.executionId); grantSlots(); wake(); });
+    }).finally(() => {
+      running.delete(record.executionId);
+      runningLineages.set(record.id, runningLineages.get(record.id)! - 1);
+      unrouted.add(record.executionId);
+      grantSlots();
+      wake();
+    });
     running.set(record.executionId, task);
     return true;
   }
 
-  function advanceLoops(): boolean {
-    for (const [id, loop] of graph.loops) {
-      const state = loops.get(id)!;
-      if (state.done || ![...loop.members].every(nodeId => state.records.has(nodeId))) continue;
-      if ([...state.records.values()].some(record => !settled(record) || running.has(record.executionId) || paused.has(record.executionId))) continue;
-      const decision = state.records.get(loop.feedback.from)!;
-      if (edgeState(loop.feedback, decision) === "active") {
-        if (state.iteration >= loop.maxIterations) {
-          if (onLimit === "fail") {
-            controller.abort(new RunError("LOOP_LIMIT", `Loop '${id}' exceeded ${loop.maxIterations} iterations`));
-            return true;
-          }
-          if (state.limitHold !== decision.executionId) {
-            // Hold the decision until the owner raises the limit, or releases it to end the loop.
-            state.limitHold = decision.executionId;
-            decision.holdAfter = { source: "loop_limit", requestedAt: Date.now() };
-            paused.add(decision.executionId);
-            log.emit({ type: "execution_hold_added", nodeId: decision.id, source: "loop_limit", ...context(decision) });
-            log.emit({ type: "limit_reached", limit: "maxIterations", value: loop.maxIterations, nodeId: decision.id, ...context(decision) });
-            log.emit({ type: "execution_paused", nodeId: decision.id, ...context(decision) });
-            return true;
-          }
-          // Released without a higher limit: the loop ends here and its exits are not taken.
-          delete state.limitHold;
-          state.done = true;
-          log.emit({ type: "loop_completed", loopId: id, iteration: state.iteration, entry: loop.entry, revision });
-          return true;
-        }
-        delete state.limitHold;
-        state.iteration++;
-        state.previous = decision;
-        state.records = new Map();
-        log.emit({ type: "loop_started", loopId: id, iteration: state.iteration, entry: loop.entry, revision });
-      } else {
-        state.done = true;
-        log.emit({ type: "loop_completed", loopId: id, iteration: state.iteration, entry: loop.entry, revision });
+  /** One scheduling pass in topological order; returns whether anything changed. */
+  function schedule(): boolean {
+    const startRevision = revision;
+    let progressed = route();
+    const dirt = new Map<string, Dirt>();
+    for (const { id } of graph.topologicalOrder) {
+      // A paused run admits nothing, not even skipped records; an update restarts the pass.
+      if (controller.signal.aborted || revision !== startRevision) return true;
+      const lineage = lineages.get(id)!;
+      const upstream = upstreamDirt(id, dirt);
+      let record = lineage.instances.at(-1)!;
+      if (!upstream && !runPause && done(record) && !paused.has(record.executionId) && (lineage.queued.length || outdated(record))) {
+        // An edge reached the settled head: clone it into a new instance.
+        const source = lineage.queued[0]?.source ?? graph.incoming.get(id)!.filter(edge => !graph.closing.has(edge))
+          .map(edge => head(edge.from)).find(value => consulted.get(record.executionId)?.get(value.id) !== value.executionId);
+        record = createInstance(id, "cloned", source ? { trigger: source.executionId } : {});
+        progressed = true;
+        if (revision !== startRevision) return true;
       }
-      return true;
+      if (record.status === "pending" && lineage.queued.length) {
+        attached.set(record.executionId, [...(attached.get(record.executionId) ?? []), ...lineage.queued]);
+        lineage.queued = [];
+      }
+      if (record.status === "pending" && !upstream && !runPause && !runningLineages.get(id)) {
+        const skip = willSkip(record);
+        // Resumed executions waiting for a slot take priority over new admissions.
+        if (skip || (active() < maxConcurrency && !resumeQueue.length)) {
+          if (!admit(record)) return true;
+          progressed = true;
+          // A skipped record's event may have submitted an update.
+          if (revision !== startRevision) return true;
+        }
+      }
+      dirt.set(id, lineageDirt(id, upstream));
     }
-    return false;
+    return progressed;
+  }
+  /** Whether a pending head with settled inputs would be skipped rather than run. */
+  function willSkip(record: NodeExecution): boolean {
+    if (attached.get(record.executionId)?.length) return false;
+    const states = graph.incoming.get(record.id)!.filter(edge => !graph.closing.has(edge)).map(edge => edgeState(edge, head(edge.from)));
+    return states.includes("blocked") || (states.length > 0 && !states.includes("active"));
   }
 
   async function execute(): Promise<BraidResult> {
     let cleanupError: ExecutionError | undefined;
     try {
       log.emit({ type: "graph_created", nodeCount: graph.nodes.length, edgeCount: graph.edges.length, revision });
-      for (const node of graph.nodes) log.emit({ type: "node_created", nodeId: node.id, nodeType: node.type, ...(node.model ?? defaultModel ? { model: node.model ?? defaultModel! } : {}) });
+      for (const event of initialEvents) log.emit(event);
       for (const edge of graph.edges) log.emit({ type: "edge_created", ...edge });
       await workspaces.initialize(runId);
-      for (const [id, loop] of graph.loops) log.emit({ type: "loop_started", loopId: id, iteration: 1, entry: loop.entry, revision });
       while (true) {
         if (runLimits.graph_timeout.reached()) reachLimit("graph_timeout");
         else if (runLimits.token_limit.reached()) reachLimit("token_limit");
         if (controller.signal.aborted) { await Promise.all(running.values()); break; }
         resetWake();
-        let progressed = advanceLoops();
-        const schedulingRevision = revision;
         grantSlots();
-        for (const node of graph.topologicalOrder) {
-          // A paused run admits nothing, not even skipped records.
-          if (controller.signal.aborted || revision !== schedulingRevision || runPause) break;
-          const loopId = graph.membership.get(node.id);
-          if (loopId && loops.get(loopId)!.done || frame(node.id).has(node.id)) continue;
-          const { states, predecessors } = dependencies(node.id);
-          if (states.includes("unresolved")) continue;
-          const reason = states.includes("blocked") ? "upstream_failed" : states.length && !states.includes("active") ? "inactive" : undefined;
-          // Resumed executions waiting for a slot take priority over new admissions.
-          if (!reason && (active() >= maxConcurrency || resumeQueue.length)) continue;
-          if (!admit(node.id, predecessors, reason)) break;
-          progressed = true;
-        }
+        const schedulingRevision = revision;
+        const progressed = schedule();
         if (controller.signal.aborted || progressed || schedulingRevision !== revision) continue;
         if (running.size || paused.size || runPause) {
           status = active() ? "running" : "waiting";
@@ -1134,7 +1300,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
           await changed;
           continue;
         }
-        const unfinished = graph.nodes.some(node => !frame(node.id).has(node.id));
+        const unfinished = [...lineages.values()].some(lineage => lineage.instances.at(-1)!.status === "pending");
         if (unfinished) controller.abort(new RunError("SCHEDULING_ERROR", "The current graph cannot make progress"));
         break;
       }
@@ -1154,7 +1320,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       signal?.removeEventListener("abort", cancel);
     }
     const consumed = new Set([...executions.values()].flatMap(record => record.status === "skipped" ? [] : record.predecessorExecutionIds));
-    const terminals = [...executions.values()].filter(record => record.status === "completed" && !consumed.has(record.executionId));
+    const terminals = [...lineages.values()].map(lineage => lineage.instances.at(-1)!)
+      .filter(record => record.status === "completed" && !consumed.has(record.executionId));
     const terminalOutputs = Object.fromEntries(terminals.map(record => [record.id, nodeOutput(record)]));
     const usage = { inputTokens: 0, outputTokens: 0 };
     let usageReportedNodes = 0;
@@ -1165,12 +1332,16 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     }
     const error = cleanupError ?? (controller.signal.aborted ? describeError(controller.signal.reason) : undefined);
     status = error ? "failed" : "completed";
-    const nodes = snapshot().nodes;
-    for (const node of Object.values(nodes)) if (node.status === "pending") {
-      node.status = "skipped";
-      node.skipReason = error?.code === "CANCELLED" ? "cancelled" : error?.code === "GRAPH_TIMEOUT" ? "graph_timeout" : "run_failed";
-      log.emit({ type: "node_skipped", nodeId: node.id, reason: node.skipReason });
+    for (const lineage of lineages.values()) {
+      const record = lineage.instances.at(-1)!;
+      if (record.status !== "pending") continue;
+      record.status = "skipped";
+      record.skipReason = error?.code === "CANCELLED" ? "cancelled" : error?.code === "GRAPH_TIMEOUT" ? "graph_timeout" : "run_failed";
+      record.finishedAt = Date.now();
+      attached.delete(record.executionId);
+      log.emit({ type: "node_skipped", nodeId: record.id, reason: record.skipReason, ...context(record) });
     }
+    const nodes = snapshot().nodes;
     finalNodes = structuredClone(nodes);
     const result: BraidResult = {
       status, terminalOutputs, nodes, executions: structuredClone(Object.fromEntries(executions)),

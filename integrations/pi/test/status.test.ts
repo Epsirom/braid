@@ -6,6 +6,12 @@ import { createBraidTools } from "../index.js";
 import { BraidJobs, type NodeCompletion } from "../jobs.js";
 import { context, deferred, input, response } from "./helpers.js";
 
+const until = async (condition: () => boolean, timeoutMs = 5_000) => {
+  const deadline = performance.now() + timeoutMs;
+  while (!condition() && performance.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+  assert.ok(condition(), "condition not reached");
+};
+
 const theme = {
   fg: (_color: string, value: string) => value,
   bg: (_color: string, value: string) => value,
@@ -14,28 +20,33 @@ const theme = {
 const text = (result: { content: readonly { type: string; text?: string }[] }) =>
   result.content.filter(block => block.type === "text").map(block => block.text).join("\n");
 
-test("focused status includes current control state and renders the historical execution", { timeout: 5_000 }, async t => {
-  const held = deferred<NodeCompletion>();
-  const jobs = new BraidJobs(undefined, value => held.resolve(value));
+test("focused status includes current control state and renders the superseded execution", { timeout: 5_000 }, async t => {
+  const completions: NodeCompletion[] = [];
+  const jobs = new BraidJobs(undefined, value => { completions.push(value); });
   t.after(() => jobs.dispose());
   const ctx = context(async () => response("The selected execution's complete output.\nSecond line."));
   const job = jobs.start({ ...input, nodes: [{ ...input.nodes[0]!, pauseAfter: true }] }, {}, ctx);
-  const paused = await held.promise;
+  await until(() => completions.length === 1);
+  const paused = completions[0]!;
+  // Replacing the held execution runs a@2 and holds it too.
   jobs.update(job.handle, { expectedRevision: 0,
-    upsertNodes: [{ ...input.nodes[0]!, prompt: "new definition" }] });
+    upsertNodes: [{ ...input.nodes[0]!, prompt: "new definition", pauseAfter: true }] });
+  await until(() => completions.length === 2);
+  assert.equal(completions[1]!.executionId, "a@2");
   const { statusTool } = createBraidTools(jobs);
   for (const selector of [{ executionId: paused.executionId }, { nodeId: "a" }]) {
     const result = await statusTool.execute("focused", { jobId: job.handle, ...selector }, undefined, undefined, ctx);
     const body = text(result);
-    assert.match(body, new RegExp(`^Braid job job-1 · running · Graph \\w+ · revision 1 · paused executions: ${paused.executionId}\n`));
-    assert.ok(body.includes(`Execution ${paused.executionId} · node a (execute) · completed\n`));
+    assert.match(body, /^Braid job job-1 · running · Graph \w+ · revision 1 · paused executions: a@2\n/);
+    if (selector.executionId) assert.ok(body.includes(`Execution ${paused.executionId} · node a (execute) · completed\nSuperseded by a@2; it no longer feeds successors.\n`));
+    else assert.ok(body.includes("Execution a@2 · node a (execute) · completed · held\nIt replaces a@1.\n"));
     assert.match(body, /Output:\nThe selected execution's complete output\.\nSecond line\./);
     assert.doesNotMatch(body, /new definition/);
     assert.equal(result.usage, undefined);
     for (const expanded of [false, true]) {
       const rendered = statusTool.renderResult!(result, { expanded, isPartial: false }, theme, { isError: false } as never).render(300).join("\n");
       assert.match(rendered, /Braid node a · completed/);
-      assert.ok(rendered.includes(paused.executionId));
+      assert.ok(rendered.includes(selector.executionId ?? "a@2"));
       assert.match(rendered, /selected execution's complete output/);
       assert.match(rendered, /Second line/);
       assert.doesNotMatch(rendered, /Braid executing|new definition/);

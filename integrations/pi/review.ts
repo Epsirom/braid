@@ -36,7 +36,7 @@ Choose three distinct, concrete review angles for this change (usually correctne
             prompt: `Synthesize scope and all three reviews. Verify and deduplicate findings against actual files in YOUR workspace.snapshotCommit, which includes scope's completed fixes; separate valid P0/P1 fixes worth doing now, P2 report-only notes, and feedback to ignore/defer with reasons. Do not blindly apply suggestions or add optional polish.
 You are read-only and cannot edit files or run tests. If the target is unavailable, review-only was requested, nothing actionable remains, fixes are unavailable outside Git, or a fix requires an unapproved product/scope/architecture decision, call decide with done. Report the exact stop reason and unresolved findings.
 If the previous fix pass failed validation or made no material progress, stop with done and prohibit integration of unvalidated or unreviewed fixes; do not repeatedly retry the same findings.
-There are at most ${maxRounds} review rounds, including the first. If execution.iteration >= ${maxRounds}, call decide with done; distinguish round-limit exhaustion from a clean review. Never choose retry in the final round.
+There are at most ${maxRounds} review rounds, including the first. If execution.generation >= ${maxRounds}, call decide with done; distinguish round-limit exhaustion from a clean review. Never choose retry in the final round.
 Otherwise choose retry only when concrete in-scope P0/P1 fixes are worth doing now. Give scope a narrow, deduplicated fix list with evidence so the next writer pass addresses only those findings before fresh reviewers inspect its checkpoint.
 Your final handoff must retain the pinned original baseline, original target endpoint, initial job snapshot, and target/file scope unchanged, cumulative fixes and changed files from scope, commands and exit codes, validation evidence/limitations, unresolved and deferred findings, whether the cumulative fixes passed review and validation and may be integrated, rounds run, and stop reason. Prohibit integration when unresolved findings invalidate those fixes. Call decide exactly once, then give this handoff.`,
           },
@@ -53,10 +53,10 @@ Inspect the final diff and run or confirm focused validation without changing co
             { from: `review-${slot}`, to: "check" },
           ]),
           { from: "scope", to: "check" },
-          { from: "check", to: "scope", choice: "retry", feedback: "review-loop" },
+          // Closes the review cycle: each retry reruns scope, at most maxRounds - 1 times.
+          { from: "check", to: "scope", choice: "retry", limit: maxRounds - 1 },
           { from: "check", to: "apply", choice: "done" },
         ],
-        loops: [{ id: "review-loop", entry: "scope", maxIterations: maxRounds }],
       };
       // The round count is this command's contract: reaching it ends the review instead of waiting for the parent.
       const job = jobs.start(input, { maxConcurrency: 3, maxExecutions: maxRounds * 5 + 1, onLimit: "fail" }, ctx);

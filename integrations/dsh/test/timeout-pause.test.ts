@@ -21,8 +21,10 @@ function slowFirstRequest() {
   const started = new Set<string>();
   const runtime = llm(async options => {
     requests.push(structuredClone({ ...options, signal: undefined }) as unknown as GenerateOptions);
-    const executionId = payload(options).execution.executionId as string;
-    if (!started.has(executionId) && started.add(executionId)) await new Promise((_, reject) => options.signal!.addEventListener("abort", () => reject(options.signal!.reason), { once: true }));
+    // Execution IDs are unique within a run, so key by run too.
+    const { runId, executionId } = payload(options).execution as { runId: string; executionId: string };
+    const key = `${runId}/${executionId}`;
+    if (!started.has(key) && started.add(key)) await new Promise((_, reject) => options.signal!.addEventListener("abort", () => reject(options.signal!.reason), { once: true }));
     return answer("finished after timeout");
   });
   return { runtime, requests };

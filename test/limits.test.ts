@@ -16,11 +16,10 @@ import {
 import { deferred } from "./helpers.js";
 
 const node = (id: string) => ({ type: "execute" as const, id, prompt: id });
-const loop = (maxIterations?: number): BraidInput => ({
+const loop = (limit?: number): BraidInput => ({
   goal: "refine",
   nodes: [node("work"), { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }, node("end")],
-  edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", feedback: "refine" }, { from: "check", to: "end", choice: "done" }],
-  loops: [{ id: "refine", entry: "work", ...(maxIterations === undefined ? {} : { maxIterations }) }],
+  edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", ...(limit === undefined ? {} : { limit }) }, { from: "check", to: "end", choice: "done" }],
 });
 const until = async (condition: () => boolean, timeoutMs = 5_000) => {
   const deadline = performance.now() + timeoutMs;
@@ -37,14 +36,14 @@ async function start(t: TestContext, graph: BraidInput, options: Omit<BraidOptio
 }
 const executions = (run: BraidRun, nodeId: string) => Object.values(run.snapshot().executions).filter(record => record.id === nodeId);
 /** Always repeats the loop. */
-const repeating: ModelRunner = async request => { request.decide?.("again"); return { output: `${request.node.id}:${request.execution.iteration ?? 0}` }; };
+const repeating: ModelRunner = async request => { request.decide?.("again"); return { output: request.execution.executionId! }; };
 
 test("limits default to unlimited", async t => {
   const deadlines: (ModelRequest["deadlines"])[] = [];
   const rounds = 501;
   const run = await start(t, loop(), { runner: async request => {
     deadlines.push(request.deadlines);
-    request.decide?.(request.execution.iteration === rounds ? "done" : "again");
+    request.decide?.(request.execution.generation === rounds ? "done" : "again");
     return { output: "ok" };
   } });
   assert.deepEqual(run.snapshot().limits, {});
@@ -55,40 +54,43 @@ test("limits default to unlimited", async t => {
   assert.ok(deadlines.every(value => value === undefined));
 });
 
-test("a loop at maxIterations holds its decision until the owner raises the limit or ends the loop", async t => {
+test("an edge at its limit holds the decision until the owner raises the limit or ends the cycle", async t => {
   const events: ExecutionEvent[] = [];
-  const run = await start(t, loop(2), { runner: repeating }, events);
+  const run = await start(t, loop(1), { runner: repeating }, events);
   await until(() => run.snapshot().status === "waiting");
   const [first, second] = executions(run, "check");
   assert.equal(first!.holdAfter, undefined);
   assert.deepEqual(run.snapshot().pausedExecutionIds, [second!.executionId]);
-  assert.equal(second!.holdAfter?.source, "loop_limit");
+  assert.equal(second!.holdAfter?.source, "edge_limit");
+  assert.equal(second!.held, true);
   const reached = events.find(event => event.type === "limit_reached");
-  assert.deepEqual(reached && { limit: reached.limit, value: reached.value, nodeId: reached.nodeId, executionId: reached.executionId, iteration: reached.iteration },
-    { limit: "maxIterations", value: 2, nodeId: "check", executionId: second!.executionId, iteration: 2 });
-  assert.deepEqual(events.filter(event => event.executionId === second!.executionId && event.type.startsWith("execution_")).map(event => event.type),
+  assert.deepEqual(reached && { limit: reached.limit, value: reached.value, nodeId: reached.nodeId, executionId: reached.executionId, edge: reached.edge },
+    { limit: "edge", value: 1, nodeId: "check", executionId: "check@2", edge: { from: "check", to: "work", choice: "again", limit: 1 } });
+  assert.deepEqual(events.filter(event => event.executionId === second!.executionId && event.type.startsWith("execution_") && event.type !== "execution_created").map(event => event.type),
     ["execution_hold_added", "execution_paused"]);
+  assert.equal(run.snapshot().nodes.end!.waitReason, "hold");
 
-  // Raising the limit in the same update continues with the next round.
-  run.update({ expectedRevision: run.snapshot().revision, loops: [{ id: "refine", entry: "work", maxIterations: 3 }], resume: [second!.executionId] });
+  // Raising the limit in the same update continues with the next round; the edge keeps its count.
+  const edge = { from: "check", to: "work", choice: "again" };
+  run.update({ expectedRevision: run.snapshot().revision, removeEdges: [edge], addEdges: [{ ...edge, limit: 2 }], resume: [second!.executionId] });
   await until(() => executions(run, "check").length === 3 && run.snapshot().status === "waiting");
   const third = executions(run, "check")[2]!;
   assert.deepEqual(run.snapshot().pausedExecutionIds, [third.executionId]);
 
-  // Releasing it without a higher limit ends the loop; its exit is not taken.
+  // Releasing it without a higher limit ends the cycle; its exit is not taken.
   run.resume([third.executionId], run.snapshot().revision);
   const result = await run.result;
   assert.equal(result.status, "completed");
   assert.equal(result.nodes.end!.status, "skipped");
   assert.equal(result.nodes.end!.skipReason, "inactive");
   assert.deepEqual(result.terminalExecutionIds, [third.executionId]);
-  assert.ok(events.some(event => event.type === "loop_completed" && event.iteration === 3));
+  assert.equal(executions(run, "work").length, 3);
 });
 
-test("onLimit fail keeps failing the run at the loop limit", async t => {
-  const run = await start(t, loop(2), { runner: repeating, onLimit: "fail" });
+test("onLimit fail fails the run at an edge limit", async t => {
+  const run = await start(t, loop(1), { runner: repeating, onLimit: "fail" });
   const result = await run.result;
-  assert.equal(result.error?.code, "LOOP_LIMIT");
+  assert.equal(result.error?.code, "EDGE_LIMIT");
 });
 
 test("maxExecutions stops admission, lets admitted work finish, and resumes after setLimits", async t => {
@@ -105,7 +107,8 @@ test("maxExecutions stops admission, lets admitted work finish, and resumes afte
   assert.equal(executions(run, "a")[0]!.suspension, undefined);
   gate.resolve();
   await until(() => run.snapshot().status === "waiting");
-  assert.deepEqual(Object.values(run.snapshot().executions).map(record => record.id).sort(), ["a", "b"]);
+  assert.deepEqual(Object.values(run.snapshot().executions).filter(record => record.status !== "pending").map(record => record.id).sort(), ["a", "b"]);
+  assert.equal(run.snapshot().nodes.c!.waitReason, "run_paused");
   assert.throws(() => run.resumeRun(), /maxExecutions limit of 2; raise it with setLimits/);
 
   assert.deepEqual(run.setLimits({ maxExecutions: 3 }).limits, { maxExecutions: 3 });
@@ -158,7 +161,7 @@ test("maxTokens pauses the run once settled executions reach it", async t => {
   const run = await start(t, chain, { runner, maxTokens: 15 }, events);
   await until(() => run.snapshot().status === "waiting");
   assert.equal(run.snapshot().pause?.source, "token_limit");
-  assert.deepEqual(Object.values(run.snapshot().executions).map(record => record.id), ["a", "b"]);
+  assert.deepEqual(Object.values(run.snapshot().executions).filter(record => record.status !== "pending").map(record => record.id), ["a", "b"]);
   assert.deepEqual(events.filter(event => event.type === "limit_reached").map(event => [event.limit, event.value]), [["maxTokens", 15]]);
   assert.throws(() => run.resumeRun(), /maxTokens limit of 15/);
   run.setLimits({ maxTokens: 100 });

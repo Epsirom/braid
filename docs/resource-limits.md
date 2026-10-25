@@ -1,8 +1,9 @@
 # Resource limits and deployment responsibility
 
 Braid targets small reasoning graphs. Graph size, prompt/output size, event-log
-size, and the number of simultaneous graph submissions have no hard cap. Total materialized executions, including skipped branches,
-are capped at 1000 by default; loops also require a finite iteration limit.
+size, and the number of simultaneous graph submissions have no hard cap. Started and
+skipped executions can be capped with `maxExecutions`, and the rounds of a cycle with
+its closing edge's `limit`; both are unlimited by default.
 The scheduler rescans the graph as work settles. Consult the
 [benchmark](benchmark.md) for measured local overhead rather than treating the
 validator's deep-graph tests as a production capacity guarantee.
@@ -16,7 +17,7 @@ well as the compact definition.
 | Control | Core default | Pi default |
 | --- | --- | --- |
 | Active runtime-managed invocations per graph | 4 | 4 |
-| Materialized executions across loops/updates | 1000 (`maxExecutions`) | 1000 (`maxExecutions`) |
+| Started and skipped executions across rounds/updates | Unlimited (`maxExecutions`) | Unlimited (`maxExecutions`) |
 | Node timeout (starts at admission, stops while suspended) | 60 seconds | Unlimited |
 | On node timeout (`onNodeTimeout`) | Pause with `startBraid` and an interruptible runner; fail with `braid()` | Pause; the parent gets a reminder to resume or cancel |
 | Graph timeout (includes queueing, paused gates, and suspensions) | 5 minutes | Unlimited |

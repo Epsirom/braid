@@ -1,12 +1,12 @@
 import type { PanelJob } from "../panel-types.js";
 
-/** Longest-path ranks in the forward DAG. Feedback is drawn separately. */
+/** Longest-path ranks in the forward DAG. Edges that close a cycle are drawn separately. */
 export function layoutGraph(nodes: PanelJob["nodes"], edges: PanelJob["edges"]) {
   const rank = new Map(nodes.map(node => [node.id, 0]));
   const incoming = new Map(nodes.map(node => [node.id, 0]));
   const outgoing = new Map(nodes.map(node => [node.id, [] as string[]]));
   for (const edge of edges) {
-    if (edge.feedback || !rank.has(edge.from) || !rank.has(edge.to)) continue;
+    if (edge.closesCycle || !rank.has(edge.from) || !rank.has(edge.to)) continue;
     incoming.set(edge.to, incoming.get(edge.to)! + 1);
     outgoing.get(edge.from)!.push(edge.to);
   }

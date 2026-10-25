@@ -31,11 +31,10 @@ for (const templated of [false, true]) {
       ],
       edges: [
         { from: "work", to: "check" },
-        { from: "check", to: "work", choice: "retry", feedback: "retryLoop" },
+        { from: "check", to: "work", choice: "retry", limit: 2 },
         { from: "check", to: "merge", choice: "done" },
         { from: "merge", to: "integrate" },
       ],
-      loops: [{ id: "retryLoop", entry: "work", maxIterations: 3 }],
       ...(templated ? { promptTemplates: { task: "Inspect {{target}}" } } : {}),
     };
     assert.deepEqual(validate(tools.braidTool, graph), graph);
@@ -114,20 +113,20 @@ test("actual Kimi/Anthropic request exposes flat nodes for both submission and u
   }
 });
 
-test("historical edge pins are available only in graph updates", () => {
-  const edge = { from: "a", to: "b", executionId: "historical-execution" };
-  assert.throws(() => validate(tools.braidTool, { ...input, edges: [edge] }), /Validation failed/);
-  const patch = { jobId: "job-1", expectedRevision: 0, addEdges: [edge], removeEdges: [edge], resume: ["paused-execution"] };
+test("edges are identified by from, to, and choice; loops, feedback, and execution pins are gone", () => {
+  for (const edge of [{ from: "a", to: "b", executionId: "a@1" }, { from: "a", to: "a", feedback: "retry" }]) {
+    assert.throws(() => validate(tools.braidTool, { ...input, edges: [edge] }), /Validation failed/);
+    assert.throws(() => validate(tools.updateTool, { jobId: "job-1", expectedRevision: 0, addEdges: [edge] }), /Validation failed/);
+  }
+  assert.throws(() => validate(tools.braidTool, { ...input, loops: [] }), /Validation failed/);
+  // removeEdges ignores limit, so an edge copied from braid_status can be removed as is.
+  const patch = { jobId: "job-1", expectedRevision: 0, removeEdges: [{ from: "a", to: "b", choice: "x", limit: 2 }], addEdges: [{ from: "a", to: "b", choice: "x", limit: 3 }], resume: ["a@1"] };
   assert.deepEqual(validate(tools.updateTool, patch), patch);
 });
 
-test("loop feedback is a loop ID and rounds are positive safe integers", () => {
-  for (const maxIterations of [0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
-    assert.throws(() => validate(tools.braidTool, { ...input, loops: [{ id: "retry", entry: "a", maxIterations }] }), /Validation failed/);
-  }
-  // Pi coerces primitive values (e.g. true to "true"); core still checks loop references.
-  for (const feedback of [{}, " "]) {
-    assert.throws(() => validate(tools.braidTool, { ...input, edges: [{ from: "a", to: "a", feedback }] }), /Validation failed/);
+test("edge limits are positive safe integers", () => {
+  for (const limit of [0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => validate(tools.braidTool, { ...input, edges: [{ from: "a", to: "a", choice: "again", limit }] }), /Validation failed/);
   }
 });
 

@@ -77,9 +77,9 @@ export function Graph({ job, selected, select }: { job: PanelJob; selected: stri
             const a = layout.positions.get(edge.from), b = layout.positions.get(edge.to);
             if (!a || !b) return null;
             const x = a.x + 77, y = a.y + 72, endX = b.x + 77, endY = b.y;
-            const d = edge.feedback ? `M ${a.x} ${a.y + 36} C 6 ${a.y + 36}, 6 ${b.y + 36}, ${b.x} ${b.y + 36}` : `M ${x} ${y} C ${x} ${y + 26}, ${endX} ${endY - 26}, ${endX} ${endY}`;
-            return <g key={i}><path d={d} strokeDasharray={edge.feedback ? "4 4" : undefined} markerEnd={`url(#${arrow})`}><title>{edge.from} → {edge.to}{edge.choice ? ` (${edge.choice})` : ""}{edge.feedback ? ` · loop ${edge.feedback}` : ""}{edge.executionId ? ` · ${edge.executionId}` : ""}</title></path>
-              {edge.choice && !edge.feedback && <text x={(x + endX) / 2 + 5} y={(y + endY) / 2 - 4}>{edge.choice.slice(0, 22)}</text>}</g>;
+            const d = edge.closesCycle ? `M ${a.x} ${a.y + 36} C 6 ${a.y + 36}, 6 ${b.y + 36}, ${b.x} ${b.y + 36}` : `M ${x} ${y} C ${x} ${y + 26}, ${endX} ${endY - 26}, ${endX} ${endY}`;
+            return <g key={i}><path d={d} strokeDasharray={edge.closesCycle ? "4 4" : undefined} markerEnd={`url(#${arrow})`}><title>{edge.from} → {edge.to}{edge.choice ? ` (${edge.choice})` : ""}{edge.closesCycle ? " · starts another round" : ""}{edge.limit === undefined ? "" : ` · limit ${edge.limit}`}</title></path>
+              {edge.choice && !edge.closesCycle && <text x={(x + endX) / 2 + 5} y={(y + endY) / 2 - 4}>{edge.choice.slice(0, 22)}</text>}</g>;
           })}
         </svg>
         {job.nodes.map(node => { const p = layout.positions.get(node.id)!; return <button key={node.id} ref={selected === node.id ? selectedButton : undefined} className="br-node" style={{ left: p.x, top: p.y }} aria-pressed={selected === node.id} onClick={() => select(node.id)} title={`${node.id} · ${node.type} · ${node.status}`}>
@@ -87,8 +87,8 @@ export function Graph({ job, selected, select }: { job: PanelJob; selected: stri
         </button>; })}
       </div>
     </div></div>
-    <div className="br-legend"><span>Solid · dependency</span><span>Dashed · loop feedback</span><span>Click a node to inspect</span></div>
-    {job.loops.map(loop => <p className="br-note" key={loop.id}>Loop {loop.id} · entry {loop.entry} · {loop.maxIterations === undefined ? "no iteration limit" : `maximum ${loop.maxIterations} iterations`}</p>)}
+    <div className="br-legend"><span>Solid · dependency</span><span>Dashed · back to the start of a cycle</span><span>Click a node to inspect</span></div>
+    {job.edges.filter(edge => edge.closesCycle).map(edge => <p className="br-note" key={`${edge.from}→${edge.to}`}>Cycle {edge.from} → {edge.to} · {edge.limit === undefined ? "no round limit" : `at most ${edge.limit} more rounds`}</p>)}
   </section>;
 }
 
@@ -130,7 +130,7 @@ function ExecutionDetail({ api, sessionId, job, execution }: { api: PanelApi; se
   const entries = [...seen.current.values()].sort((a, b) => a.sequence - b.sequence);
   return <>
     <div className="br-detail-grid">
-      <div><span>Execution</span>{execution.executionId}</div><div><span>Revision / iteration</span>r{execution.revision} / {execution.iteration ?? "—"}</div>
+      <div><span>Execution</span>{execution.executionId}</div><div><span>Revision / generation</span>r{execution.revision} / {execution.generation}</div>
       <div><span>Elapsed</span>{execution.latencyMs === undefined ? "—" : `${(execution.latencyMs / 1000).toFixed(1)}s`}</div>
       <div><span>Worker</span>{p?.phase ?? execution.status}</div>
       <div><span>Context ({p?.contextSource ?? "unreported"})</span>{p ? `${number(p.contextTokens)}${p.contextWindow ? ` / ${number(p.contextWindow)}` : ""}` : "—"}</div>
@@ -180,7 +180,7 @@ function JobView({ job, api, sessionId, connected, act, busy, target }: { job: P
     <Graph job={job} selected={selected} select={id => { setSelected(id); setChosenExecution(""); setTab("output"); }}/>
     <section className="br-section" aria-label="Execution details"><div className="br-section-head"><h3>{selected || "Execution details"}</h3>{execution && <Status status={paused ? "waiting" : execution.suspension ? execution.suspension.state : execution.status}/>}</div>
       {chosenExecution && !execution && <p role="status">The requested execution ({chosenExecution}) is no longer available. Select a node to inspect its current history.</p>}
-      {executions.length > 0 ? <label><span className="br-muted">Execution history</span><select className="br-select" aria-label="Execution history" value={execution?.executionId ?? ""} onChange={e => setChosenExecution(e.target.value)}>{executions.map(e => <option key={e.executionId} value={e.executionId}>{e.executionId} · {e.status}{e.iteration === undefined ? "" : ` · iteration ${e.iteration}`}</option>)}</select></label> : <p className="br-muted">This node has not run yet.</p>}
+      {executions.length > 0 ? <label><span className="br-muted">Execution history</span><select className="br-select" aria-label="Execution history" value={execution?.executionId ?? ""} onChange={e => setChosenExecution(e.target.value)}>{executions.map(e => <option key={e.executionId} value={e.executionId}>{e.executionId} · {e.status}{e.waitReason ? ` · waiting: ${e.waitReason.replace("_", " ")}` : ""}{e.supersededBy ? ` · superseded by ${e.supersededBy}` : ""}</option>)}</select></label> : <p className="br-muted">This node has not run yet.</p>}
       {paused && <button className="br-primary" disabled={!connected || busy || job.status !== "running"} onClick={() => act("resume", [execution!.executionId])}>Resume this execution</button>}
       {execution?.suspension && <p className="br-note" role="status">{execution.suspension.state === "pausing"
         ? execution.suspension.source === "node_timeout" ? "Node timeout: interrupting the current step, then pausing." : "Pausing: stops before its next model request; a running tool finishes first."

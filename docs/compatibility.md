@@ -223,19 +223,22 @@ callback for timeout pauses, and `ControlNotice.action` adds `"cancelled"`.
 
 ## Migrating from 0.5 to 0.6
 
-Version 0.6 removes default limits, so a run can keep going until its graph
-finishes or its owner stops it, and reaching a limit pauses a `startBraid` run
-instead of failing it.
+Version 0.6 prepares Braid for runs that keep going until their owner stops
+them. It removes default limits, pauses a `startBraid` run at a limit instead of
+failing it, and replaces the definition graph with a graph of execution
+instances.
+
+### Limits
 
 - **Defaults.** Core's `maxExecutions` (was 1000), `nodeTimeoutMs` (was 60
-  seconds), and `graphTimeoutMs` (was 5 minutes) are now unlimited, and loops may
-  omit `maxIterations`. Callers that relied on the old bounds, including
+  seconds), and `graphTimeoutMs` (was 5 minutes) are now unlimited, and cycles
+  need no round limit. Callers that relied on the old bounds, including
   `braid()` callers, must set them explicitly. Pi and DSH already defaulted both
   timeouts to unlimited; their jobs also lose the 1000-execution bound.
-- **Limits pause by default.** With `startBraid`, a loop decision that chooses
-  feedback at `maxIterations` is held, `maxExecutions` stops admission, and
-  `graphTimeoutMs` pauses the run, instead of failing with `LOOP_LIMIT`,
-  `EXECUTION_LIMIT`, or `GRAPH_TIMEOUT`. Pass `onLimit: "fail"` to keep failing.
+- **Limits pause by default.** With `startBraid`, a decision that chooses an edge
+  at its limit is held, `maxExecutions` stops admission, and `graphTimeoutMs`
+  pauses the run, instead of failing with `EDGE_LIMIT`, `EXECUTION_LIMIT`, or
+  `GRAPH_TIMEOUT`. Pass `onLimit: "fail"` to keep failing.
   Otherwise, raise the limit and continue as described in
   [limits](execution-control.md#limits), or cancel the run. `braid()` still fails
   and rejects `onLimit: "pause"`.
@@ -248,16 +251,98 @@ TypeScript consumers may need small changes:
 - `ExecutionEvent` adds `limit_reached` and `limits_updated`, and
   `ExecutionError.code` adds `"TOKEN_LIMIT"`. An exhaustive `switch` needs cases
   (or a default) for them.
-- `LoopDefinition.maxIterations` is optional. Code that reads it must handle
-  `undefined`, which means unlimited.
 - New optional members: `BraidOptions.onLimit` and `BraidOptions.maxTokens`.
   `BraidOptions` now extends the exported `BraidLimits`.
 
-In Pi and DSH, submissions accept `options.maxTokens` and `options.onLimit`,
-loops accept a missing `maxIterations`, and `braid_resume` accepts `limits`
-without `executionIds`. `JobOptions` extends `BraidLimits`, `resumeJob` takes
-optional limits, and node completion notices add `loopLimit`. `/braid:review`
-passes `onLimit: "fail"`, so it still fails at its round limit.
+In Pi and DSH, submissions accept `options.maxTokens` and `options.onLimit`, and
+`braid_resume` accepts `limits` without `executionIds`. `JobOptions` extends
+`BraidLimits`, and `resumeJob` takes optional limits. `/braid:review` passes
+`onLimit: "fail"`, so it still fails at its round limit.
+
+### The execution-only graph
+
+The graph now holds only execution instances. Each node ID names a lineage of
+instances, `<nodeId>@<generation>`, and the latest one, the head, is also the
+template for the next. There are no separate definitions that an edit could
+change without effect. See [execution control](execution-control.md) for the
+full model.
+
+**Graphs and loops.** Remove `loops` and every edge's `feedback`. A cycle closed
+by a decision's choice edge is a loop; move the loop's `maxIterations` onto that
+edge as `limit`, which counts how many times the edge fires, so it is one less:
+
+```ts
+// 0.5
+loops: [{ id: "refine", entry: "edit", maxIterations: 3 }],
+edges: [{ from: "review", to: "edit", choice: "again", feedback: "refine" }],
+// 0.6
+edges: [{ from: "review", to: "edit", choice: "again", limit: 2 }],
+```
+
+The cycle rules are otherwise unchanged: the closing edge must be a decision's
+choice edge into the cycle's entry, the decision needs an exit choice, edges enter
+only at the entry and leave only from the decision, and cycles cannot nest or
+overlap. Node IDs can no longer contain `@`.
+
+**Updates.** `upsertNodes` now acts on the node's head. A head that has not
+started is edited in place. A head that has started, running or settled, is
+replaced: the new instance has `supersedes`, the old one `supersededBy`, a
+running one is cancelled, and lineages downstream of it rerun once the
+replacement settles. Before, upserting a started node changed only later
+admissions and silently did nothing for a settled node outside a loop; now it
+reruns the node. Upsert only the nodes you mean to change or rerun, and set
+`pauseAfter` on a replacement to review it before the cascade. Removing a running
+node cancels it instead of letting it finish. An edge added into a settled node
+reruns it once its new input settles. `removeNodeIds` and `removeEdges` reject
+unknown nodes and edges instead of ignoring them; edges are identified by
+`from`, `to`, and `choice`.
+
+**Historical edges.** `edge.executionId` is gone. Edges resolve to the head of
+their source, so depend on the node itself; a node you keep is not superseded
+unless you replace it.
+
+**Results and snapshots.**
+
+- `executions` includes pending instances from the start, and instances that
+  never ran are recorded as skipped when the run ends, so counts of
+  `executions` include them. `maxExecutions` counts started and skipped
+  instances only.
+- `nodes` holds the head of each node that was not removed. A removed node's
+  instances stay in `executions` only.
+- `terminalExecutionIds` and `terminalOutputs` consider heads only.
+- Execution IDs are `<nodeId>@<generation>` instead of UUIDs, and are unique
+  within a run only. Key anything shared across runs by `runId` as well.
+- `NodeStatus` drops `runnable`: an instance is `running` from the moment it is
+  admitted. Pending instances in snapshots carry `waitReason`; settled held ones
+  carry `held: true`.
+
+**TypeScript and events.**
+
+- Removed: `LoopDefinition`, `BraidInput.loops`, `GraphUpdate.loops`,
+  `Edge.feedback`, `Edge.executionId`, `NodeExecution.loopId` and `iteration`,
+  `ExecutionContext.loopId` and `iteration`, and the `loopId`/`iteration` event
+  fields. Use `generation` on `NodeExecution` and `ExecutionContext` instead; a
+  runner that read `request.execution.iteration` reads `generation`.
+- Removed events: `node_created` (now `execution_created`, for every new
+  instance, with `generation`, `cause`, and `supersedes` or `trigger`),
+  `node_runnable`, `loop_started`, and `loop_completed`. New events:
+  `execution_removed` and `execution_superseded`. `limit_reached.limit` is
+  `"edge"` instead of `"maxIterations"` and carries the `edge`.
+- `ExecutionError.code` `LOOP_LIMIT` is now `EDGE_LIMIT`, and the hold source
+  `loop_limit` is now `edge_limit`.
+- New: `Edge.limit`, `WaitReason`, `NodeResult.waitReason`, `held`,
+  `supersedes`, and `supersededBy`, `NodeExecution.generation`, and the
+  `closingEdges` helper.
+
+**Pi and DSH.** The `braid` and `braid_update` tools drop `loops`, `feedback`, and
+`executionId` on edges, and accept `limit` on the closing edge; `removeEdges`
+ignores `limit`. Status text lists executions oldest first with their wait
+reasons, holds, and replacements, and marks the edge that closes a cycle.
+Completion notices drop `iteration` and replace `loopLimit` with `edgeLimit`,
+and `formatLoopLimit` is now `formatEdgeLimit`. The Pi live state replaces
+`iterations` with `generations`, and the DSH panel's `PanelJob` drops `loops`,
+marks the closing edge with `closesCycle`, and gives each execution a
+`generation`.
 
 ## Versioning
 

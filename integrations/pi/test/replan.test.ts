@@ -68,7 +68,7 @@ test("request_replan wakes the parent, holds the result, and shows the request i
   assert.match(status, /Replan requested at .* \(graph revision 0\): b is redundant/);
   assert.match(status, /Suggested graph edit, valid at revision 0; .*\{"removeNodeIds":\["b"\]\}/);
   const job = textOf(await tools.statusTool.execute("job", { jobId: handle }, undefined, undefined, ctx));
-  assert.match(job, /node a · completed · requested a replan/);
+  assert.match(job, /node a · completed · held · requested a replan/);
 
   await tools.updateTool.execute("apply", { jobId: handle, expectedRevision: 0, ...suggestion, resume: [executionId] }, undefined, undefined, ctx);
   await jobs.wait(handle);

@@ -28,8 +28,8 @@ Each box is a task (a **node**); each arrow passes a result to a dependent task
 For agents that edit code, it also provides separate Git worktrees; an explicit
 `integrate` task applies selected changes to your checkout.
 
-Graphs can also branch on an agent's decision, repeat work with a fixed iteration
-limit, and be edited or paused while running. See [runnable examples](docs/examples.md)
+Graphs can also branch on an agent's decision, repeat work in a cycle until a
+decision ends it, and be edited, rerun, or paused while running. See [runnable examples](docs/examples.md)
 and [execution control](docs/execution-control.md) when you need those features.
 
 ## Get started
@@ -183,17 +183,17 @@ type BraidInputNode =
       notifyOnCompletion?: boolean;
       requireSuccess?: boolean; pauseAfter?: boolean };
 
-type Edge = { from: string; to: string; choice?: string; feedback?: string; executionId?: string };
+// limit: only on the edge that closes a cycle; how many times it may fire.
+type Edge = { from: string; to: string; choice?: string; limit?: number };
 type BraidInput = {
   goal: string;
   nodes: readonly BraidInputNode[];
   edges: readonly Edge[];
-  loops?: readonly { id: string; entry: string; maxIterations?: number }[];
   promptTemplates?: Readonly<Record<string, string>>;
 };
 ```
 
-IDs are unique, non-empty strings. Goals, models, choices, plain-string prompts,
+IDs are unique, non-empty strings without `@`. Goals, models, choices, plain-string prompts,
 and rendered prompts must be non-empty strings when present. Decision choices
 must be non-empty and unique.
 `workspace` is optional on execute/decision nodes and forbidden on merge/integrate
@@ -204,9 +204,10 @@ holds outgoing scheduling, and `requireSuccess` makes failure abort the whole ru
 All three booleans default to false. `BraidRun.holdAfter` adds or removes the
 same hold on an execution that is already running.
 
-Unknown fields, missing references, duplicate exact edges, and undeclared cycles
-are rejected. Declared structured loops require a finite iteration limit and an
-explicit feedback edge. Disconnected components are allowed; every root runs.
+Unknown fields, missing references, and duplicate edges (the same `from`, `to`,
+and `choice`) are rejected. A cycle is a loop and must be closed by a decision's
+choice edge back to the node where each round starts; nested or overlapping
+cycles are rejected. Disconnected components are allowed; every root runs.
 Only decision nodes may have choice edges, and choices need not all have exits.
 
 `validateGraph(input)` validates without execution. Invalid graphs raise
@@ -282,15 +283,15 @@ length or token cap (see [resource limits](docs/resource-limits.md)).
 | `runner` | Required | A fresh, isolated invocation for each call |
 | `defaultModel` | Adapter default | Overridden by each node's `model` |
 | `cwd` | `process.cwd()` | Source checkout for core-managed worktrees; non-Git directories grant read-only capabilities |
-| `maxExecutions` | Unlimited | Total materialized executions, including skipped branches, across all rounds and updates; positive safe integer |
+| `maxExecutions` | Unlimited | Total started and skipped executions across all rounds and updates; pending ones do not count; positive safe integer |
 | `maxTokens` | Unlimited | Total reported input and output tokens across all executions, checked as executions settle; positive safe integer |
 | `maxConcurrency` | `4` | Maximum simultaneous runtime-managed node invocations; positive integer |
 | `nodeTimeoutMs` | Unlimited | Separate deadline for each node, starting when it runs (not while queued or suspended) |
 | `graphTimeoutMs` | Unlimited | Whole execution deadline, including node queueing, paused gates, and suspensions; starts after validation |
 | `onNodeTimeout` | `"pause"` (`"fail"` in `braid()`) | `"pause"` suspends a timed-out execution with its work until it is resumed or cancelled (needs an interruptible runner); `"fail"` fails it with `NODE_TIMEOUT` |
-| `onLimit` | `"pause"` (`"fail"` in `braid()`) | What reaching a loop's `maxIterations`, `maxExecutions`, `graphTimeoutMs`, or `maxTokens` does: `"pause"` holds the loop's decision or pauses the run until the owner raises the limit; `"fail"` fails the run with `LOOP_LIMIT`, `EXECUTION_LIMIT`, `GRAPH_TIMEOUT`, or `TOKEN_LIMIT` |
+| `onLimit` | `"pause"` (`"fail"` in `braid()`) | What reaching an edge's `limit`, `maxExecutions`, `graphTimeoutMs`, or `maxTokens` does: `"pause"` holds the decision that chose the edge or pauses the run until the owner raises the limit; `"fail"` fails the run with `EDGE_LIMIT`, `EXECUTION_LIMIT`, `GRAPH_TIMEOUT`, or `TOKEN_LIMIT` |
 | `signal` | None | Caller cancellation signal; aborts running nodes and marks queued nodes cancelled |
-| `onEvent` | None | Live observer for graph/node creation, readiness, starts, handoffs, completions, skips, failures, and graph completion |
+| `onEvent` | None | Live observer for graph and execution creation, starts, handoffs, completions, skips, failures, and graph completion |
 
 Every limit is unlimited by default, so a run can keep going until its graph
 finishes or the owner stops it. Timeouts must be positive finite milliseconds, at
@@ -301,15 +302,15 @@ positive safe integer or `Infinity`. `startBraid` returns `setLimits` to change
 
 ## Scheduling and routing semantics
 
-Node states are explicit:
+Each node is a lineage of execution instances, `<nodeId>@<generation>`; the
+latest is its head. Instance states are explicit:
 
 ```text
-pending -> runnable -> running -> completed | failed
+pending -> running -> completed | failed
 pending -> skipped
-pending | runnable -> skipped (graph timeout)
 ```
 
-Edges are resolved from their source node's state:
+Edges are resolved from the state of their source node's head:
 
 | Source result | Outgoing edge state |
 | --- | --- |
@@ -329,30 +330,36 @@ A decision must call `decide` exactly once with exactly one declared choice;
 missing, invalid, or repeated calls fail it. Catching a tool validation error
 inside an adapter does not turn that invocation into a success.
 
-A pending node waits until **all incoming edges are resolved**. Then:
+A pending instance waits until **all incoming edges are resolved** and none of
+its inputs is stale, that is, about to be replaced by a newer instance. Then:
 
 1. Any blocked incoming edge makes it `skipped: upstream_failed`.
 2. If it has incoming edges but none are active, it becomes `skipped: inactive`.
-3. Otherwise it becomes `runnable` (including roots, which have no inputs).
+3. Otherwise it starts `running` (including roots, which have no inputs).
+
+When a source settles with a new result, a settled downstream head is cloned
+into a new instance, so changes cascade: a cycle unrolls one round at a time,
+and rerunning a node reruns what depends on it.
 
 Failures propagate as context through unconditional edges, allowing successors
 and merge agents to inspect errors and recover partial work. Failed decisions
 cannot activate choice-labelled edges; their unconditional successors can run.
 There are no automatic retries. Failures are optional by default; a
 `requireSuccess: true` execution failure aborts the whole run, cancels siblings,
-and drains writes and cleanup. The policy is captured when the instance is admitted.
+and drains writes and cleanup. The policy belongs to the instance.
 Graph deadlines and execution limits remain active while paused; reaching one
 pauses the run unless `onLimit` is `"fail"`.
 
-Nodes are mutable definitions; execution instances retain captured prompts and
-inputs. `startBraid` exposes revision-checked `update`, `resume`, `snapshot`, and
+A pending instance is edited in place; a started one never changes and is
+replaced instead. `startBraid` exposes revision-checked `update`, `resume`, `snapshot`, and
 `cancel`, plus `pause`/`pauseRun`/`resumeRun` to suspend running executions at
 their next model request without losing their work, `holdAfter` to hold a
 running execution's result once it settles, and `setLimits` to raise run limits. Execute and decision nodes can call
 `request.requestReplan` to ask the graph owner to change the plan; it holds their
-result and never edits the graph itself. Updates can change running nodes, completed nodes, edges, templates, and
-loop topology at any time before finalization. Completion uses the latest graph.
-See [loops and live updates](docs/execution-control.md) for schemas and examples.
+result and never edits the graph itself. Updates can add, edit, replace, and
+remove nodes and edges at any time before finalization: upserting a started node
+replaces it and reruns its downstream lineages. See
+[execution control](docs/execution-control.md) for schemas and examples.
 
 ## Execution events
 
@@ -362,15 +369,17 @@ timestamped. The log is diagnostic data and does not alter scheduling; observer
 exceptions and rejected promises are ignored. Event payloads are frozen before
 being retained and delivered.
 
-The event sequence includes initial `graph_created`, `node_created`, and
+The event sequence includes initial `graph_created`, `execution_created`, and
 `edge_created`; revision-bearing `graph_updated`; and per-instance
-`node_runnable`, `node_started`, `workspace_updated`, `handoff`, `node_completed`,
-`node_failed`, or `node_skipped`, plus `human_input` when an adapter delivers a
-human message to a running worker. Instance events carry `executionId`, admission
-`revision`, and optional `loopId`/`iteration`. Handoffs also identify their exact
-`fromExecutionId`.
+`execution_created`, `node_started`, `workspace_updated`, `handoff`,
+`node_completed`, `node_failed`, or `node_skipped`, plus `human_input` when an
+adapter delivers a human message to a running worker. `execution_created` gives
+each new instance's `generation` and `cause` (submitted, added, cloned, or
+replaced); `execution_superseded` and `execution_removed` report replaced and
+deleted instances. Instance events carry `executionId` and the instance's
+`revision`. Handoffs also identify their exact `fromExecutionId`.
 
-`loop_started`/`loop_completed` report rounds. `execution_paused` and
+`execution_paused` and
 `execution_resumed` report gates, and `execution_hold_added`/`execution_hold_removed`
 changes to a running execution's hold; `replan_requested` reports a node asking
 its graph owner to replan; `execution_suspending`/`execution_suspended`
@@ -617,8 +626,8 @@ is needed for the test suite; its HTTP requests are intercepted in tests.
 
 - [`src/types.ts`](src/types.ts): public graph, provider, and result types.
 - [`src/validate.ts`](src/validate.ts): strict validation, graph snapshot,
-  dependency indexes, and iterative validation of acyclic regions and structured loops.
-- [`src/runtime.ts`](src/runtime.ts): edge resolution, explicit state transitions,
+  dependency indexes, and iterative validation of acyclic regions and cycles.
+- [`src/runtime.ts`](src/runtime.ts): lineages of execution instances, edge resolution, explicit state transitions,
   bounded concurrent scheduling, invocation deadlines, execution events, and result accounting.
 - [`src/workspaces.ts`](src/workspaces.ts): Git snapshots, checkpoint refs, merge
   serialization, local Git tools, and worktree cleanup.
@@ -638,7 +647,7 @@ implemented**. The current scheduler deliberately rescans a small graph after
 completions; `onEvent` is an observer for diagnostics and visualization, not a
 scheduler event bus.
 
-Out of scope: arbitrary/unstructured cycles, nested/overlapping loops, arbitrary
+Out of scope: cycles not closed by a decision's choice edge, nested/overlapping cycles, arbitrary
 code nodes, durable workflow recovery, saved templates, a graphical editing UI,
 and recursive Braid calls from model nodes.
 

@@ -41,7 +41,8 @@ function within(id: string, act: (request: ModelRequest) => void | Promise<void>
   return { runner, ran };
 }
 
-const executionOf = (run: BraidRun, nodeId: string) => Object.values(run.snapshot().executions).find(record => record.id === nodeId)!;
+/** The node's first started instance. */
+const executionOf = (run: BraidRun, nodeId: string) => Object.values(run.snapshot().executions).find(record => record.id === nodeId && record.status !== "pending")!;
 const chain: BraidInput = { goal: "replan", nodes: [node("a"), node("b")], edges: [{ from: "a", to: "b" }] };
 
 test("a replan request holds the result, records the reason, and lets the node finish", async t => {

@@ -33,7 +33,8 @@ test("pause reminders, atomic update/resume, stale revisions and focused histori
   assert.equal(notifications.length, 1); assert.equal(notifications[0]!.paused, true);
   assert.throws(() => jobs.update(job.handle, { expectedRevision: 100, upsertNodes: [{ type: "execute", id: "b", prompt: "new" }] }), /revision/i);
   assert.deepEqual(jobs.get(job.handle).execution, before);
-  jobs.update(job.handle, { expectedRevision: before.revision, upsertNodes: [{ type: "execute", id: "b", prompt: "new" }], addEdges: [{ from: "a", to: "b", executionId }], resume: [executionId] });
+  jobs.update(job.handle, { expectedRevision: before.revision, upsertNodes: [{ type: "execute", id: "b", prompt: "new" }], addEdges: [{ from: "a", to: "b" }], resume: [executionId] });
+  assert.equal(executionId, "a@1");
   await jobs.wait(job.handle);
   assert.equal(jobs.get(job.handle).status, "completed");
   assert.equal(jobs.getNode(job.handle, "a", executionId).output, "done");
@@ -112,7 +113,7 @@ test("status results are text documents; long ones keep controls first and save 
       assert.deepEqual(meta.execution, { status: "waiting", revision: 0, pausedExecutionIds: [executionId], suspendedExecutionIds: [], total: 1, completed: 1 });
     }
     assert.match(whole.text, new RegExp(`^Braid job job-1 · running\nID: \\S+\nGraph waiting · revision 0 · paused executions: ${executionId}\n`));
-    assert.match(focused.text, new RegExp(`^Braid job job-1 · running · Graph waiting · revision 0 · paused executions: ${executionId}\nExecution ${executionId} · node a \\(execute\\) · completed\n`));
+    assert.match(focused.text, new RegExp(`^Braid job job-1 · running · Graph waiting · revision 0 · paused executions: ${executionId}\nExecution ${executionId} · node a \\(execute\\) · completed · held\n`));
     assert.deepEqual(focused.node, { id: "a", executionId, status: "completed" });
     const list = await status!.execute({}, exec) as ToolValue;
     assert.match(list.text, /^1 Braid job in this session, newest first:\n- job-1 · running · /);

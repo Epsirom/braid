@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/%40chrok%2Fpi-braid?label=%40chrok%2Fpi-braid)](https://www.npmjs.com/package/@chrok/pi-braid)
 
 This optional Pi extension runs Braid agent graphs as background jobs, with
-bounded loops, live updates, pause/resume, and a live flow panel.
+cycles, live updates and reruns, pause/resume, and a live flow panel.
 
 **0.5 API:** The npm badge shows the published version; see
 [GitHub releases](https://github.com/Epsirom/braid/releases) for release notes.
@@ -20,13 +20,13 @@ For the previous release, use the
 
 It registers:
 
-- `braid` — submit a graph with optional bounded loops; receive a `jobId`
+- `braid` — submit a graph, optionally with cycles; receive a `jobId`
   immediately (print/JSON runs wait for it before exiting).
 - `braid_status` — retrieve progress and results with `{ "jobId": "..." }`, or
   add `"executionId": "..."` for an exact invocation's full output/error.
-  `"nodeId": "..."` selects that definition's latest invocation. Omit all IDs
+  `"nodeId": "..."` selects that node's latest invocation. Omit all IDs
   to list jobs in the current session.
-- `braid_update` / `braid_resume` — edit live definitions or release paused executions.
+- `braid_update` / `braid_resume` — add, edit, rerun, or remove nodes, or release paused executions.
 - `braid_pause` — pause running executions, or the whole job, without losing their
   work; with `after: true`, hold a running execution's result once it finishes.
 - `braid_cancel` — cancel a job with `{ "jobId": "..." }`, or add
@@ -182,20 +182,20 @@ inspect/report the mismatch instead of launching more probe jobs.
 
 Edges use exact node IDs in `from` and `to`. `choice` is an exact label declared
 by the source decision; omitting it makes the edge unconditional. Pass `edges: []`
-for independent roots. Historical `executionId` pins are available only in
-`braid_update`, after the source execution exists.
+for independent roots.
 
-A retry cycle needs a `loops` definition and exactly one feedback edge from a
-decision back to the loop entry, carrying both `choice` and `feedback: "<loop-id>"`.
-The decision needs another choice to exit. The optional `maxIterations` counts
-the first round as well as retries; omit it unless the user asks for a limit.
-When the decision chooses feedback on the last allowed round, the job holds that
-decision and sends the parent a pause reminder: raise the loop's `maxIterations`
-in `braid_update` with `resume` to run more rounds, or release it with
-`braid_resume` to end the loop without taking its exits. The body must be
-acyclic after removing the feedback edge; external edges enter only at the entry
-and leave only through that decision. Loops cannot nest or overlap. See the
-[loop example](../../docs/execution-control.md#structured-loops).
+A retry cycle is closed by a decision's choice edge back to the node where each
+round starts, such as `{ "from": "check", "to": "work", "choice": "retry" }`. The
+decision needs another choice to exit. The optional `limit` on that edge counts
+how many times it may fire, so `limit: 2` allows three rounds; omit it unless
+the user asks for a limit. When the decision chooses the edge at its limit, the
+job holds that decision and sends the parent a pause reminder: replace the edge
+with a higher limit (`removeEdges` and `addEdges`) in `braid_update` with
+`resume` to run more rounds, or release it with `braid_resume` to end the cycle
+without taking its exits. Edges enter a cycle only at its start node and leave
+only from its decision; cycles cannot nest or overlap. Each round runs new
+executions, named `<nodeId>@<generation>`. See the
+[cycle example](../../docs/execution-control.md#cycles).
 
 ## Shared prompts
 
@@ -218,7 +218,7 @@ for a complete graph and validation rules.
 ## Node completion reminders and live control
 
 Set `notifyOnCompletion: true` on selected nodes for completion/failure reminders.
-Each reminder identifies the exact `executionId` and optional loop iteration.
+Each reminder identifies the exact `executionId`, `<nodeId>@<generation>`.
 `braid_status({jobId, executionId})` retrieves that instance's full output/error;
 `nodeId` selects the latest instance. Skipped executions stay silent. Reminders
 are acknowledged when they enter context and retried if foreground cancellation
@@ -233,17 +233,16 @@ the current graph revision and paused execution IDs, then:
   "jobId": "job-1",
   "expectedRevision": 0,
   "upsertNodes": [{ "type": "execute", "id": "fix", "prompt": "Implement the findings." }],
-  "addEdges": [{ "from": "inspect", "to": "fix", "executionId": "<paused-execution-id>" }],
-  "resume": ["<paused-execution-id>"]
+  "addEdges": [{ "from": "inspect", "to": "fix" }],
+  "resume": ["inspect@1"]
 }
 ```
 
 Pass this to `braid_update`. It validates and commits the full change and resume
 atomically.
 
-`pauseAfter` is captured when an execution starts, so changing it with
-`braid_update` affects only later executions. To review the result of an
-execution that is already running, call `braid_pause({jobId, executionIds,
+A started execution never changes: upserting a running node with `pauseAfter`
+would replace it. To review the result of an execution that is already running, call `braid_pause({jobId, executionIds,
 after: true})`. The execution is not suspended: it keeps running, and once it
 finishes, completed or failed, it is held exactly like `pauseAfter`, with a pause
 reminder. `braid_resume({jobId, executionIds, after: true})` removes the hold
@@ -251,14 +250,21 @@ while it is still running, including one that came from `pauseAfter`. Either
 way only those executions change, not their node definitions. A result that is
 already held is released with the usual `braid_resume` or `braid_update`
 `resume`. To continue without edits, call `braid_resume({jobId,
-expectedRevision, executionIds})`. Definitions can be changed while executions
-are running or waiting, including inside a loop. Existing instances keep their
-captured prompt, inputs, and policy; completion routes through the latest graph.
+expectedRevision, executionIds})`.
+
+`braid_update` acts on each node's latest execution. Upserting a node that has
+not started edits it in place. Upserting a node that has started, running or
+finished, replaces it: a new execution runs with the new definition, a running
+one is cancelled, and once the replacement finishes, the nodes downstream of it
+rerun. Upserting an unchanged definition reruns the node. To review a
+replacement before its downstream nodes rerun, give it `pauseAfter: true`. An
+edge added into a finished node reruns it once its new input finishes.
 Rejected revisions/changes have no effects. Finalized jobs cannot be reopened.
-Include new nodes and their dependencies/loops in the same update. A new node
-without incoming edges is a runnable root; another node's `pauseAfter` does not
-hold it. After a rejected update, retry the complete corrected patch, including
-edges, loops, and resume IDs, instead of staging disconnected nodes separately.
+Include new nodes and their dependencies in the same update. A new node
+without incoming edges is a root that can start at once; another node's
+`pauseAfter` does not hold it. After a rejected update, retry the complete
+corrected patch, including edges and resume IDs, instead of staging disconnected
+nodes separately.
 Pause reminders describe the event when it occurred: check current status and
 paused IDs before attempting an update/resume, since the job can time out or be
 cancelled before the parent handles the reminder.
@@ -290,16 +296,18 @@ updates even when inspecting an older invocation.
 After cancellation or finalization there are no resumable paused executions;
 the event log still records where pauses occurred.
 
-`upsertNodes` replaces whole node definitions, so include all required fields.
-`promptTemplates` and `loops` replace their entire map/list when supplied;
-omitting them preserves the current definitions. `removeEdges` matches exact
-identities, including any `choice`, `feedback`, or `executionId`: omitted fields
-are not wildcards. `resume` and `braid_resume.executionIds` take paused execution
+`upsertNodes` takes whole node definitions, so include all required fields.
+`promptTemplates` replaces the entire map when supplied; omitting it preserves
+the current templates. `removeNodeIds` removes nodes with their edges and cancels
+a running execution; finished executions stay in `braid_status`. `removeEdges`
+identifies edges by `from`, `to`, and `choice` (`limit` is ignored); an omitted
+`choice` is not a wildcard, and removing a node or edge that does not exist is an
+error. `resume` and `braid_resume.executionIds` take paused execution
 IDs, not node IDs.
 
 `requireSuccess` defaults to false. Optional failures retain artifacts and allow
 unconditional recovery; required failures cancel siblings and fail the job after
-cleanup. Loop `maxIterations`, total `maxExecutions`, `maxTokens`, and the
+cleanup. Edge `limit`, total `maxExecutions`, `maxTokens`, and the
 timeouts are unlimited unless set; `maxExecutions` spans updates. Deadlines keep
 running through pauses. The graph timeout includes time waiting for the parent
 to inspect and update a paused graph, and resuming does not extend it.
@@ -311,8 +319,8 @@ parent gets the waiting reminder, and `braid_resume({ jobId, limits })` raises t
 limit and resumes the job. The job does not resume while the limit is still
 reached. `/braid:review` keeps failing at its round limit.
 
-See [execution control](../../docs/execution-control.md) for loop schemas, exact
-update semantics, historical dependencies, and workspace lineage. There is no
+See [execution control](../../docs/execution-control.md) for cycle schemas, exact
+update and rerun semantics, and workspace lineage. There is no
 scheduler persistence across Pi reloads. Reminders alone do not pause execution.
 
 ### Pausing running executions
@@ -375,7 +383,7 @@ visible until another job is submitted or the session ends. Run `/braid:clear`
 to clear the widget: it clears every job submitted so far, including running
 ones, and jobs submitted afterwards still appear. Running it again while the widget
 is empty restores the most recently cleared jobs. Counts use the
-latest state of each current node definition; failed and skipped nodes count as
+latest execution of each current node; failed and skipped nodes count as
 done, and reruns or live edits can change progress and totals. RPC, JSON, and
 print modes do not create a terminal widget.
 
@@ -397,8 +405,8 @@ A flowchart wider than the terminal is cropped to the terminal width around the
 first running node, or from its left edge; a `[chart 1–76 of 245 cols]` line
 shows the visible columns.
 
-For loops, a forward edge opposite a feedback edge is drawn dotted, while the
-retry feedback edge stays solid. For example, `/braid:review` shows the direct
+For cycles, a forward edge opposite the edge that closes the cycle is drawn
+dotted, while the closing retry edge stays solid. For example, `/braid:review` shows the direct
 `scope → check` handoff dotted and `check → scope` (`retry`) solid. All edges and
 choice labels remain visible; runtime dependencies and handoffs are unchanged.
 
@@ -412,7 +420,7 @@ assistant text and thinking, and tool cards whose arguments and output update
 while they run. The node summary—status, elapsed time, usage, context, and live
 activity (see below)—stays pinned at the top while the session scrolls. The
 session follows the newest lines; scroll up to pause, and press End to follow again. Left/Right switch between
-invocations of the same node (for example loop iterations), and ctrl+o expands
+invocations of the same node (for example rounds of a cycle), and ctrl+o expands
 tool output. Escape steps back one level—session, then node selection, then the
 graph—and closes the panel from the graph; `q` closes it from anywhere. Running
 invocations and the 20 most recently finished ones per job keep their session;
@@ -462,7 +470,7 @@ cannot be messaged.
 
 Run `/braid <jobId> <nodeId>` to open that node's latest invocation directly in
 the session view, or `/braid <jobId> <executionId>` for an exact invocation such
-as an earlier loop iteration. The header shows live activity for that exact invocation: the current phase
+as an earlier round of a cycle. The header shows live activity for that exact invocation: the current phase
 (workspace preparation, worker, model request, tool, or checkpoint/cleanup) and
 how long it has been in it, time since the last observed signal, total time, the
 in-flight model request (sent, awaiting the first stream event, or streaming
@@ -624,7 +632,7 @@ They make no provider requests.
 
 Inside Git, every execution gets a new worktree based on predecessor checkpoints.
 Root executions use the initial job snapshot, including tracked and non-ignored
-untracked caller edits. Later loop rounds get new worktrees; they never reuse a
+untracked caller edits. Later rounds of a cycle get new worktrees; they never reuse a
 previous invocation's workspace. `workspace: "read-only"` disables write/edit
 while retaining an isolated snapshot. Outside Git, all filesystem access is
 read-only, including no shell tools. Search tools require installed `rg`/`fd`.
@@ -693,9 +701,9 @@ pass any of these fields in the `braid` tool's `options`:
 | `nodeTimeoutMs` | Active time allowed for each node after it starts, excluding pauses, in milliseconds |
 | `onNodeTimeout` | `pause` (default) suspends a timed-out node and wakes the parent; `fail` fails it with `NODE_TIMEOUT` |
 | `graphTimeoutMs` | Time allowed for the entire graph, including queueing and pauses, in milliseconds |
-| `maxExecutions` | Total materialized execution records, including skips; unlimited by default, positive safe integer |
+| `maxExecutions` | Total started and skipped executions; unlimited by default, positive safe integer |
 | `maxTokens` | Total input and output tokens reported by all executions, checked as each finishes; unlimited by default |
-| `onLimit` | `pause` (default) holds a loop decision at its `maxIterations` or pauses the job at the other limits and wakes the parent; `fail` fails the job |
+| `onLimit` | `pause` (default) holds a decision that chose an edge at its `limit`, or pauses the job at the other limits, and wakes the parent; `fail` fails the job |
 
 For example, `options: { maxToolRounds: 20, maxToolCalls: 60, nodeTimeoutMs: 120000 }`.
 Omit tool, time, execution, and token fields for no limit; programmatic options also accept `Infinity`.

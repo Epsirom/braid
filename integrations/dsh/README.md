@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/%40chrok%2Fdsh-braid?label=%40chrok%2Fdsh-braid)](https://www.npmjs.com/package/@chrok/dsh-braid)
 
-A native DeepSeek Harness plugin for background Braid graphs, bounded loops,
+A native DeepSeek Harness plugin for background Braid graphs, cycles, reruns,
 isolated Git worktrees, live updates, pause/resume, and completion reminders.
 It uses DSH's provider routing and credentials through `ctx.llm`; it has no Pi
 runtime dependency. Tested against **DSH 0.2.0-rc.2** and Node.js **22.19+**.
@@ -44,7 +44,7 @@ agent's model captured at submission.
 
 | Capability | DSH interface |
 | --- | --- |
-| Submit a graph | `braid({ goal, nodes, edges, promptTemplates?, loops?, options? })` |
+| Submit a graph | `braid({ goal, nodes, edges, promptTemplates?, options? })` |
 | List this agent's jobs | `braid_status({})` |
 | Read a job | `braid_status({ jobId })` |
 | Read a specific invocation | `braid_status({ jobId, executionId })` |
@@ -94,9 +94,9 @@ The panel is a native DSH tab: the sidebar provides docking, splitting,
 floating and fullscreen. It follows the session that owns the tab.
 
 - Select a Braid job and inspect its live graph. Nodes show their type and state;
-  edge labels show decisions, and dashed back-edges show bounded loops. Zoom and
+  edge labels show decisions, and dashed back-edges close cycles. Zoom and
   scrolling accommodate larger graphs.
-- Click a node to select an exact execution, including earlier loop iterations.
+- Click a node to select an exact execution, including earlier rounds of a cycle and replaced executions.
   Inspect output, decisions, errors, context usage, tool counts, latency, workspace
   details and recovery refs. Output is paged in 32,768-character chunks.
 - Watch a running execution's live activity: phase and time in phase, time since
@@ -207,12 +207,12 @@ the execution ends, before its checkpoint. Ignored new dependencies, caches, and
 build outputs are not checkpointed and disappear during cleanup. Shared services
 and ports require execution-specific resources.
 
-## Pauses, updates, loops, and reminders
+## Pauses, updates, cycles, and reminders
 
 `notifyOnCompletion: true` sends an intermediate success/failure reminder.
 `pauseAfter: true` additionally holds outgoing scheduling; independent branches
-continue. Reminders identify the exact invocation and loop iteration in the job
-data. Fetch `braid_status`, then use its **current** graph revision and paused
+continue. Reminders identify the exact invocation, `<nodeId>@<generation>` such as
+`review@2`, in the job data. Fetch `braid_status`, then use its **current** graph revision and paused
 execution IDs:
 
 ```json
@@ -224,22 +224,29 @@ execution IDs:
 ```
 
 Pass this to `braid_resume`. `braid_update` accepts complete `upsertNodes`,
-`removeNodeIds`, `addEdges`, `removeEdges`, `promptTemplates`, `loops`, and
-`resume`. Use historical `edge.executionId` pins only in updates. Include new
-nodes and their dependencies in the same update: a disconnected root can start
-immediately. Rejected revisions/patches change nothing. Upserts replace whole
-node definitions; supplied templates/loops replace their whole map/list.
-`removeEdges` matches every identity field exactly; omitted fields are not
-wildcards. Existing invocations retain their captured inputs and policies.
-Finalized jobs cannot be reopened.
+`removeNodeIds`, `addEdges`, `removeEdges`, `promptTemplates`, and `resume`, and
+acts on each node's latest execution. Upserting a node that has not started
+edits it in place; upserting one that has started, running or finished, replaces
+it with a new execution (a running one is cancelled), and its downstream nodes
+rerun once the replacement finishes. Upserting an unchanged definition reruns
+the node; give a replacement `pauseAfter: true` to review it before the rerun
+cascades. `removeNodeIds` removes nodes with their edges and cancels a running
+execution, keeping finished ones in history. An edge added into a finished node
+reruns it once its new input finishes. Include new nodes and their dependencies
+in the same update: a disconnected root can start immediately. Rejected
+revisions/patches change nothing. Supplied templates replace the whole map.
+`removeEdges` identifies edges by `from`, `to`, and `choice` (`limit` is
+ignored); an omitted `choice` is not a wildcard. Finalized jobs cannot be
+reopened.
 
-Loops use a `loops` entry `{ id, entry, maxIterations? }` and one feedback
-edge from a decision to that entry carrying `choice` and `feedback: "<loop-id>"`.
-The optional `maxIterations` includes the first round; without it the decision
-alone ends the loop. A decision that chooses feedback at the limit is held and
-the parent gets a pause reminder: raise `maxIterations` in `braid_update` with
-`resume` to run more rounds, or release it with `braid_resume` to end the loop
-without taking its exits. Loops cannot overlap or nest. Prompt
+A cycle is closed by a decision's choice edge back to the node where each round
+starts, and the decision needs an exit choice. The optional `limit` on that edge
+counts how many times it may fire, so `limit: 2` allows three rounds; without it
+the decision alone ends the cycle. A decision that chooses the edge at its limit
+is held and the parent gets a pause reminder: replace the edge with a higher
+limit (`removeEdges` and `addEdges`) in `braid_update` with `resume` to run more
+rounds, or release it with `braid_resume` to end the cycle without taking its
+exits. Cycles cannot overlap or nest. Prompt
 templates use `{{name}}` placeholders and node prompts such as
 `{ "template": "review", "variables": { "target": "src/runtime.ts" } }`.
 Variable names must match exactly; values are inserted literally.
@@ -258,9 +265,8 @@ woken for those: one notice per execution or job, with the latest state, is
 injected as context once the agent next runs, and asks it not to resume work the
 user paused unless the user asks.
 
-`pauseAfter` is captured when an execution starts, so changing it with
-`braid_update` affects only later executions. To review the result of an
-execution that is already running, call `braid_pause({ jobId, executionIds,
+A started execution never changes: upserting a running node with `pauseAfter`
+would replace it. To review the result of an execution that is already running, call `braid_pause({ jobId, executionIds,
 after: true })`. The execution keeps running; once it finishes, completed or
 failed, it is held exactly like `pauseAfter`, with a pause reminder.
 `braid_resume({ jobId, executionIds, after: true })` removes the hold while it
@@ -354,7 +360,7 @@ npm run test:package
 
 Tests use scripted providers without network model calls. They exercise real
 Cordis/DSH registration, native job ownership/control, canonical tool outputs,
-reminder delivery and cleanup, graph controls, loops, budgets, filesystem guards,
+reminder delivery and cleanup, graph controls, cycles, budgets, filesystem guards,
 and process cancellation. Web tests cover the native Gateway, the built browser
 factory and Remote mounting, slot registration/unload, session switching, safe
 text rendering, controls, revision checks, paging and disconnect cleanup. Package

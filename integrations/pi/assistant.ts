@@ -275,7 +275,8 @@ export class BraidAssistant {
           nodes: state?.nodes,
           executions: Object.values(state?.executions ?? {}).map(execution => ({
             executionId: execution.executionId, nodeId: execution.id, status: execution.status,
-            ...(execution.iteration ? { iteration: execution.iteration } : {}),
+            ...(execution.waitReason ? { waitReason: execution.waitReason } : {}),
+            ...(execution.supersededBy ? { supersededBy: execution.supersededBy } : {}),
             ...(execution.humanInputs?.length ? { humanInputs: execution.humanInputs.length } : {}),
           })),
         });

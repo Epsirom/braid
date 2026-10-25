@@ -14,6 +14,7 @@ import {
   validateGraph,
   type BraidInput,
   type BraidResult,
+  type Edge,
   type ExecutionError,
   type ExecutionEvent,
   type NodeResult,
@@ -81,15 +82,14 @@ export interface NodeCompletion {
   nodeId: string;
   executionId: string;
   paused?: boolean;
-  iteration?: number;
   status: "completed" | "failed";
   /** Identifies this execution event within the job. */
   eventSequence: number;
   errorCode?: ExecutionError["code"];
   /** The execution asked for a replan; its result is held for the parent. */
   replanRequested?: boolean;
-  /** A loop decision held because it chose feedback at its loop's maxIterations. */
-  loopLimit?: { loopId: string; maxIterations: number };
+  /** A decision held because the edge it chose is at its limit. */
+  edgeLimit?: Edge;
 }
 
 /** A running execution asked the parent to replan; its result will be held when it finishes. */
@@ -98,7 +98,6 @@ export interface ReplanNotice {
   handle: string;
   nodeId: string;
   executionId: string;
-  iteration?: number;
   reason: string;
   /** The node suggested a graph edit, readable with braid_status. */
   suggested: boolean;
@@ -112,7 +111,6 @@ export interface TimeoutPause {
   handle: string;
   nodeId: string;
   executionId: string;
-  iteration?: number;
   /** The node time budget that ran out. */
   nodeTimeoutMs: number;
   /** Time the execution ran, excluding earlier suspensions. */
@@ -185,11 +183,11 @@ export interface OutstandingJob {
   paused?: boolean;
 }
 
-/** The loop limit that holds a feedback decision, for its pause reminder. */
-function loopLimit(state: BraidSnapshot, instance: BraidSnapshot["executions"][string]): Pick<NodeCompletion, "loopLimit"> {
-  if (instance.holdAfter?.source !== "loop_limit" || !instance.loopId) return {};
-  const maxIterations = state.graph.loops?.find(loop => loop.id === instance.loopId)?.maxIterations;
-  return maxIterations === undefined ? {} : { loopLimit: { loopId: instance.loopId, maxIterations } };
+/** The edge at its limit that holds a decision, for its pause reminder. */
+function edgeLimit(state: BraidSnapshot, instance: BraidSnapshot["executions"][string]): Pick<NodeCompletion, "edgeLimit"> {
+  if (instance.holdAfter?.source !== "edge_limit") return {};
+  const edge = state.graph.edges.find(edge => edge.from === instance.id && edge.choice === instance.decision && edge.limit !== undefined);
+  return edge ? { edgeLimit: { ...edge } } : {};
 }
 
 function timedOut(state: BraidSnapshot | undefined): Pick<OutstandingJob, "timedOutExecutionIds"> {
@@ -389,7 +387,6 @@ export class BraidJobs {
               try {
                 void Promise.resolve(this.onTimeoutPause({
                   jobId: job.jobId, handle: job.handle, nodeId: event.nodeId, executionId: event.executionId,
-                  ...(instance.iteration ? { iteration: instance.iteration } : {}),
                   nodeTimeoutMs: timeout.nodeTimeoutMs, activeMs: timeout.activeMs,
                   ...(activity ? { activity } : {}), eventSequence: event.sequence,
                 })).catch(() => {});
@@ -401,7 +398,6 @@ export class BraidJobs {
             try {
               void Promise.resolve(this.onReplanRequested({
                 jobId: job.jobId, handle: job.handle, nodeId: event.nodeId, executionId: event.executionId,
-                ...(event.iteration ? { iteration: event.iteration } : {}),
                 reason: event.reason, suggested: event.suggestion !== undefined, eventSequence: event.sequence,
               })).catch(() => {});
             } catch { /* Notification failures must not affect scheduling. */ }
@@ -431,12 +427,11 @@ export class BraidJobs {
                 nodeId: event.nodeId,
                 executionId: instance.executionId,
                 ...(event.type === "execution_paused" ? { paused: true } : {}),
-                ...(instance.iteration ? { iteration: instance.iteration } : {}),
                 status: instance.status === "completed" ? "completed" : "failed",
                 eventSequence: event.sequence,
                 ...(instance.error ? { errorCode: instance.error.code } : {}),
                 ...(instance.replan ? { replanRequested: true } : {}),
-                ...loopLimit(state!, instance),
+                ...edgeLimit(state!, instance),
               })).catch(() => {});
             } catch {
               /* Notification failures must not affect scheduling or results. */
