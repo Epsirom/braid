@@ -1,5 +1,6 @@
 import type {
   BraidInput,
+  BraidLimits,
   BraidOptions,
   BraidResult,
   BraidRun,
@@ -73,22 +74,27 @@ function validateOptions(options: BraidOptions): void {
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
     throw new TypeError("maxConcurrency must be a positive integer");
   }
-  if (!Number.isSafeInteger(options.maxExecutions ?? 1000) || (options.maxExecutions ?? 1000) < 1)
-    throw new TypeError("maxExecutions must be a positive integer");
   if (options.onNodeTimeout !== undefined && options.onNodeTimeout !== "pause" && options.onNodeTimeout !== "fail")
     throw new TypeError('onNodeTimeout must be "pause" or "fail"');
-  for (const key of ["nodeTimeoutMs", "graphTimeoutMs"] as const) {
-    const value = options[key];
-    if (
-      value !== undefined &&
-      value !== Infinity &&
-      (!Number.isFinite(value) || value <= 0 || value > 2_147_483_647)
-    ) {
-      throw new TypeError(
-        `${key} must be Infinity or a positive number no greater than 2147483647`,
-      );
-    }
+  if (options.onLimit !== undefined && options.onLimit !== "pause" && options.onLimit !== "fail")
+    throw new TypeError('onLimit must be "pause" or "fail"');
+  const value = options.nodeTimeoutMs;
+  if (value !== undefined && value !== Infinity && (!Number.isFinite(value) || value <= 0 || value > 2_147_483_647))
+    throw new TypeError("nodeTimeoutMs must be Infinity or a positive number no greater than 2147483647");
+  validateLimits(options);
+}
+
+const limitKeys = ["maxExecutions", "graphTimeoutMs", "maxTokens"] as const;
+
+function validateLimits(limits: BraidLimits): void {
+  for (const key of ["maxExecutions", "maxTokens"] as const) {
+    const value = limits[key];
+    if (value !== undefined && value !== Infinity && (!Number.isSafeInteger(value) || value < 1))
+      throw new TypeError(`${key} must be Infinity or a positive integer`);
   }
+  const value = limits.graphTimeoutMs;
+  if (value !== undefined && value !== Infinity && (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 2_147_483_647))
+    throw new TypeError("graphTimeoutMs must be Infinity or a positive number no greater than 2147483647");
 }
 
 type EdgeState = "unresolved" | "active" | "inactive" | "blocked";
@@ -195,6 +201,8 @@ interface InvocationHandle {
   renew(nodeTimeoutMs: number): void;
   /** Fail this execution only. */
   abort(error: RunError): void;
+  /** The run's graph deadline changed; update the request's deadlines in place. */
+  setGraphDeadline(deadline: number): void;
 }
 
 /** Scheduler hooks for one execution's suspension. */
@@ -215,7 +223,10 @@ async function runNode(
   runner: BraidOptions["runner"],
   timeoutMs: number,
   graphSignal: AbortSignal,
-  graphDeadline: number,
+  /** The current graph deadline; setLimits can move it. */
+  graphDeadline: () => number,
+  /** False when the scheduler pauses the run at the graph deadline instead of failing it. */
+  enforceGraphDeadline: boolean,
   log: EventLog,
   workspaces: GitWorkspaces,
   fail: (error: ExecutionError, infrastructure?: boolean) => void,
@@ -251,6 +262,11 @@ async function runNode(
   suspension.attach({
     renew(ms) { renewal = ms; },
     abort(error) { controller.abort(error); },
+    setGraphDeadline(deadline) {
+      // Mutate in place: runners may hold a reference to the request's deadlines.
+      if (Number.isFinite(deadline)) (invocation.deadlines ??= {}).graph = deadline;
+      else if (invocation.deadlines) delete invocation.deadlines.graph;
+    },
   });
   let onAbort: () => void;
   const aborted = new Promise<never>((_, reject) => {
@@ -297,10 +313,10 @@ async function runNode(
       requestReplan(request);
     };
   }
-  if (Number.isFinite(timeoutMs) || Number.isFinite(graphDeadline)) {
+  if (Number.isFinite(timeoutMs) || Number.isFinite(graphDeadline())) {
     invocation.deadlines = {
       ...(Number.isFinite(timeoutMs) ? { node: started + timeoutMs } : {}),
-      ...(Number.isFinite(graphDeadline) ? { graph: graphDeadline } : {}),
+      ...(Number.isFinite(graphDeadline()) ? { graph: graphDeadline() } : {}),
     };
   }
   let acceptingCheckpoints = true;
@@ -362,7 +378,7 @@ async function runNode(
     signal.throwIfAborted();
     const now = performance.now();
     let error: RunError | undefined;
-    if (now >= graphDeadline) error = new RunError("GRAPH_TIMEOUT", "Graph deadline exceeded");
+    if (enforceGraphDeadline && now >= graphDeadline()) error = new RunError("GRAPH_TIMEOUT", "Graph deadline exceeded");
     else if (now - started - suspendedMs >= limitMs) {
       // Under the pause policy a finished runner keeps its result.
       if (!pauseOnTimeout) error = nodeTimeout();
@@ -503,6 +519,8 @@ interface LoopState {
   records: Map<string, NodeExecution>;
   previous?: NodeExecution;
   done: boolean;
+  /** The feedback decision held at maxIterations under onLimit: "pause". */
+  limitHold?: string;
 }
 
 const settled = (record: NodeResult) => ["completed", "failed", "skipped"].includes(record.status);
@@ -512,7 +530,8 @@ const edgeKey = (edge: Edge) => JSON.stringify([edge.from, edge.to, edge.choice,
 export async function braid(input: BraidInput, options: BraidOptions): Promise<BraidResult> {
   // Nothing can resume a paused execution without the run handle.
   if (options?.onNodeTimeout === "pause") throw new TypeError('braid() cannot resume executions; use startBraid() for onNodeTimeout: "pause"');
-  return startBraid(input, { ...options, onNodeTimeout: "fail" }).result;
+  if (options?.onLimit === "pause") throw new TypeError('braid() cannot resume a run at a limit; use startBraid() for onLimit: "pause"');
+  return startBraid(input, { ...options, onNodeTimeout: "fail", onLimit: "fail" }).result;
 }
 
 /** Definitions are mutable; each admitted execution captures its definition and inputs. */
@@ -523,13 +542,17 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   if (graph.edges.some(edge => edge.executionId)) throw new TypeError("Initial edges cannot reference historical executions");
   const { runner, defaultModel, signal } = options;
   const maxConcurrency = options.maxConcurrency ?? 4;
-  const maxExecutions = options.maxExecutions ?? 1000;
-  const nodeTimeoutMs = options.nodeTimeoutMs ?? 60_000;
-  const graphTimeoutMs = options.graphTimeoutMs ?? 300_000;
+  const limits: Required<BraidLimits> = {
+    maxExecutions: options.maxExecutions ?? Infinity,
+    graphTimeoutMs: options.graphTimeoutMs ?? Infinity,
+    maxTokens: options.maxTokens ?? Infinity,
+  };
+  const nodeTimeoutMs = options.nodeTimeoutMs ?? Infinity;
   const onNodeTimeout = options.onNodeTimeout ?? "pause";
+  const onLimit = options.onLimit ?? "pause";
   const startedAt = Date.now();
   const started = performance.now();
-  const graphDeadline = started + graphTimeoutMs;
+  let graphDeadline = started + limits.graphTimeoutMs;
   const runId = crypto.randomUUID();
   const log = createEventLog(options.onEvent);
   const executions = new Map<string, NodeExecution>();
@@ -560,13 +583,20 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   function resetWake() { changed = new Promise(resolve => { wake = resolve; }); }
   resetWake();
   controller.signal.addEventListener("abort", () => wake());
-  const graphTimeout = new RunError("GRAPH_TIMEOUT", `Graph exceeded ${graphTimeoutMs}ms`);
   const cancel = () => {
     if (status !== "completed" && status !== "failed") controller.abort(new RunError("CANCELLED", "Graph cancelled by caller"));
   };
   signal?.addEventListener("abort", cancel, { once: true });
   if (signal?.aborted) cancel();
-  const timer = Number.isFinite(graphTimeoutMs) ? setTimeout(() => controller.abort(graphTimeout), graphTimeoutMs) : undefined;
+  // The scheduler loop acts on the deadline: it fails or pauses the run.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const startTimer = () => {
+    clearTimeout(timer);
+    // Timers have millisecond resolution and can fire just before the deadline; wait again then.
+    timer = Number.isFinite(graphDeadline) ? setTimeout(() => performance.now() < graphDeadline ? startTimer() : wake(),
+      Math.max(0, Math.ceil(graphDeadline - performance.now()))) : undefined;
+  };
+  startTimer();
   const context = (record: NodeExecution) => ({ executionId: record.executionId, revision: record.revision,
     ...(record.loopId ? { loopId: record.loopId, iteration: record.iteration! } : {}) });
   const workspaces = new GitWorkspaces(resolve(options.cwd ?? process.cwd()), workspace => {
@@ -580,8 +610,56 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     for (const [id, record] of latest) Object.defineProperty(nodes, id, { value: record, enumerable: true, writable: true, configurable: true });
     return structuredClone({ runId, status, revision, graph: definition, nodes: finalNodes ?? nodes,
       executions: Object.fromEntries(executions), pausedExecutionIds: [...paused], suspendedExecutionIds: [...suspended],
-      ...(runPause ? { pause: runPause } : {}),
+      ...(runPause ? { pause: runPause } : {}), limits: finiteLimits(),
       ...(controller.signal.aborted ? { error: describeError(controller.signal.reason) } : {}) });
+  }
+
+  function finiteLimits(): BraidLimits {
+    return Object.fromEntries(limitKeys.filter(key => Number.isFinite(limits[key])).map(key => [key, limits[key]]));
+  }
+  const tokensUsed = () => [...executions.values()].reduce((sum, record) => sum + (record.usage ? record.usage.inputTokens + record.usage.outputTokens : 0), 0);
+  /** Run limits that are reached, by the pause source they use under onLimit: "pause". */
+  const runLimits = {
+    execution_limit: { limit: "maxExecutions", error: () => new RunError("EXECUTION_LIMIT", `Graph exceeded ${limits.maxExecutions} executions`),
+      reached: () => executions.size >= limits.maxExecutions },
+    graph_timeout: { limit: "graphTimeoutMs", error: () => new RunError("GRAPH_TIMEOUT", `Graph exceeded ${limits.graphTimeoutMs}ms`),
+      reached: () => performance.now() >= graphDeadline },
+    token_limit: { limit: "maxTokens", error: () => new RunError("TOKEN_LIMIT", `Graph used ${tokensUsed()} tokens, reaching its limit of ${limits.maxTokens}`),
+      reached: () => Number.isFinite(limits.maxTokens) && tokensUsed() >= limits.maxTokens },
+  } as const;
+  type RunLimitSource = keyof typeof runLimits;
+  /**
+   * Fail the run at a reached limit, or pause it: no new admissions, and for time and
+   * tokens every running execution pauses too. An existing run pause is kept.
+   */
+  function reachLimit(source: RunLimitSource) {
+    const { limit, error } = runLimits[source];
+    if (onLimit === "fail") { controller.abort(error()); return; }
+    if (runPause) return;
+    runPause = { source, pausedAt: Date.now() };
+    log.emit({ type: "limit_reached", limit, value: limits[limit], revision });
+    log.emit({ type: "graph_paused", source, revision });
+    // Executions already admitted count toward maxExecutions, so they may finish.
+    if (source !== "execution_limit" && runner.pausable) for (const id of running.keys()) {
+      const record = executions.get(id)!;
+      if (!settled(record)) requestPause(record, source, true);
+    }
+    wake();
+  }
+  function setLimits(changes: BraidLimits): BraidSnapshot {
+    assertActive();
+    if (!changes || typeof changes !== "object" || Object.keys(changes).some(key => !(limitKeys as readonly string[]).includes(key)))
+      throw new TypeError(`setLimits accepts only ${limitKeys.join(", ")}`);
+    validateLimits(changes);
+    for (const key of limitKeys) if (changes[key] !== undefined) limits[key] = changes[key];
+    if (changes.graphTimeoutMs !== undefined) {
+      graphDeadline = started + limits.graphTimeoutMs;
+      startTimer();
+      for (const invocation of invocations.values()) invocation.setGraphDeadline(graphDeadline);
+    }
+    log.emit({ type: "limits_updated", limits: finiteLimits(), revision });
+    wake();
+    return snapshot();
   }
 
   function assertActive() {
@@ -731,6 +809,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   function resumeRun(): BraidSnapshot {
     assertActive();
     if (!runPause) return snapshot();
+    const limit = Object.hasOwn(runLimits, runPause.source) ? runLimits[runPause.source as RunLimitSource] : undefined;
+    if (limit?.reached()) throw new Error(`The run is paused at its ${limit.limit} limit of ${limits[limit.limit]}; raise it with setLimits before resuming`);
     runPause = undefined;
     const continued = stageResume([...pausedByRun].filter(resumable));
     pausedByRun.clear();
@@ -923,9 +1003,9 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     return { states, predecessors: [...new Map(predecessors.map(record => [record.executionId, record])).values()] };
   }
   function admit(nodeId: string, predecessors: NodeExecution[], skipReason?: NodeResult["skipReason"]) {
-    if (executions.size >= maxExecutions) {
-      controller.abort(new RunError("EXECUTION_LIMIT", `Graph exceeded ${maxExecutions} executions`));
-      return;
+    if (runLimits.execution_limit.reached()) {
+      reachLimit("execution_limit");
+      return false;
     }
     const node = graph.nodes.find(node => node.id === nodeId)!;
     const loopId = graph.membership.get(node.id);
@@ -943,7 +1023,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       record.skipReason = skipReason;
       record.finishedAt = Date.now();
       log.emit({ type: "node_skipped", nodeId: record.id, reason: skipReason, ...context(record) });
-      return;
+      return true;
     }
     const scopedLog: EventLog = { events: log.events, emit: event => log.emit({ ...event, ...context(record) }) };
     const request: Omit<ModelRequest, "signal" | "decide"> = {
@@ -955,7 +1035,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     // Reserve the slot before publishing events or invoking asynchronous runner code.
     const task = Promise.resolve().then(async () => {
       scopedLog.emit({ type: "node_runnable", nodeId: record.id });
-      await runNode(request, record, runner, nodeTimeoutMs, controller.signal, graphDeadline, scopedLog, workspaces, (error, infrastructure) => {
+      await runNode(request, record, runner, nodeTimeoutMs, controller.signal, () => graphDeadline, onLimit === "fail", scopedLog, workspaces, (error, infrastructure) => {
         if (infrastructure) controller.abort(new RunError(error.code, error.message));
         else if (record.node.requireSuccess) controller.abort(new RunError("REQUIRED_NODE_FAILED", `Required node '${record.id}' (${record.executionId}) failed: ${error.message}`));
       }, suspensionControl(record), onNodeTimeout,
@@ -968,6 +1048,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       controller.abort(new RunError("SCHEDULING_ERROR", error instanceof Error ? error.message : String(error)));
     }).finally(() => { running.delete(record.executionId); grantSlots(); wake(); });
     running.set(record.executionId, task);
+    return true;
   }
 
   function advanceLoops(): boolean {
@@ -978,9 +1059,27 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       const decision = state.records.get(loop.feedback.from)!;
       if (edgeState(loop.feedback, decision) === "active") {
         if (state.iteration >= loop.maxIterations) {
-          controller.abort(new RunError("LOOP_LIMIT", `Loop '${id}' exceeded ${loop.maxIterations} iterations`));
+          if (onLimit === "fail") {
+            controller.abort(new RunError("LOOP_LIMIT", `Loop '${id}' exceeded ${loop.maxIterations} iterations`));
+            return true;
+          }
+          if (state.limitHold !== decision.executionId) {
+            // Hold the decision until the owner raises the limit, or releases it to end the loop.
+            state.limitHold = decision.executionId;
+            decision.holdAfter = { source: "loop_limit", requestedAt: Date.now() };
+            paused.add(decision.executionId);
+            log.emit({ type: "execution_hold_added", nodeId: decision.id, source: "loop_limit", ...context(decision) });
+            log.emit({ type: "limit_reached", limit: "maxIterations", value: loop.maxIterations, nodeId: decision.id, ...context(decision) });
+            log.emit({ type: "execution_paused", nodeId: decision.id, ...context(decision) });
+            return true;
+          }
+          // Released without a higher limit: the loop ends here and its exits are not taken.
+          delete state.limitHold;
+          state.done = true;
+          log.emit({ type: "loop_completed", loopId: id, iteration: state.iteration, entry: loop.entry, revision });
           return true;
         }
+        delete state.limitHold;
         state.iteration++;
         state.previous = decision;
         state.records = new Map();
@@ -1003,7 +1102,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       await workspaces.initialize(runId);
       for (const [id, loop] of graph.loops) log.emit({ type: "loop_started", loopId: id, iteration: 1, entry: loop.entry, revision });
       while (true) {
-        if (performance.now() >= graphDeadline) controller.abort(graphTimeout);
+        if (runLimits.graph_timeout.reached()) reachLimit("graph_timeout");
+        else if (runLimits.token_limit.reached()) reachLimit("token_limit");
         if (controller.signal.aborted) { await Promise.all(running.values()); break; }
         resetWake();
         let progressed = advanceLoops();
@@ -1019,7 +1119,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
           const reason = states.includes("blocked") ? "upstream_failed" : states.length && !states.includes("active") ? "inactive" : undefined;
           // Resumed executions waiting for a slot take priority over new admissions.
           if (!reason && (active() >= maxConcurrency || resumeQueue.length)) continue;
-          admit(node.id, predecessors, reason);
+          if (!admit(node.id, predecessors, reason)) break;
           progressed = true;
         }
         if (controller.signal.aborted || progressed || schedulingRevision !== revision) continue;
@@ -1083,7 +1183,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     result.events = Object.freeze(log.events);
     return result;
   }
-  return { runId, result: Promise.resolve().then(execute), snapshot, update, cancel, cancelExecutions, pause, holdAfter, pauseRun, resumeRun,
+  return { runId, result: Promise.resolve().then(execute), snapshot, update, cancel, cancelExecutions, pause, holdAfter, pauseRun, resumeRun, setLimits,
     resume(ids, expectedRevision, options) {
       assertMutable(expectedRevision); validateResume(ids, options); release(ids, options); wake(); return snapshot();
     } };

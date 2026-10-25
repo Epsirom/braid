@@ -86,7 +86,7 @@ test("/braid:review registers a bounded background graph and trims its target", 
   assert.deepEqual(input.loops, [{ id: "review-loop", entry: "scope", maxIterations: 3 }]);
   assert.deepEqual(input.edges.filter(edge => edge.to === "check").map(edge => edge.from).sort(), ["review-1", "review-2", "review-3", "scope"]);
   assert.ok(input.nodes.every(node => node.requireSuccess));
-  assert.deepEqual(options, { maxConcurrency: 3, maxExecutions: 16 });
+  assert.deepEqual(options, { maxConcurrency: 3, maxExecutions: 16, onLimit: "fail" });
   assert.equal(submittedContext, ctx);
   assert.equal(messages.length, 1);
   assert.equal(messages[0]![0].customType, "braid-review-started");

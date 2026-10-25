@@ -129,7 +129,8 @@ export interface Edge {
 export interface LoopDefinition {
   id: string;
   entry: string;
-  maxIterations: number;
+  /** Total rounds including the first. Omit or use Infinity for no limit. */
+  maxIterations?: number;
 }
 
 export interface BraidInput {
@@ -285,7 +286,11 @@ export interface ExecutionSuspension {
 
 /** A hold on an execution's outgoing scheduling, applied once it settles. */
 export interface ExecutionHold {
-  /** "definition" for the node's pauseAfter, otherwise the caller-supplied label. */
+  /**
+   * "definition" for the node's pauseAfter, "replan" for a replan request,
+   * "loop_limit" for a feedback decision held at its loop's maxIterations,
+   * otherwise the caller-supplied label.
+   */
   source: string;
   requestedAt: number;
 }
@@ -335,6 +340,19 @@ export type ExecutionEvent = Readonly<
     | { type: "replan_requested"; nodeId: string; reason: string; suggestion?: ReplanSuggestion }
     | { type: "graph_paused"; source: string }
     | { type: "graph_resumed" }
+    | {
+        /**
+         * A limit was reached under onLimit: "pause". maxIterations holds the loop's
+         * feedback decision; the other limits pause the run.
+         */
+        type: "limit_reached";
+        limit: keyof BraidLimits | "maxIterations";
+        /** The limit's value when it was reached. */
+        value: number;
+        /** The held feedback decision, for maxIterations. */
+        nodeId?: string;
+      }
+    | { type: "limits_updated"; limits: Readonly<BraidLimits> }
     | {
         /**
          * The last active execution settled, was held, or suspended, and only held,
@@ -388,17 +406,28 @@ export type ExecutionEvent = Readonly<
   )
 >;
 
-export interface BraidOptions {
+/** Run-wide limits. Each is unlimited when omitted or Infinity. */
+export interface BraidLimits {
+  /** Total materialized executions across loops and graph updates, including skipped records. */
+  maxExecutions?: number;
+  /** Wall time from the start of the run, including queueing and pauses. */
+  graphTimeoutMs?: number;
+  /**
+   * Total reported input and output tokens across all executions. Checked when an
+   * execution settles, so running executions can exceed it.
+   */
+  maxTokens?: number;
+}
+
+export interface BraidOptions extends BraidLimits {
   runner: ModelRunner;
   defaultModel?: string;
   /** Source checkout for the initial snapshot and explicit integrate nodes. */
   cwd?: string;
   /** Positive integer. Defaults to 4. */
   maxConcurrency?: number;
-  /** Applied separately to each invocation, starting when it runs and stopped while it is suspended. Default: 60s. Infinity disables it. */
+  /** Applied separately to each invocation, starting when it runs and stopped while it is suspended. Default: unlimited. */
   nodeTimeoutMs?: number;
-  /** Includes queueing, pauses, and execution of the entire graph. Default: 5 minutes. Infinity disables it. */
-  graphTimeoutMs?: number;
   /**
    * What a node timeout does. "pause" interrupts the current step and suspends the
    * execution until it is resumed or cancelled; it needs an interruptible runner,
@@ -406,12 +435,18 @@ export interface BraidOptions {
    * "fail" for braid(), which cannot resume executions.
    */
   onNodeTimeout?: "pause" | "fail";
+  /**
+   * What reaching a loop's maxIterations or a run limit does. "pause" holds the
+   * loop's feedback decision, or pauses the run, until the owner raises the limit
+   * or decides otherwise; "fail" fails the run with LOOP_LIMIT, EXECUTION_LIMIT,
+   * GRAPH_TIMEOUT, or TOKEN_LIMIT. Default: "pause" for startBraid, and "fail" for
+   * braid(), which cannot resume.
+   */
+  onLimit?: "pause" | "fail";
   /** Caller cancellation, independent of node and graph deadlines. */
   signal?: AbortSignal;
   /** Live observer. Throws/rejections are ignored; returned work is not awaited. */
   onEvent?: (event: ExecutionEvent) => void;
-  /** Total admitted executions across loops and graph updates. Default: 1000. */
-  maxExecutions?: number;
 }
 
 export interface ExecutionError {
@@ -429,6 +464,7 @@ export interface ExecutionError {
     | "WORKSPACE_MERGE_REQUIRED"
     | "EXECUTION_LIMIT"
     | "LOOP_LIMIT"
+    | "TOKEN_LIMIT"
     | "REQUIRED_NODE_FAILED"
     | "SCHEDULING_ERROR";
   message: string;
@@ -541,8 +577,13 @@ export interface BraidSnapshot {
   pausedExecutionIds: string[];
   /** Running executions stopped at a checkpoint, including resumed ones waiting for a slot. */
   suspendedExecutionIds: string[];
-  /** Present while the whole run is paused: no new executions are admitted. */
+  /**
+   * Present while the whole run is paused: no new executions are admitted. A limit
+   * under onLimit: "pause" uses source "execution_limit", "graph_timeout", or "token_limit".
+   */
   pause?: { source: string; pausedAt: number };
+  /** The run's finite limits; unlimited ones are omitted. */
+  limits: BraidLimits;
   /** Present as soon as a run-wide failure or cancellation starts draining work. */
   error?: ExecutionError;
 }
@@ -563,8 +604,16 @@ export interface BraidRun {
   holdAfter(executionIds: readonly string[], hold: boolean, options?: PauseOptions): BraidSnapshot;
   /** Stop admitting executions and pause every running one. Independent of pauseAfter holds. */
   pauseRun(options?: PauseOptions): BraidSnapshot;
-  /** Admit executions again and resume the executions that pauseRun paused. */
+  /**
+   * Admit executions again and resume the executions that pauseRun paused. Throws
+   * while the run is paused by a limit that is still reached; raise it with setLimits first.
+   */
   resumeRun(): BraidSnapshot;
+  /**
+   * Change run limits. Each given limit replaces the current one; Infinity removes it.
+   * graphTimeoutMs still counts from the start of the run. Does not resume the run.
+   */
+  setLimits(limits: BraidLimits): BraidSnapshot;
   /** Cancel the whole run. */
   cancel(): void;
   /**

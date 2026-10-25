@@ -88,7 +88,7 @@ export function Graph({ job, selected, select }: { job: PanelJob; selected: stri
       </div>
     </div></div>
     <div className="br-legend"><span>Solid · dependency</span><span>Dashed · loop feedback</span><span>Click a node to inspect</span></div>
-    {job.loops.map(loop => <p className="br-note" key={loop.id}>Loop {loop.id} · entry {loop.entry} · maximum {loop.maxIterations} iterations</p>)}
+    {job.loops.map(loop => <p className="br-note" key={loop.id}>Loop {loop.id} · entry {loop.entry} · {loop.maxIterations === undefined ? "no iteration limit" : `maximum ${loop.maxIterations} iterations`}</p>)}
   </section>;
 }
 
