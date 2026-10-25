@@ -44,7 +44,7 @@ pauses, reminders) instead of hard limits that fail the job. Tracking issue:
 
 - [x] Default every limit to unlimited, and hold or pause instead of failing
   when a limit that is set is reached ([#112](https://github.com/Epsirom/braid/issues/112)).
-- [ ] Replace the schedule/execution split with an execution-only graph of
+- [x] Replace the schedule/execution split with an execution-only graph of
   lineages, where a started node is changed by replacing it ([#113](https://github.com/Epsirom/braid/issues/113)).
 - [ ] Accept unconditional, nested, and overlapping cycles ([#114](https://github.com/Epsirom/braid/issues/114)).
 - [ ] Show lineage heads and the full execution history in one Pi graph ([#94](https://github.com/Epsirom/braid/issues/94)).
