@@ -219,13 +219,17 @@ function nodeElapsed(node: NodeResult, now: number): string {
 /** Replaces the selected node's one-column status icon, so selection never moves the layout. */
 export const SELECTED_NODE_MARK = "◆";
 
-/** The two views of the execution-only graph in the panel. */
-export type GraphView = "heads" | "history";
-/** Generations of each lineage the history view keeps expanded by default. */
-export const HISTORY_ROUNDS = 2;
+/**
+ * The panel's views of the execution-only graph, one box per execution: live
+ * shows what has not released its result yet (pending, running, held); timeline
+ * shows every execution.
+ */
+export type GraphView = "live" | "timeline";
+/** Generations of each lineage the timeline keeps expanded by default. */
+export const TIMELINE_ROUNDS = 2;
 
-/** One box per instance; older settled instances of a lineage fold into one box per lineage. */
-export interface HistoryLayout {
+/** The executions a view draws; older settled ones of a lineage fold into one box per lineage. */
+export interface ExecutionLayout {
   shown: NodeExecution[];
   folded: Map<string, NodeExecution[]>;
 }
@@ -234,15 +238,17 @@ const settled = (record: NodeResult) =>
   (record.status === "completed" || record.status === "failed" || record.status === "skipped") && !record.held;
 
 /**
- * Pending, running, and held instances always stay expanded, as do the last
- * HISTORY_ROUNDS generations of each lineage (every generation with `all`).
- * Past MAX_VISIBLE_NODES boxes, the oldest settled instances fold first.
+ * The live view draws pending, running, and held executions only. The timeline
+ * always expands those too, plus the last TIMELINE_ROUNDS generations of each
+ * lineage (every generation with `all`); past MAX_VISIBLE_NODES boxes, the
+ * oldest settled executions fold first.
  */
-export function historyLayout(executions: Record<string, NodeExecution>, all = false): HistoryLayout {
+export function executionLayout(executions: Record<string, NodeExecution>, view: GraphView, all = false): ExecutionLayout {
   const records = Object.values(executions);
+  if (view === "live") return { shown: records.filter(record => !settled(record)), folded: new Map() };
   const latest = new Map<string, number>();
   for (const record of records) latest.set(record.id, Math.max(latest.get(record.id) ?? 0, record.generation));
-  const keep = new Set(records.filter(record => all || !settled(record) || record.generation > latest.get(record.id)! - HISTORY_ROUNDS));
+  const keep = new Set(records.filter(record => all || !settled(record) || record.generation > latest.get(record.id)! - TIMELINE_ROUNDS));
   for (const record of records) {
     if (keep.size <= MAX_VISIBLE_NODES) break;
     if (settled(record) && record.generation < latest.get(record.id)!) keep.delete(record);
@@ -330,7 +336,7 @@ function mermaidLabelLines(
 }
 
 /** One instance: its exact ID, status, and whether it was superseded or removed. */
-function historyLabelLines(record: NodeExecution, result: BraidResult | BraidLiveState, selected: boolean): string[] {
+function executionLabelLines(record: NodeExecution, result: BraidResult | BraidLiveState, selected: boolean): string[] {
   const progress = "progress" in result ? result.progress?.[record.id] : undefined;
   const now = "observedAt" in result ? result.observedAt : Date.now();
   const lines = [`${statusIcon(record, selected)} ${compact(record.executionId, 24)}`, statusText(record, now, progress)];
@@ -402,14 +408,14 @@ function mermaidSource(result: BraidResult | BraidLiveState, selected?: string):
 }
 
 /**
- * The history view: a flat, acyclic graph of instances, so each round of a cycle
- * is drawn below the one before it. Solid edges are the inputs an instance ran
- * with; dotted edges are the inputs a pending instance will use or a skipped one
- * saw, and "replaces" links a replaced instance to its replacement.
+ * A flat, acyclic graph of executions, so each round of a cycle is drawn below
+ * the one before it. Solid edges are the inputs an execution ran with; dotted
+ * edges are the inputs a pending execution will use or a skipped one saw, and
+ * "replaces" links a replaced execution to its replacement. Edges to executions
+ * the layout leaves out are not drawn.
  */
-function historySource(result: BraidResult | BraidLiveState, all: boolean, selected?: string): string {
+function executionSource(result: BraidResult | BraidLiveState, { shown, folded }: ExecutionLayout, selected?: string): string {
   const executions = result.executions ?? {};
-  const { shown, folded } = historyLayout(executions, all);
   const parts = graphParts(result);
   const closing = closingOf(parts);
   const names = new Map<string, string>();
@@ -422,7 +428,7 @@ function historySource(result: BraidResult | BraidLiveState, all: boolean, selec
   shown.forEach((record, index) => {
     names.set(record.executionId, `e${index}`);
     const [open, close] = record.node.type === "decision" ? ["{", "}"] : ["[", "]"];
-    lines.push(`  e${index}${open}"${historyLabelLines(record, result, record.executionId === selected).map(escapeMermaidText).join("<br/>")}"${close}`);
+    lines.push(`  e${index}${open}"${executionLabelLines(record, result, record.executionId === selected).map(escapeMermaidText).join("<br/>")}"${close}`);
   });
   const drawn = new Set<string>();
   const link = (from: NodeExecution | undefined, to: NodeExecution, arrow: string, label?: string) => {
@@ -468,7 +474,9 @@ function mermaidLines(
 ): string[] {
   let art: ReturnType<typeof renderMermaid>;
   try {
-    art = renderMermaid(options.view === "history" ? historySource(result, options.allHistory ?? false, selected) : mermaidSource(result, selected));
+    art = renderMermaid(options.view
+      ? executionSource(result, executionLayout(result.executions ?? {}, options.view, options.allHistory), selected)
+      : mermaidSource(result, selected));
   } catch {
     // The chart is a view of state already listed elsewhere; never fail the panel for it.
     return [];
@@ -921,13 +929,13 @@ export function renderNodeDetails(
 }
 
 export interface GraphViewOptions {
-  /** Default "heads": one box per lineage head. */
+  /** One box per execution. Without it, tool results draw one box per node: its latest execution. */
   view?: GraphView;
-  /** In the history view, expand every generation instead of the last HISTORY_ROUNDS. */
+  /** In the timeline, expand every generation instead of the last TIMELINE_ROUNDS. */
   allHistory?: boolean;
 }
 
-/** In the history view, `selectedNodeId` is an execution ID. */
+/** With a view, `selectedNodeId` is an execution ID. */
 export function renderGraphResult(
   result: BraidToolDetails,
   expanded: boolean,
@@ -982,20 +990,21 @@ export function renderGraphResult(
   if ("pause" in result && result.pause) lines.push(theme.fg("warning", `job paused by ${compact(result.pause.source, 20)} · no new executions start`));
   if ("pausedExecutionIds" in result && result.pausedExecutionIds?.length) lines.push(theme.fg("warning", `${result.pausedExecutionIds.length} paused executions · revision ${result.revision ?? 0}`));
   if ("suspendedExecutionIds" in result && result.suspendedExecutionIds?.length) lines.push(theme.fg("warning", `${result.suspendedExecutionIds.length} suspended executions · revision ${result.revision ?? 0}`));
-  const history = options.view === "history";
+  const byExecution = options.view !== undefined;
   if (result.executions) lines.push(theme.fg("dim", `${Object.keys(result.executions).length} executions · revision ${result.revision ?? 0}`));
-  const layout = history ? historyLayout(result.executions ?? {}, options.allHistory) : undefined;
+  const layout = options.view ? executionLayout(result.executions ?? {}, options.view, options.allHistory) : undefined;
   const folded = layout ? [...layout.folded.values()].reduce((sum, records) => sum + records.length, 0) : 0;
   if (layout && folded) lines.push(theme.fg("dim", `${folded} older settled executions folded into ${layout.folded.size} ≡ boxes`));
+  if (options.view === "live" && !layout!.shown.length) lines.push(theme.fg("muted", "Nothing is pending, running, or held · press g for the timeline"));
   const chartStart = lines.length;
-  const chart = mermaidLines(result, theme, selectedNodeId, options);
+  const chart = layout && !layout.shown.length && !folded ? [] : mermaidLines(result, theme, selectedNodeId, options);
   lines.push(...chart);
   // Selection must stay usable when the chart cannot be drawn or does not fit.
   const entries = layout
     ? layout.shown.map(record => [record.executionId, record.status] as const)
     : Object.keys(graphParts(result).nodes).map(id => [id, result.nodes[id]?.status ?? "pending"] as const);
   const nodeList = selectedNodeId === undefined ? [] : [
-    theme.fg("dim", chart.length ? `${history ? "executions" : "nodes"} (selected ${history ? "execution" : "node"} not found in the flowchart):` : `${history ? "executions" : "nodes"} (flowchart unavailable):`),
+    theme.fg("dim", chart.length ? `${byExecution ? "executions" : "nodes"} (selected ${byExecution ? "execution" : "node"} not found in the flowchart):` : `${byExecution ? "executions" : "nodes"} (flowchart unavailable):`),
     ...entries.map(([id, status]) => {
       const text = `${id === selectedNodeId ? `${SELECTED_NODE_MARK} ` : "  "}${compact(id, 60)} · ${status}`;
       return id === selectedNodeId ? theme.bg("selectedBg", theme.bold(theme.fg("warning", text))) : theme.fg("muted", text);
@@ -1021,7 +1030,7 @@ export function renderGraphResult(
       ),
     );
   return new FixedLines(lines, chartStart, chart.length, nodeList, [
-    ...(selectedNodeId === undefined ? [] : [{ mark: SELECTED_NODE_MARK, label: history ? "selected execution" : "selected node" }]),
-    { mark: "▶ ACTIVE", label: history ? "running execution" : "running node" },
+    ...(selectedNodeId === undefined ? [] : [{ mark: SELECTED_NODE_MARK, label: byExecution ? "selected execution" : "selected node" }]),
+    { mark: "▶ ACTIVE", label: byExecution ? "running execution" : "running node" },
   ]);
 }

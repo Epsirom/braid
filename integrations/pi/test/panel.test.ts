@@ -215,10 +215,15 @@ test("panel focuses one node with live details and returns to the graph", async 
   assert.doesNotMatch(focused, /Braid completed/);
   assert.ok(panel.render(100).every((line) => visibleWidth(line) === 100));
   panel.handleInput("\x7f");
-  const selecting = panel.render(100).join("\n");
-  assert.match(selecting, /Braid completed/);
-  assert.match(selecting, /◆ Selected 2\/2: b/, "leaving a session returns to selection on the same node");
-  assert.doesNotMatch(selecting, /Braid node b|Esc back   ←\/→ executions/);
+  const live = panel.render(100).join("\n");
+  assert.match(live, /Braid completed/);
+  assert.doesNotMatch(live, /Selected/, "the live view does not draw a finished execution, so selection ends");
+  assert.doesNotMatch(live, /Braid node b|Esc back   ←\/→ executions/);
+  panel.handleInput("g");
+  panel.handleInput("v");
+  panel.handleInput("\r");
+  panel.handleInput("\x7f");
+  assert.match(panel.render(100).join("\n"), /◆ Selected 2\/2: b@1/, "leaving a session returns to selection on the same execution");
   panel.handleInput("\x1b");
   assert.doesNotMatch(panel.render(100).join("\n"), /Selected/);
 

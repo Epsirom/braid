@@ -4,9 +4,9 @@ import type { Context } from "@earendil-works/pi-ai";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { NodeExecution } from "@chrok/braid";
 import { BraidPanel } from "../command.js";
-import { createLiveState, historyLayout, HISTORY_ROUNDS, MAX_VISIBLE_NODES, renderGraphResult } from "../display.js";
+import { createLiveState, executionLayout, MAX_VISIBLE_NODES, renderGraphResult, TIMELINE_ROUNDS, type GraphView } from "../display.js";
 import { BraidJobs } from "../jobs.js";
-import { context, response } from "./helpers.js";
+import { context, deferred, response } from "./helpers.js";
 
 const theme = {
   fg: (_color: string, value: string) => value,
@@ -41,11 +41,11 @@ function replacedState() {
   return { ...live, executions };
 }
 
-const chart = (details: ReturnType<typeof replacedState>, view: "heads" | "history", selected?: string) =>
-  renderGraphResult(details, false, false, theme, "", false, selected, { view }).render(400).join("\n");
+const chart = (details: ReturnType<typeof replacedState>, view?: GraphView, selected?: string) =>
+  renderGraphResult(details, false, false, theme, "", false, selected, view ? { view } : {}).render(400).join("\n");
 
-test("the heads view shows each head's wait reason, running sub-state, runs, and lineage usage", () => {
-  const view = chart(replacedState(), "heads");
+test("tool-result charts show each node's wait reason, running sub-state, runs, and lineage usage", () => {
+  const view = chart(replacedState());
   // Labels wrap at 24 columns, so match words rather than whole lines.
   assert.match(view, /draft@2 running/);
   assert.match(view, /· tool ·/, "the running sub-state is the worker's phase");
@@ -53,65 +53,89 @@ test("the heads view shows each head's wait reason, running sub-state, runs, and
   assert.match(view, /\b3K\b/, "usage sums the lineage");
   assert.match(view, /pending · waits/);
   assert.match(view, /predecessors/);
-  assert.doesNotMatch(view, /old/, "a removed lineage has no head");
+  assert.doesNotMatch(view, /old/, "a removed lineage has no box");
   assert.doesNotMatch(view, /draft@1/);
 });
 
-test("the history view keeps superseded and removed instances and links replacements", () => {
-  const view = chart(replacedState(), "history");
+test("the live view draws only pending, running, and held executions", () => {
+  const details = replacedState();
+  let view = chart(details, "live");
+  assert.match(view, /▶ ACTIVE draft@2/);
+  assert.match(view, /○ check@1/);
+  assert.match(view, /waits/);
+  assert.match(view, /╎/, "a pending execution's expected input is dotted");
+  assert.doesNotMatch(view, /draft@1|old@1/, "settled executions are left out");
+  details.executions["old@1"] = { ...details.executions["old@1"]!, held: true };
+  view = chart(details, "live");
+  assert.match(view, /old@1/, "a held result has not gone downstream yet");
+  assert.match(view, /held/);
+  for (const id of Object.keys(details.executions)) details.executions[id] = { ...details.executions[id]!, status: "completed", held: false };
+  view = chart(details, "live");
+  assert.match(view, /Nothing is pending, running, or held · press g for the timeline/);
+  assert.doesNotMatch(view, /┌|╭/, "no empty chart is drawn");
+});
+
+test("the timeline keeps superseded and removed executions and links replacements", () => {
+  const view = chart(replacedState(), "timeline");
   for (const id of ["draft@1", "draft@2", "check@1", "old@1"]) assert.match(view, new RegExp(id));
   assert.match(view, /superseded → draft@2/);
-  assert.match(view, /replaces/, "the replaced instance links to its replacement");
-  assert.match(view, /removed/, "an instance of a removed lineage is kept and marked");
-  assert.match(view, /╎/, "a pending instance's expected input is dotted");
+  assert.match(view, /replaces/, "the replaced execution links to its replacement");
+  assert.match(view, /removed/, "an execution of a removed node is kept and marked");
+  assert.match(view, /╎/, "a pending execution's expected input is dotted");
   assert.doesNotMatch(view, /folded/);
-  const selected = chart(replacedState(), "history", "draft@1");
+  const selected = chart(replacedState(), "timeline", "draft@1");
   assert.match(selected, /◆ draft@1/, "selection marks the exact execution");
-  const cropped = renderGraphResult(replacedState(), false, false, theme, "", false, "missing@1", { view: "history" }).render(30).join("\n");
+  const cropped = renderGraphResult(replacedState(), false, false, theme, "", false, "missing@1", { view: "timeline" }).render(30).join("\n");
   assert.match(cropped, /executions \(selected execution/, "a cropped chart without the selection lists executions");
   assert.match(cropped, /draft@1 · completed/);
 });
 
-test("skipped instances are drawn differently from pending ones", () => {
+test("skipped executions are drawn differently from pending ones", () => {
   const details = replacedState();
   details.executions["check@1"] = execution("check", 1, { status: "skipped", skipReason: "inactive", finishedAt: 5 });
   details.executions["draft@2"] = execution("draft", 2, { supersedes: "draft@1", finishedAt: 4 });
-  const view = chart(details, "history");
+  const view = chart(details, "timeline");
   assert.match(view, /⊘ check@1/);
   assert.match(view, /skipped ·/);
   assert.match(view, /inactive/);
   assert.doesNotMatch(view, /○ check@1/);
-  assert.match(view, /╎/, "the skipped instance shows the upstream result it saw");
+  assert.match(view, /╎/, "the skipped execution shows the upstream result it saw");
 });
 
-test("history folds older settled generations per lineage, never active or held ones", () => {
+test("the timeline folds older settled generations per node, never active or held ones", () => {
   const executions: Record<string, NodeExecution> = {};
   for (let generation = 1; generation <= 5; generation++) {
     executions[`edit@${generation}`] = execution("edit", generation, generation === 2 ? { held: true } : {});
     executions[`review@${generation}`] = execution("review", generation, generation === 5 ? { status: "running" } : {});
   }
-  const recent = historyLayout(executions);
-  assert.deepEqual(recent.shown.map(record => record.executionId), ["edit@2", "edit@4", "review@4", "edit@5", "review@5"]);
-  assert.equal(HISTORY_ROUNDS, 2);
-  assert.deepEqual(recent.folded.get("edit")!.map(record => record.executionId), ["edit@1", "edit@3"]);
-  assert.deepEqual(recent.folded.get("review")!.map(record => record.executionId), ["review@1", "review@2", "review@3"]);
-  assert.equal(historyLayout(executions, true).shown.length, 10);
-  assert.equal(historyLayout(executions, true).folded.size, 0);
+  const ids = (records: readonly NodeExecution[]) => records.map(record => record.executionId);
+  const recent = executionLayout(executions, "timeline");
+  assert.deepEqual(ids(recent.shown), ["edit@2", "edit@4", "review@4", "edit@5", "review@5"]);
+  assert.equal(TIMELINE_ROUNDS, 2);
+  assert.deepEqual(ids(recent.folded.get("edit")!), ["edit@1", "edit@3"]);
+  assert.deepEqual(ids(recent.folded.get("review")!), ["review@1", "review@2", "review@3"]);
+  assert.equal(executionLayout(executions, "timeline", true).shown.length, 10);
+  assert.equal(executionLayout(executions, "timeline", true).folded.size, 0);
+  const live = executionLayout(executions, "live");
+  assert.deepEqual(ids(live.shown), ["edit@2", "review@5"]);
+  assert.equal(live.folded.size, 0);
 
   const many: Record<string, NodeExecution> = {};
   for (let generation = 1; generation <= MAX_VISIBLE_NODES + 20; generation++) many[`step@${generation}`] = execution("step", generation);
-  const capped = historyLayout(many, true);
+  const capped = executionLayout(many, "timeline", true);
   assert.equal(capped.shown.length, MAX_VISIBLE_NODES, "even all history stays within the box limit");
   assert.equal(capped.shown.at(-1)!.generation, MAX_VISIBLE_NODES + 20, "the oldest generations fold first");
 
   const view = renderGraphResult({ ...createLiveState(), nodes: { edit: { id: "edit", status: "completed" }, review: { id: "review", status: "running" } }, executions },
-    false, false, theme, "", false, undefined, { view: "history" }).render(400).join("\n");
+    false, false, theme, "", false, undefined, { view: "timeline" }).render(400).join("\n");
   assert.match(view, /5 older settled executions folded into 2 ≡ boxes/);
   assert.match(view, /≡ edit@1–3/);
   assert.match(view, /≡ review@1–3/);
 });
 
-test("g switches the panel between heads and history; selection and Enter follow exact executions", async t => {
+test("g switches the panel between live and timeline; selection and Enter follow exact executions", { timeout: 5_000 }, async t => {
+  const started = deferred<void>();
+  const gate = deferred<void>();
   const ctx = context(async () => response());
   t.mock.method(ctx.modelRegistry, "complete", async (_model: unknown, worker: Context) => {
     const payload = JSON.parse(worker.messages[0]!.content as string) as { nodeId: string; execution: { generation: number } };
@@ -119,6 +143,10 @@ test("g switches the panel between heads and history; selection and Enter follow
       ...response(), stopReason: "toolUse" as const,
       content: [{ type: "toolCall" as const, id: "choice", name: "decide", arguments: { choice: payload.execution.generation === 4 ? "done" : "again" } }],
     };
+    if (payload.nodeId === "work" && payload.execution.generation === 3) {
+      started.resolve();
+      await gate.promise;
+    }
     return response(`round ${payload.execution.generation}`);
   });
   const jobs = new BraidJobs();
@@ -132,28 +160,36 @@ test("g switches the panel between heads and history; selection and Enter follow
     { from: "work", to: "review" }, { from: "review", to: "work", choice: "again", limit: 5 },
     { from: "review", to: "ship", choice: "done" }, { from: "review", to: "human", choice: "escalate" },
   ] }, {}, ctx);
-  await jobs.wait(job.jobId);
+  await started.promise;
   const panel = new BraidPanel(jobs, { requestRender: () => {}, terminal: { rows: 80 } } as never, theme, () => {}, job.handle);
   t.after(() => panel.dispose());
   const text = () => stripTerminalSequences(panel.render(120).join("\n"));
 
   let view = text();
-  assert.match(view, /^╭ Braid · heads view /);
-  assert.match(view, /g history view/);
-  assert.match(view, /work@4/);
-  assert.match(view, /4 runs/);
-  assert.doesNotMatch(view, /✓ review@3/);
+  assert.match(view, /^╭ Braid · live view /, "the live view is the default");
+  assert.match(view, /g timeline view/);
+  assert.match(view, /▶ ACTIVE work@3/);
+  assert.match(view, /○ ship@1/, "pending executions are live");
+  assert.doesNotMatch(view, /✓ (work|review)@/, "settled executions are not");
 
+  panel.handleInput("v");
+  assert.match(text(), /◆ Selected 3\/3: work@3 · running · Enter to open this execution's session/);
   panel.handleInput("g");
   view = text();
-  assert.match(view, /^╭ Braid · history view /);
-  assert.match(view, /g heads view/);
+  assert.match(view, /^╭ Braid · timeline view /);
+  assert.match(view, /g live view/);
   assert.match(view, /e all history/);
-  assert.match(view, /≡ work@1–2/);
-  assert.match(view, /✓ review@3/);
-  assert.match(view, /⊘ human@1/, "the branch that was never taken is skipped, not pending");
-  assert.doesNotMatch(view, /✓ work@1/);
+  assert.match(view, /◆ Selected 6\/6: work@3/, "a selection both views draw stays");
+  assert.match(view, /≡ work@1/);
+  assert.match(view, /✓ review@2/);
 
+  gate.resolve();
+  await jobs.wait(job.jobId);
+  panel.handleInput("\x1b");
+  view = text();
+  assert.match(view, /⊘ human@1/, "the branch that was never taken is skipped, not pending");
+  assert.match(view, /≡ work@1–2/);
+  assert.doesNotMatch(view, /✓ work@1/);
   panel.handleInput("e");
   view = text();
   assert.match(view, /✓ work@1/);
@@ -161,29 +197,23 @@ test("g switches the panel between heads and history; selection and Enter follow
   assert.match(view, /e recent history/);
 
   panel.handleInput("v");
-  assert.match(text(), /◆ Selected 10\/10: review@4 · completed · Enter to open this execution's session/);
-  assert.match(text(), /select an execution/);
-  panel.handleInput("\x1b[D");
-  assert.match(text(), /◆ Selected 9\/10: work@4/);
-  for (let index = 0; index < 4; index++) panel.handleInput("\x1b[D");
+  assert.match(text(), /◆ Selected 10\/10: review@4 · completed/, "the timeline starts at the newest execution");
+  for (let index = 0; index < 5; index++) panel.handleInput("\x1b[D");
   assert.match(text(), /◆ Selected 5\/10: work@2/);
   panel.handleInput("\r");
   view = text();
   assert.match(view, /Braid node work · completed/);
-  assert.match(view, /work@2/);
-  assert.match(view, /execution 2 of 4 for this node/, "Enter opens that exact execution, not the head");
-
+  assert.match(view, /execution 2 of 4 for this node/, "Enter opens that exact execution, not the latest");
   panel.handleInput("\x1b");
   assert.match(text(), /◆ Selected 5\/10: work@2/, "Esc returns to the same execution");
+
   panel.handleInput("g");
   view = text();
-  assert.match(view, /^╭ Braid · heads view /);
-  assert.match(view, /◆ Selected 1\/4: work/, "switching views keeps the lineage selected");
-  panel.handleInput("\r");
-  assert.match(text(), /execution 4 of 4 for this node/, "Enter in the heads view opens the head");
-  panel.handleInput("\x1b");
+  assert.match(view, /^╭ Braid · live view /);
+  assert.match(view, /Nothing is pending, running, or held · press g for the timeline/);
+  assert.doesNotMatch(view, /Selected/, "a selection the live view does not draw ends");
+  panel.handleInput("v");
+  assert.match(text(), /Nothing to select/);
   panel.handleInput("g");
-  assert.match(text(), /◆ Selected \d+\/10: work@4/, "switching back selects the head's execution");
-  panel.handleInput("\x1b");
-  assert.match(text(), /^╭ Braid · history view /, "the view is remembered after leaving selection");
+  assert.match(text(), /^╭ Braid · timeline view /, "the view is remembered after leaving selection");
 });
