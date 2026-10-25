@@ -47,7 +47,7 @@ pauses, reminders) instead of hard limits that fail the job. Tracking issue:
 - [x] Replace the schedule/execution split with an execution-only graph of
   lineages, where a started node is changed by replacing it ([#113](https://github.com/Epsirom/braid/issues/113)).
 - [ ] Accept unconditional, nested, and overlapping cycles ([#114](https://github.com/Epsirom/braid/issues/114)).
-- [ ] Show lineage heads and the full execution history in one Pi graph ([#94](https://github.com/Epsirom/braid/issues/94)).
+- [x] Show lineage heads and the full execution history in one Pi graph ([#94](https://github.com/Epsirom/braid/issues/94)).
 - [ ] Persist run state and recover runs after a restart ([#115](https://github.com/Epsirom/braid/issues/115)).
 - [ ] Keep memory and disk bounded in long-running runs ([#116](https://github.com/Epsirom/braid/issues/116)).
 - [ ] Consume outputs from runs that never finish ([#117](https://github.com/Epsirom/braid/issues/117)).

@@ -17,6 +17,7 @@ import {
   type ExecutionActivity,
   type ExecutionError,
   type ExecutionEvent,
+  type NodeExecution,
   type NodeResult,
   type NodeWorkspace as PiNodeWorkspace,
 } from "@chrok/braid";
@@ -43,6 +44,8 @@ export interface BraidLiveState {
   pause?: { source: string; pausedAt: number };
   /** The generation of each node's head, from its execution ID. */
   generations?: Record<string, number>;
+  /** Every instance, when a run snapshot is attached for display; the stored state never holds it. */
+  executions?: Record<string, NodeExecution>;
 }
 export type BraidToolDetails =
   | ((BraidResult | BraidLiveState) & {
@@ -216,14 +219,42 @@ function nodeElapsed(node: NodeResult, now: number): string {
 /** Replaces the selected node's one-column status icon, so selection never moves the layout. */
 export const SELECTED_NODE_MARK = "◆";
 
-function mermaidLabelLines(
-  id: string,
-  result: BraidResult | BraidLiveState,
-  selected = false,
-): string[] {
-  const progress = "progress" in result ? result.progress?.[id] : undefined;
-  const node = result.nodes[id];
-  if (!node) return [compact(id, 24), "pending"];
+/** The two views of the execution-only graph in the panel. */
+export type GraphView = "heads" | "history";
+/** Generations of each lineage the history view keeps expanded by default. */
+export const HISTORY_ROUNDS = 2;
+
+/** One box per instance; older settled instances of a lineage fold into one box per lineage. */
+export interface HistoryLayout {
+  shown: NodeExecution[];
+  folded: Map<string, NodeExecution[]>;
+}
+
+const settled = (record: NodeResult) =>
+  (record.status === "completed" || record.status === "failed" || record.status === "skipped") && !record.held;
+
+/**
+ * Pending, running, and held instances always stay expanded, as do the last
+ * HISTORY_ROUNDS generations of each lineage (every generation with `all`).
+ * Past MAX_VISIBLE_NODES boxes, the oldest settled instances fold first.
+ */
+export function historyLayout(executions: Record<string, NodeExecution>, all = false): HistoryLayout {
+  const records = Object.values(executions);
+  const latest = new Map<string, number>();
+  for (const record of records) latest.set(record.id, Math.max(latest.get(record.id) ?? 0, record.generation));
+  const keep = new Set(records.filter(record => all || !settled(record) || record.generation > latest.get(record.id)! - HISTORY_ROUNDS));
+  for (const record of records) {
+    if (keep.size <= MAX_VISIBLE_NODES) break;
+    if (settled(record) && record.generation < latest.get(record.id)!) keep.delete(record);
+  }
+  const folded = new Map<string, NodeExecution[]>();
+  for (const record of records) {
+    if (!keep.has(record)) (folded.get(record.id) ?? folded.set(record.id, []).get(record.id)!).push(record);
+  }
+  return { shown: records.filter(record => keep.has(record)), folded };
+}
+
+function statusIcon(node: NodeResult, selected: boolean): string {
   const suspended = node.suspension && node.suspension.state !== "pausing";
   const icon =
     suspended
@@ -233,63 +264,131 @@ function mermaidLabelLines(
       : {
           completed: "✓",
           failed: "✗",
-          skipped: "·",
+          skipped: "⊘",
           pending: "○",
         }[node.status];
-  const status = node.suspension
-    ? `${node.suspension.state}${node.suspension.source === "node_timeout" ? " · timed out" : ""}`
-    : node.status === "completed" ? "done" : node.status;
-  const decision =
-    node.decision === undefined ? "" : ` → ${compact(node.decision, 16)}`;
-  const now = "observedAt" in result ? result.observedAt : Date.now();
-  const generation = "executions" in result ? result.executions[node.executionId ?? ""]?.generation : result.generations?.[id];
-  const lines = [
-    `${selected ? SELECTED_NODE_MARK + icon.slice(1) : icon} ${compact(id, 24)}${generation && generation > 1 ? ` #${generation}` : ""}`,
-    `${status}${node.holdAfter && node.status === "running" ? " · hold" : ""}${decision} · ${nodeElapsed(node, now)}`,
-  ];
-  if (progress) {
-    const window =
-      progress.contextWindow === undefined
-        ? "—"
-        : compactCount(progress.contextWindow);
-    const prefix = progress.contextSource === "estimate" ? "~" : "";
-    lines.push(
-      `${prefix}${compactCount(progress.contextTokens)}/${window} · T${progress.toolCalls}`,
-    );
+  return selected ? SELECTED_NODE_MARK + icon.slice(1) : icon;
+}
+
+/** Status with the pending wait reason, the running sub-state, or the hold. */
+function statusText(node: NodeResult, now: number, progress?: PiNodeProgress): string {
+  if (node.suspension)
+    return `${node.suspension.state}${node.suspension.source === "node_timeout" ? " · timed out" : ""} · ${nodeElapsed(node, now)}`;
+  const decision = node.decision === undefined ? "" : ` → ${compact(node.decision, 16)}`;
+  switch (node.status) {
+    case "pending":
+      return node.waitReason ? `pending · waits ${node.waitReason.replace("_", " ")}` : "pending";
+    case "running":
+      return `running${progress && (!progress.executionId || progress.executionId === node.executionId) ? ` · ${progress.phase}` : ""}${node.holdAfter ? " · hold" : ""} · ${nodeElapsed(node, now)}`;
+    case "skipped":
+      return `skipped${node.skipReason ? ` · ${node.skipReason.replace("_", " ")}` : ""}`;
+    default:
+      return `${node.status === "completed" ? "done" : "failed"}${decision}${node.held ? " · held" : ""} · ${nodeElapsed(node, now)}`;
   }
+}
+
+function progressText(progress: PiNodeProgress): string {
+  const window = progress.contextWindow === undefined ? "—" : compactCount(progress.contextWindow);
+  const prefix = progress.contextSource === "estimate" ? "~" : "";
+  return `${prefix}${compactCount(progress.contextTokens)}/${window} · T${progress.toolCalls}`;
+}
+
+/** Started instances and reported tokens of each lineage. */
+function lineageTotals(executions: Record<string, NodeExecution> | undefined): Map<string, { runs: number; tokens: number }> {
+  const totals = new Map<string, { runs: number; tokens: number }>();
+  for (const record of Object.values(executions ?? {})) {
+    const total = totals.get(record.id) ?? totals.set(record.id, { runs: 0, tokens: 0 }).get(record.id)!;
+    if (record.status !== "pending" && record.status !== "skipped") total.runs++;
+    if (record.usage) total.tokens += record.usage.inputTokens + record.usage.outputTokens;
+  }
+  return totals;
+}
+
+/** A lineage head: status, runs, and the lineage's usage. */
+function mermaidLabelLines(
+  id: string,
+  result: BraidResult | BraidLiveState,
+  selected = false,
+  totals = lineageTotals(result.executions),
+): string[] {
+  const progress = "progress" in result ? result.progress?.[id] : undefined;
+  const live = result.nodes[id];
+  if (!live) return [compact(id, 24), "pending"];
+  const head = live.executionId ? result.executions?.[live.executionId] : undefined;
+  // Snapshot records carry the derived wait reason and hold marker.
+  const node = { ...live, ...(head?.waitReason ? { waitReason: head.waitReason } : {}), ...(head?.held ? { held: true } : {}) };
+  const now = "observedAt" in result ? result.observedAt : Date.now();
+  const generation = head?.generation ?? ("generations" in result ? result.generations?.[id] : undefined);
+  const { runs, tokens: used } = totals.get(id) ?? { runs: 0, tokens: 0 };
+  const lines = [
+    `${statusIcon(node, selected)} ${compact(id, 24)}${generation && generation > 1 ? `@${generation}` : ""}`,
+    statusText(node, now, progress),
+  ];
+  if (runs || used) lines.push(`${runs} run${runs === 1 ? "" : "s"}${used ? ` · ${compactCount(used)} tok` : ""}`);
+  if (progress && node.status === "running") lines.push(progressText(progress));
   return lines;
+}
+
+/** One instance: its exact ID, status, and whether it was superseded or removed. */
+function historyLabelLines(record: NodeExecution, result: BraidResult | BraidLiveState, selected: boolean): string[] {
+  const progress = "progress" in result ? result.progress?.[record.id] : undefined;
+  const now = "observedAt" in result ? result.observedAt : Date.now();
+  const lines = [`${statusIcon(record, selected)} ${compact(record.executionId, 24)}`, statusText(record, now, progress)];
+  if (record.supersededBy) lines.push(`superseded → ${compact(record.supersededBy, 16)}`);
+  else if (!Object.hasOwn(result.nodes, record.id)) lines.push("removed");
+  if (progress && record.status === "running" && progress.executionId === record.executionId) lines.push(progressText(progress));
+  return lines;
+}
+
+function foldedLabelLines(records: readonly NodeExecution[]): string[] {
+  const first = records[0]!;
+  const last = records.at(-1)!;
+  const counts = (["completed", "failed", "skipped"] as const)
+    .map(status => [status, records.filter(record => record.status === status).length] as const)
+    .filter(([, count]) => count)
+    .map(([status, count]) => `${count} ${status === "completed" ? "done" : status}`);
+  return [
+    `≡ ${compact(first.id, 18)}@${first.generation}${records.length > 1 ? `–${last.generation}` : ""}`,
+    `${records.length} earlier · ${counts.join(" ")}`,
+  ];
+}
+
+const escapeMermaidText = (value: string) =>
+  stripTerminalSequences(value)
+    .replace(/\p{Cc}/gu, "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/\|/g, "&#124;")
+    .replace(
+      /[[\]{}<>]/g,
+      (character) =>
+        ({
+          "[": "&#91;",
+          "]": "&#93;",
+          "{": "&#123;",
+          "}": "&#125;",
+          "<": "&lt;",
+          ">": "&gt;",
+        })[character] ?? character,
+    );
+
+function closingOf(parts: ReturnType<typeof graphParts>): Set<Edge> {
+  return new Set(closingEdges({ nodes: Object.entries(parts.nodeTypes).map(([id, type]) => ({ id, type })), edges: parts.edges }));
 }
 
 function mermaidSource(result: BraidResult | BraidLiveState, selected?: string): string {
   const parts = graphParts(result);
-  const closing = new Set(closingEdges({ nodes: Object.entries(parts.nodeTypes).map(([id, type]) => ({ id, type })), edges: parts.edges }));
+  const closing = closingOf(parts);
   const closingSources = new Map([...closing].map(edge => [edge.to, edge.from]));
   const ids = Object.keys(parts.nodes);
   const names = new Map(ids.map((id, index) => [id, `n${index}`]));
-  const escapeMermaidText = (value: string) =>
-    stripTerminalSequences(value)
-      .replace(/\p{Cc}/gu, "")
-      .replace(/&/g, "&amp;")
-      .replace(/"/g, "&quot;")
-      .replace(/\|/g, "&#124;")
-      .replace(
-        /[[\]{}<>]/g,
-        (character) =>
-          ({
-            "[": "&#91;",
-            "]": "&#93;",
-            "{": "&#123;",
-            "}": "&#125;",
-            "<": "&lt;",
-            ">": "&gt;",
-          })[character] ?? character,
-      );
+  const totals = lineageTotals(result.executions);
   const lines = ["flowchart TD"];
   for (const id of ids) {
     const shape = parts.nodeTypes[id] === "decision" ? "{" : "[";
     const close = parts.nodeTypes[id] === "decision" ? "}" : "]";
     lines.push(
-      `  ${names.get(id)}${shape}"${mermaidLabelLines(id, result, id === selected).map(escapeMermaidText).join("<br/>")}"${close}`,
+      `  ${names.get(id)}${shape}"${mermaidLabelLines(id, result, id === selected, totals).map(escapeMermaidText).join("<br/>")}"${close}`,
     );
   }
   for (const edge of parts.edges) {
@@ -302,14 +401,74 @@ function mermaidSource(result: BraidResult | BraidLiveState, selected?: string):
   return lines.join("\n");
 }
 
+/**
+ * The history view: a flat, acyclic graph of instances, so each round of a cycle
+ * is drawn below the one before it. Solid edges are the inputs an instance ran
+ * with; dotted edges are the inputs a pending instance will use or a skipped one
+ * saw, and "replaces" links a replaced instance to its replacement.
+ */
+function historySource(result: BraidResult | BraidLiveState, all: boolean, selected?: string): string {
+  const executions = result.executions ?? {};
+  const { shown, folded } = historyLayout(executions, all);
+  const parts = graphParts(result);
+  const closing = closingOf(parts);
+  const names = new Map<string, string>();
+  const lines = ["flowchart TD"];
+  for (const [id, records] of folded) {
+    const name = `f${names.size}`;
+    for (const record of records) names.set(record.executionId, name);
+    lines.push(`  ${name}("${foldedLabelLines(records).map(escapeMermaidText).join("<br/>")}")`);
+  }
+  shown.forEach((record, index) => {
+    names.set(record.executionId, `e${index}`);
+    const [open, close] = record.node.type === "decision" ? ["{", "}"] : ["[", "]"];
+    lines.push(`  e${index}${open}"${historyLabelLines(record, result, record.executionId === selected).map(escapeMermaidText).join("<br/>")}"${close}`);
+  });
+  const drawn = new Set<string>();
+  const link = (from: NodeExecution | undefined, to: NodeExecution, arrow: string, label?: string) => {
+    const source = from && names.get(from.executionId);
+    const target = names.get(to.executionId);
+    const line = `  ${source} ${arrow}${label ? `|${escapeMermaidText(label)}|` : ""} ${target}`;
+    if (!source || !target || source === target || drawn.has(line)) return;
+    drawn.add(line);
+    lines.push(line);
+  };
+  const decision = (record: NodeExecution) => record.node.type === "decision" ? record.decision : undefined;
+  const records = Object.values(executions);
+  const lineages = new Map<string, NodeExecution[]>();
+  for (const record of records) (lineages.get(record.id) ?? lineages.set(record.id, []).get(record.id)!).push(record);
+  for (const record of records) {
+    for (const id of record.predecessorExecutionIds) {
+      const source = executions[id];
+      if (source) link(source, record, "-->", decision(source));
+    }
+    if (record.supersedes) link(executions[record.supersedes], record, "-.->", "replaces");
+    if (record.status !== "pending" && record.status !== "skipped") continue;
+    // Not started, or skipped without inputs: draw the upstream instance it will use or saw.
+    for (const edge of parts.edges) {
+      if (edge.to !== record.id) continue;
+      const lineage = lineages.get(edge.from) ?? [];
+      const source = record.status === "pending"
+        ? lineage.at(-1)
+        : lineage.filter(source => source.finishedAt !== undefined && source.finishedAt <= record.finishedAt!).at(-1);
+      if (!source || record.predecessorExecutionIds.includes(source.executionId)) continue;
+      // A cycle-closing edge reaches an instance only after its source fired.
+      if (closing.has(edge) && (record.status === "skipped" || !settled(source))) continue;
+      link(source, record, "-.->", edge.choice);
+    }
+  }
+  return lines.join("\n");
+}
+
 function mermaidLines(
   result: BraidResult | BraidLiveState,
   theme: Palette,
   selected?: string,
+  options: GraphViewOptions = {},
 ): string[] {
   let art: ReturnType<typeof renderMermaid>;
   try {
-    art = renderMermaid(mermaidSource(result, selected));
+    art = renderMermaid(options.view === "history" ? historySource(result, options.allHistory ?? false, selected) : mermaidSource(result, selected));
   } catch {
     // The chart is a view of state already listed elsewhere; never fail the panel for it.
     return [];
@@ -761,6 +920,14 @@ export function renderNodeDetails(
   ];
 }
 
+export interface GraphViewOptions {
+  /** Default "heads": one box per lineage head. */
+  view?: GraphView;
+  /** In the history view, expand every generation instead of the last HISTORY_ROUNDS. */
+  allHistory?: boolean;
+}
+
+/** In the history view, `selectedNodeId` is an execution ID. */
 export function renderGraphResult(
   result: BraidToolDetails,
   expanded: boolean,
@@ -769,6 +936,7 @@ export function renderGraphResult(
   fallback = "",
   isError = false,
   selectedNodeId?: string,
+  options: GraphViewOptions = {},
 ): Component {
   if (isError || !result?.nodes) {
     const message =
@@ -814,16 +982,22 @@ export function renderGraphResult(
   if ("pause" in result && result.pause) lines.push(theme.fg("warning", `job paused by ${compact(result.pause.source, 20)} · no new executions start`));
   if ("pausedExecutionIds" in result && result.pausedExecutionIds?.length) lines.push(theme.fg("warning", `${result.pausedExecutionIds.length} paused executions · revision ${result.revision ?? 0}`));
   if ("suspendedExecutionIds" in result && result.suspendedExecutionIds?.length) lines.push(theme.fg("warning", `${result.suspendedExecutionIds.length} suspended executions · revision ${result.revision ?? 0}`));
-  if ("executions" in result) lines.push(theme.fg("dim", `${Object.keys(result.executions).length} executions · revision ${result.revision}`));
+  const history = options.view === "history";
+  if (result.executions) lines.push(theme.fg("dim", `${Object.keys(result.executions).length} executions · revision ${result.revision ?? 0}`));
+  const layout = history ? historyLayout(result.executions ?? {}, options.allHistory) : undefined;
+  const folded = layout ? [...layout.folded.values()].reduce((sum, records) => sum + records.length, 0) : 0;
+  if (layout && folded) lines.push(theme.fg("dim", `${folded} older settled executions folded into ${layout.folded.size} ≡ boxes`));
   const chartStart = lines.length;
-  const chart = mermaidLines(result, theme, selectedNodeId);
+  const chart = mermaidLines(result, theme, selectedNodeId, options);
   lines.push(...chart);
   // Selection must stay usable when the chart cannot be drawn or does not fit.
+  const entries = layout
+    ? layout.shown.map(record => [record.executionId, record.status] as const)
+    : Object.keys(graphParts(result).nodes).map(id => [id, result.nodes[id]?.status ?? "pending"] as const);
   const nodeList = selectedNodeId === undefined ? [] : [
-    theme.fg("dim", chart.length ? "nodes (selected node not found in the flowchart):" : "nodes (flowchart unavailable):"),
-    ...Object.keys(graphParts(result).nodes).map(id => {
-      const node = result.nodes[id];
-      const text = `${id === selectedNodeId ? `${SELECTED_NODE_MARK} ` : "  "}${compact(id, 60)} · ${node?.status ?? "pending"}`;
+    theme.fg("dim", chart.length ? `${history ? "executions" : "nodes"} (selected ${history ? "execution" : "node"} not found in the flowchart):` : `${history ? "executions" : "nodes"} (flowchart unavailable):`),
+    ...entries.map(([id, status]) => {
+      const text = `${id === selectedNodeId ? `${SELECTED_NODE_MARK} ` : "  "}${compact(id, 60)} · ${status}`;
       return id === selectedNodeId ? theme.bg("selectedBg", theme.bold(theme.fg("warning", text))) : theme.fg("muted", text);
     }),
   ];
@@ -847,7 +1021,7 @@ export function renderGraphResult(
       ),
     );
   return new FixedLines(lines, chartStart, chart.length, nodeList, [
-    ...(selectedNodeId === undefined ? [] : [{ mark: SELECTED_NODE_MARK, label: "selected node" }]),
-    { mark: "▶ ACTIVE", label: "running node" },
+    ...(selectedNodeId === undefined ? [] : [{ mark: SELECTED_NODE_MARK, label: history ? "selected execution" : "selected node" }]),
+    { mark: "▶ ACTIVE", label: history ? "running execution" : "running node" },
   ]);
 }

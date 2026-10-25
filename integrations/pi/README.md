@@ -410,11 +410,45 @@ dotted, while the closing retry edge stays solid. For example, `/braid:review` s
 `scope → check` handoff dotted and `check → scope` (`retry`) solid. All edges and
 choice labels remain visible; runtime dependencies and handoffs are unchanged.
 
-Press `v` to select a node: the arrow keys move a `◆` marker through the
-flowchart (starting at a running node), and the view pans horizontally and
-scrolls vertically to keep the selected node in sight. If the flowchart cannot be
-drawn, a node list replaces it while selecting. Enter opens that node's latest
-invocation as a live session. The session is drawn with Pi's own chat
+### Heads and history views
+
+The panel shows the job's one graph in two views. Press `g` to switch between
+them; the panel title (`Braid · heads view` or `Braid · history view`) and the
+footer show the active one, and the panel keeps your choice while it is open,
+across jobs and sessions.
+
+- **Heads view** (default): one box per node, showing its latest execution (the
+  lineage head), with edges between nodes, so a cycle is drawn as you would draw
+  it. A box shows the head's execution ID once the node has rerun (`review@3`),
+  its status, the reason a pending head waits (`waits predecessors`, `stale`,
+  `hold`, `run paused`, or `slot`), what a running head is doing (`model` or
+  `tool`, `· hold`, or paused), the node's number of runs, and the tokens all its
+  executions used.
+- **History view**: one box per execution, oldest first, in one flat graph:
+  every round of a cycle appears below the round before it, labelled by its
+  execution ID. Solid edges are the inputs an execution ran with. Dotted edges
+  show the input a pending execution will use or the upstream result a skipped
+  one saw, and a dotted `replaces` edge links a replaced execution to its
+  replacement. Skipped executions show `⊘` and the reason, pending ones `○`.
+  Replaced executions stay and show `superseded → <executionId>`, and executions
+  of removed nodes show `removed`.
+
+So long runs stay readable, the history view shows the last two generations of
+each node and folds older finished executions into one `≡` box per node
+(`≡ review@1–3`); pending, running, and held executions are never folded. Press
+`e` to show every generation, and `e` again to fold them. Either way at most 80
+boxes are drawn; the oldest finished executions fold first.
+
+Press `v` to select a node in the heads view, or an execution in the history
+view: the arrow keys move a `◆` marker through the flowchart (starting at a
+running node in the heads view, and at a running or the newest execution in the
+history view), and the view pans horizontally and scrolls vertically to keep
+the selection in sight. If the flowchart cannot be drawn, a list replaces it
+while selecting. Pressing `g` while selecting keeps the same node selected: its
+head in the history view. In the heads view, Enter opens that node's latest
+invocation as a live session; in the history view, it opens that exact
+execution, and `p`, `h`, and `x` act on it. Escape returns to the same node or
+execution. The session is drawn with Pi's own chat
 components, as in the main conversation: the worker's prompt, streamed
 assistant text and thinking, and tool cards whose arguments and output update
 while they run. The node summary—status, elapsed time, usage, context, and live

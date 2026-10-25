@@ -13,9 +13,10 @@ import {
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { BraidJobs, type JobSnapshot } from "./jobs.js";
-import { renderGraphResult, renderNodeDetails, renderSessionHeader, SELECTED_NODE_MARK } from "./display.js";
+import { historyLayout, renderGraphResult, renderNodeDetails, renderSessionHeader, SELECTED_NODE_MARK, type GraphView } from "./display.js";
 import { NodeSessionView } from "./session-view.js";
 import type { AssistantModel } from "./assistant.js";
+import type { NodeExecution } from "@chrok/braid";
 
 // Match the overlay height exactly so Pi never clips the footer or bottom border.
 const panelHeight = (rows: number): number =>
@@ -35,13 +36,21 @@ export type NodeFocus = { nodeId: string } | { executionId: string };
 /**
  * A live, scrollable panel. Esc steps back one level: session → node selection →
  * graph → close. Closing the panel leaves jobs running. Tab toggles an assistant
- * that answers questions about the job and can message running executions.
+ * that answers questions about the job and can message running executions. g
+ * switches between lineage heads and the execution history of the same graph.
  */
 export class BraidPanel implements Component {
   private selected: string | undefined;
   private focus: NodeFocus | undefined;
-  /** Node highlighted in selection mode (`v`); undefined in the plain graph view. */
+  /**
+   * Highlighted in selection mode (`v`): a node ID in the heads view, an
+   * execution ID in the history view; undefined in the plain graph view.
+   */
   private choosing: string | undefined;
+  /** Kept for the life of the panel, across jobs and sessions. */
+  private view: GraphView = "heads";
+  /** The history view expands every generation instead of the most recent ones. */
+  private allHistory = false;
   /** Keep the newest transcript lines in view until the user scrolls up. */
   private follow = true;
   /** The selection last scrolled into view, so manual scrolling is not overridden. */
@@ -141,7 +150,7 @@ export class BraidPanel implements Component {
             : "muted";
     const focusLabel = this.focus
       ? "nodeId" in this.focus ? `node ${plain(this.focus.nodeId)}` : `execution ${plain(this.focus.executionId)}`
-      : this.choosing !== undefined ? "select a node" : "";
+      : this.choosing !== undefined ? this.view === "history" ? "select an execution" : "select a node" : "";
     const heading = current
       ? `Job ${index + 1} of ${jobs.length}  ·  ${this.theme.fg(statusColor, current.status)}${focusLabel ? `  ·  ${focusLabel}` : ""}`
       : this.theme.fg("muted", "No background jobs");
@@ -154,14 +163,15 @@ export class BraidPanel implements Component {
           : ["Ask the agent to run a Braid graph."]),
       ];
       return [
-        rule("╭", "╮", "Braid"),
+        rule("╭", "╮", `Braid · ${this.view} view`),
         ...compact.slice(0, rows - 3).map(row),
         row("Esc close"),
         rule("╰", "╯"),
       ];
     }
+    const title = `Braid · ${this.view} view`;
     const header = [
-      rule("╭", "╮", "Braid"),
+      rule("╭", "╮", title),
       row(heading),
       row(
         current ? plain(current.goal) : "Ask the agent to run a Braid graph.",
@@ -177,7 +187,7 @@ export class BraidPanel implements Component {
       rule("├", "┤"),
     ];
     if (current && this.choosing !== undefined && !this.nodeIds(current).includes(this.choosing)) {
-      this.choosing = this.nodeIds(current)[0];
+      this.choosing = this.view === "history" ? this.nodeIds(current).at(-1) : this.nodeIds(current)[0];
     }
     if (!current) this.assistantOpen = false;
     const available = rows - header.length - 4;
@@ -196,18 +206,26 @@ export class BraidPanel implements Component {
         " " + border("│") + " " + (chat[at] ?? ""))
       : graph?.lines ?? chat;
     const tab = current ? "Tab assistant   " : "";
-    const [wide, medium, narrow] = open
+    const history = this.view === "history";
+    const toggle = history ? "g heads view" : "g history view";
+    const expand = history ? `   e ${this.allHistory ? "recent" : "all"} history` : "";
+    const noun = history ? "execution" : "node";
+    // Longest first; the footer shows the first that fits.
+    const hints = open
       ? ["Enter send   Esc stop or hide   Tab hide   PgUp/PgDn or wheel scroll   ctrl+c close",
         "Enter send · Esc hide · Tab hide", "Enter send · Tab hide"]
       : this.focus
       ? [`${tab}Esc back   ←/→ executions   ↑/↓ scroll   End follow   ctrl+o tools   p pause   h hold   x cancel execution   c cancel job   q close`,
+        "Esc back   ←/→ executions   ↑/↓ scroll   End follow   ctrl+o tools   p pause   h hold   x cancel   q close",
         "Esc back · ←/→ executions · p pause · q close", "Esc back · q close"]
       : this.choosing !== undefined
-      ? [`${tab}↑/↓/←/→ choose node   Enter open session   p pause   h hold   x cancel execution   Esc back   PgUp/PgDn page   q close`,
-        "↑/↓ choose · Enter open · p pause · Esc back", "Enter open · Esc back"]
-      : [`${tab}v select node   ←/→ jobs   ↑/↓ scroll   p pause job   c cancel   Esc close`,
-        "v select node · ←/→ jobs · p pause job · Esc close", "v select · Esc close"];
-    const help = contentWidth >= 80 ? wide : contentWidth >= 42 ? medium : narrow;
+      ? [`${tab}↑/↓/←/→ choose ${noun}   Enter open session   ${toggle}${expand}   p pause   h hold   x cancel execution   Esc back   PgUp/PgDn page   q close`,
+        `↑/↓ choose ${noun}   Enter open session   ${toggle}${expand}   p pause   h hold   x cancel   Esc back`,
+        `↑/↓ choose · Enter open · ${toggle} · Esc back`, "Enter open · Esc back"]
+      : [`${tab}v select ${noun}   ${toggle}${expand}   ←/→ jobs   ↑/↓ scroll   p pause job   c cancel   Esc close`,
+        `v select ${noun}   ${toggle}${expand}   ←/→ jobs   p pause job   c cancel   Esc close`,
+        `v select · ${toggle} · ←/→ jobs · Esc close`, `v select · g ${history ? "heads" : "history"} · Esc close`];
+    const help = hints.find(hint => visibleWidth(hint) <= contentWidth) ?? hints.at(-1)!;
     const status = graph ? graph.range : "Assistant";
     return [
       ...header,
@@ -245,6 +263,7 @@ export class BraidPanel implements Component {
               ...(current.result ?? current.live),
               progress: current.live.progress,
               ...(current.workspaces ? { workspaces: current.workspaces } : {}),
+              executions: this.executions(current),
             },
             true,
             false,
@@ -252,6 +271,7 @@ export class BraidPanel implements Component {
             "",
             false,
             this.choosing,
+            { view: this.view, allHistory: this.allHistory },
           ).render(width),
         ]
       : ["No Braid jobs in this session."];
@@ -329,7 +349,7 @@ export class BraidPanel implements Component {
 
   /** The node whose conversation the assistant shows: the open session's, or the selected one. */
   private assistantNode(job: JobSnapshot): string | undefined {
-    if (!this.focus) return this.choosing;
+    if (!this.focus) return this.choosing !== undefined && this.view === "history" ? this.executions(job)[this.choosing]?.id : this.choosing;
     if ("nodeId" in this.focus) return this.focus.nodeId;
     try { return this.jobs.getNode(job.jobId, undefined, this.focus.executionId).id; }
     catch { return undefined; }
@@ -345,24 +365,53 @@ export class BraidPanel implements Component {
         return "a node that is no longer in the graph";
       }
     }
+    if (this.choosing !== undefined && this.view === "history") {
+      const execution = this.executions(job)[this.choosing];
+      return `job execution history with execution ${this.choosing} of node ${JSON.stringify(execution?.id)} selected (${execution?.status ?? "unknown"})`;
+    }
     if (this.choosing !== undefined) {
       const node = (job.result?.nodes ?? job.live.nodes)[this.choosing];
       return `job graph with node ${JSON.stringify(this.choosing)} selected (${node?.status ?? "pending"})`;
     }
-    return `job graph overview (${job.status})`;
+    return `job graph ${this.view === "history" ? "execution history" : "overview"} (${job.status})`;
   }
 
-  /** Graph definition order, which is also the flowchart's declaration order. */
+  /** Every instance of the job, oldest first, including removed and superseded ones. */
+  private executions(job: JobSnapshot): Record<string, NodeExecution> {
+    return job.result?.executions ?? job.execution?.executions ?? {};
+  }
+
+  /**
+   * What selection moves through, in the flowchart's declaration order: node IDs
+   * in the heads view, the unfolded execution IDs in the history view.
+   */
   private nodeIds(job: JobSnapshot): string[] {
+    if (this.view === "history") return historyLayout(this.executions(job), this.allHistory).shown.map(record => record.executionId);
     return Object.keys(job.result?.nodes ?? job.live.nodes);
   }
 
   private choosingLine(job: JobSnapshot): string {
-    const nodes = job.result?.nodes ?? job.live.nodes;
-    const node = this.choosing !== undefined ? nodes[this.choosing] : undefined;
+    const history = this.view === "history";
+    const node = this.choosing === undefined ? undefined
+      : history ? this.executions(job)[this.choosing] : (job.result?.nodes ?? job.live.nodes)[this.choosing];
     const ids = this.nodeIds(job);
     return this.theme.fg("warning", `${SELECTED_NODE_MARK} Selected ${ids.indexOf(this.choosing ?? "") + 1}/${ids.length}: `) +
-      this.theme.bold(plain(this.choosing ?? "")) + this.theme.fg("muted", ` · ${node?.status ?? "pending"} · Enter to open its session`);
+      this.theme.bold(plain(this.choosing ?? "")) + this.theme.fg("muted", ` · ${node?.status ?? "pending"} · Enter to open ${history ? "this execution's" : "its"} session`);
+  }
+
+  /** g switches views and keeps the selection on the same lineage. */
+  private toggleView(job: JobSnapshot | undefined): void {
+    const choosing = this.choosing;
+    const executions = job ? this.executions(job) : {};
+    this.view = this.view === "heads" ? "history" : "heads";
+    this.offset = 0;
+    this.revealed = undefined;
+    if (choosing === undefined || !job) return;
+    if (this.view === "heads") this.choosing = executions[choosing]?.id;
+    else {
+      const head = (job.result?.nodes ?? job.live.nodes)[choosing]?.executionId;
+      this.choosing = head && this.nodeIds(job).includes(head) ? head : this.executionsOf(job, choosing).filter(id => this.nodeIds(job).includes(id)).at(-1);
+    }
   }
 
   /** A focused node can disappear after a live graph update; say so instead of failing. */
@@ -407,8 +456,9 @@ export class BraidPanel implements Component {
     return Object.values(executions).filter(execution => execution.id === nodeId).map(execution => execution.executionId);
   }
 
+  /** In the history view the selection is already an exact execution. */
   private open(job: JobSnapshot, nodeId: string): void {
-    const executionId = this.executionsOf(job, nodeId).at(-1);
+    const executionId = this.view === "history" ? nodeId : this.executionsOf(job, nodeId).at(-1);
     this.focus = executionId ? { executionId } : { nodeId };
     this.follow = true;
     this.offset = 0;
@@ -457,14 +507,21 @@ export class BraidPanel implements Component {
       this.refresh();
       return;
     }
-    if (this.focus) this.sessionInput(data, job);
+    if (!this.focus && data === "g") this.toggleView(job);
+    else if (!this.focus && data === "e" && this.view === "history") {
+      this.allHistory = !this.allHistory;
+      this.notice = this.allHistory ? "Showing every generation" : "Showing recent generations · older settled executions are folded";
+    } else if (this.focus) this.sessionInput(data, job);
     else if (this.choosing !== undefined && job) this.chooseInput(data, job);
     else if (matchesKey(data, "escape")) {
       this.close();
       return;
     } else if (data === "v" && job) {
       const ids = this.nodeIds(job);
-      this.choosing = ids.find(id => (job.result?.nodes ?? job.live.nodes)[id]?.status === "running") ?? ids[0];
+      const history = this.view === "history";
+      const status = (id: string) => history ? this.executions(job)[id]?.status : (job.result?.nodes ?? job.live.nodes)[id]?.status;
+      // The history view starts at the newest execution, the heads view at the first node.
+      this.choosing = ids.find(id => status(id) === "running") ?? (history ? ids.at(-1) : ids[0]);
     } else if (matchesKey(data, "left") || matchesKey(data, "right")) {
       const step = matchesKey(data, "right") ? 1 : -1;
       this.selected = jobs[(index + step + jobs.length) % jobs.length]?.jobId;
@@ -510,9 +567,7 @@ export class BraidPanel implements Component {
     const execution = job.execution;
     try {
       if (!execution || job.status !== "running") throw new Error("Only a running job can hold results");
-      const executionId = this.focus
-        ? "executionId" in this.focus ? this.focus.executionId : this.executionsOf(job, this.focus.nodeId).at(-1)
-        : this.executionsOf(job, this.choosing!).at(-1);
+      const executionId = this.executionInView(job);
       if (!executionId) throw new Error("This node has not run yet");
       if (execution.pausedExecutionIds.includes(executionId)) {
         this.jobs.resume(job.jobId, [executionId], execution.revision, "user");
@@ -529,11 +584,11 @@ export class BraidPanel implements Component {
     }
   }
 
-  /** The open execution, or the selected node's latest one. */
+  /** The open execution, the selected execution, or the selected node's latest one. */
   private executionInView(job: JobSnapshot): string | undefined {
-    return this.focus
-      ? "executionId" in this.focus ? this.focus.executionId : this.executionsOf(job, this.focus.nodeId).at(-1)
-      : this.choosing !== undefined ? this.executionsOf(job, this.choosing).at(-1) : undefined;
+    if (this.focus) return "executionId" in this.focus ? this.focus.executionId : this.executionsOf(job, this.focus.nodeId).at(-1);
+    if (this.choosing === undefined) return undefined;
+    return this.view === "history" ? this.choosing : this.executionsOf(job, this.choosing).at(-1);
   }
 
   /**
@@ -569,13 +624,15 @@ export class BraidPanel implements Component {
 
   private sessionInput(data: string, job: JobSnapshot | undefined): void {
     if (matchesKey(data, "escape") || matchesKey(data, "backspace")) {
-      // Return to selection on the same node, so another node is one keypress away.
+      // Return to selection on the same node or execution, so another is one keypress away.
       const focus = this.focus!;
-      let nodeId: string | undefined;
-      try { nodeId = job && ("nodeId" in focus ? focus.nodeId : this.jobs.getNode(job.jobId, undefined, focus.executionId).id); }
-      catch { /* The node was removed; fall back to the plain graph. */ }
+      let target: string | undefined;
+      try {
+        const node = job && ("nodeId" in focus ? this.jobs.getNode(job.jobId, focus.nodeId) : this.jobs.getNode(job.jobId, undefined, focus.executionId));
+        target = this.view === "history" ? node?.executionId : node?.id;
+      } catch { /* The node was removed; fall back to the plain graph. */ }
       this.focus = undefined;
-      this.choosing = nodeId !== undefined && job && this.nodeIds(job).includes(nodeId) ? nodeId : undefined;
+      this.choosing = target !== undefined && job && this.nodeIds(job).includes(target) ? target : undefined;
       this.offset = 0;
     } else if ((matchesKey(data, "left") || matchesKey(data, "right")) && job) {
       let node;
