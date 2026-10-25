@@ -444,7 +444,10 @@ selection in sight. If the flowchart cannot be drawn, a list replaces it while
 selecting. Pressing `g` while selecting keeps the same execution selected when
 the other view draws it, or moves to the newest drawn execution of the same
 node. Enter opens that exact execution as a live session, and `p`, `h`, and `x`
-act on it. Escape returns to the same execution. The session is drawn with Pi's own chat
+act on it. Left/Right in the session switch to the node's other executions,
+including folded and settled ones. Escape returns to the execution you were
+viewing, or, when the current view does not draw it, to the newest drawn
+execution of the same node. The session is drawn with Pi's own chat
 components, as in the main conversation: the worker's prompt, streamed
 assistant text and thinking, and tool cards whose arguments and output update
 while they run. The node summary—status, elapsed time, usage, context, and live

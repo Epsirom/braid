@@ -393,15 +393,22 @@ export class BraidPanel implements Component {
   /**
    * g switches views. A selection that the other view also draws stays; otherwise
    * it moves to the newest drawn execution of the same node, or selection ends.
+   * Leaving a session does the same.
    */
   private toggleView(job: JobSnapshot | undefined): void {
     this.view = this.view === "live" ? "timeline" : "live";
     this.offset = 0;
     this.revealed = undefined;
     if (this.choosing === undefined || !job) return;
-    const ids = this.nodeIds(job);
     const nodeId = this.executions(job)[this.choosing]?.id;
-    if (!ids.includes(this.choosing)) this.choosing = ids.filter(id => this.executions(job)[id]?.id === nodeId).at(-1);
+    this.choosing = nodeId === undefined ? undefined : this.drawn(job, nodeId, this.choosing);
+  }
+
+  /** The execution if the current view draws it, otherwise the newest drawn one of its node. */
+  private drawn(job: JobSnapshot, nodeId: string, executionId: string | undefined): string | undefined {
+    const ids = this.nodeIds(job);
+    if (executionId !== undefined && ids.includes(executionId)) return executionId;
+    return ids.filter(id => this.executions(job)[id]?.id === nodeId).at(-1);
   }
 
   /** A focused node can disappear after a live graph update; say so instead of failing. */
@@ -610,15 +617,14 @@ export class BraidPanel implements Component {
 
   private sessionInput(data: string, job: JobSnapshot | undefined): void {
     if (matchesKey(data, "escape") || matchesKey(data, "backspace")) {
-      // Return to selection on the same node or execution, so another is one keypress away.
+      // Return to selection on the same execution, so another is one keypress away.
       const focus = this.focus!;
-      let target: string | undefined;
+      let node;
       try {
-        const node = job && ("nodeId" in focus ? this.jobs.getNode(job.jobId, focus.nodeId) : this.jobs.getNode(job.jobId, undefined, focus.executionId));
-        target = node?.executionId;
+        node = job && ("nodeId" in focus ? this.jobs.getNode(job.jobId, focus.nodeId) : this.jobs.getNode(job.jobId, undefined, focus.executionId));
       } catch { /* The node was removed; fall back to the plain graph. */ }
       this.focus = undefined;
-      this.choosing = target !== undefined && job && this.nodeIds(job).includes(target) ? target : undefined;
+      this.choosing = node && job ? this.drawn(job, node.id, node.executionId) : undefined;
       this.offset = 0;
     } else if ((matchesKey(data, "left") || matchesKey(data, "right")) && job) {
       let node;

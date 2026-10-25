@@ -190,6 +190,13 @@ test("g switches the panel between live and timeline; selection and Enter follow
   assert.match(view, /⊘ human@1/, "the branch that was never taken is skipped, not pending");
   assert.match(view, /≡ work@1–2/);
   assert.doesNotMatch(view, /✓ work@1/);
+  panel.handleInput("v");
+  panel.handleInput("\r");
+  for (let index = 0; index < 3; index++) panel.handleInput("\x1b[D");
+  assert.match(text(), /execution 1 of 4 for this node/, "←/→ in a session reach folded executions too");
+  panel.handleInput("\x1b");
+  assert.match(text(), /◆ Selected \d+\/\d+: review@4/, "leaving a folded execution selects its node's newest drawn one");
+  panel.handleInput("\x1b");
   panel.handleInput("e");
   view = text();
   assert.match(view, /✓ work@1/);
