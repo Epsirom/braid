@@ -61,6 +61,7 @@ export const edgeParameters = Type.Object({
   from: text("Source node ID."),
   to: text("Target node ID."),
   choice: Type.Optional(text("Only for a decision source: one exact declared choice. Omit for an unconditional dependency, including error recovery.")),
+  closesCycle: Type.Optional(Type.Boolean({ description: "Only for an edge on a cycle: true makes this edge close the cycle, so each round starts at its target. Usually omit and let Braid choose; set it when the cycle report says a node runs only after a choice but each round should start there." })),
 }, { additionalProperties: false });
 export const edgeIdentityParameters = Type.Object({
   from: text("Source node ID."),
@@ -77,7 +78,7 @@ const templates = Type.Record(Type.String(), text(), { description: templateDesc
 export const braidParameters = Type.Object({
   goal: text("Shared goal included in every worker's context."),
   nodes: Type.Array(nodeParameters, { minItems: 1 }),
-  edges: Type.Array(edgeParameters, { description: "Dependencies between node IDs; use [] for independent roots. Any edge may close a cycle (a loop), and cycles may nest and overlap. Each round starts where an edge from outside enters the cycle (else at the node listed first). A decision's choice edge back ends the cycle when the decision chooses otherwise, and maxRuns on a node in the cycle bounds how often it runs, counted across all rounds (unlimited by default); with neither, it repeats until you stop the job, and edges that leave it run in every round. The result lists each new cycle and what can stop it: check it for cycles you did not intend." }),
+  edges: Type.Array(edgeParameters, { description: "Dependencies between node IDs; use [] for independent roots. Any edge may close a cycle (a loop), and cycles may nest and overlap. Each round starts where an edge from outside enters the cycle (else at the node listed first), or at the target of an edge with closesCycle: true. A decision's choice edge back ends the cycle when the decision chooses otherwise, and maxRuns on a node in the cycle bounds how often it runs, counted across all rounds (unlimited by default); with neither, it repeats until you stop the job, and edges that leave it run in every round. The result lists each new cycle and what can stop it: check it for cycles you did not intend." }),
   promptTemplates: Type.Optional(templates),
   options: Type.Optional(Type.Object({
     maxConcurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum simultaneous node executions; default 4." })),

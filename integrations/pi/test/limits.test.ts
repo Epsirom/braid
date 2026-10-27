@@ -29,6 +29,8 @@ test("Pi schemas accept maxRuns on nodes, job limits, and limits on job resume, 
     { jobId: "job-1", limits: { maxExecutions: 20, graphTimeoutMs: 1_000, maxTokens: 5 } });
   for (const limits of [{}, { maxExecutions: 0 }, { maxConcurrency: 2 }])
     assert.throws(() => validate(tools.resumeTool, { jobId: "job-1", limits }), /Validation failed/);
+  const closing = { ...graph, edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", closesCycle: true }] };
+  assert.deepEqual(validate(tools.braidTool, closing), closing);
   assert.throws(() => validate(tools.braidTool, { ...graph, options: { onLimit: "wait" } }), /Validation failed/);
   assert.throws(() => validate(tools.braidTool, { ...graph, nodes: [{ ...node("work"), maxRuns: 0 }] }), /Validation failed/);
   assert.throws(() => validate(tools.braidTool, { ...graph, edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", limit: 2 }] }),

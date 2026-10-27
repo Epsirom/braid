@@ -181,6 +181,7 @@ function graphParts(result: BraidResult | BraidLiveState): {
         from: event.from,
         to: event.to,
         ...(event.choice ? { choice: event.choice } : {}),
+      ...(event.closesCycle ? { closesCycle: true } : {}),
       });
     }
   }
@@ -678,6 +679,7 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
       from: event.from,
       to: event.to,
       ...(event.choice ? { choice: event.choice } : {}),
+      ...(event.closesCycle ? { closesCycle: true } : {}),
     });
   if (state.events.length > MAX_VISIBLE_EVENTS) state.events.shift();
   if (event.type === "graph_completed" || event.type === "graph_failed") {

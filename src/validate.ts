@@ -201,10 +201,12 @@ export function compileGraph(input: BraidInput): Graph {
   }
   for (const edge of input.edges) {
     requireValid(isRecord(edge), "Edge must be an object");
-    fields(edge, ["from", "to", "choice"], `Edge '${edge.from}' -> '${edge.to}'`);
+    fields(edge, ["from", "to", "choice", "closesCycle"], `Edge '${edge.from}' -> '${edge.to}'`);
     requireValid(text(edge.from) && byId.has(edge.from), `Missing source node '${edge.from}'`);
     requireValid(text(edge.to) && byId.has(edge.to), `Missing target node '${edge.to}'`);
     requireValid(edge.choice === undefined || text(edge.choice), "Invalid edge choice");
+    requireValid(edge.closesCycle === undefined || typeof edge.closesCycle === "boolean",
+      `Edge '${edge.from}' -> '${edge.to}': closesCycle must be a boolean`);
     if (edge.choice !== undefined) {
       const source = byId.get(edge.from)!;
       requireValid(source.type === "decision", `Choice edge from non-decision '${edge.from}'`);
@@ -217,6 +219,7 @@ export function compileGraph(input: BraidInput): Graph {
       from: edge.from,
       to: edge.to,
       ...(edge.choice !== undefined ? { choice: edge.choice } : {}),
+      ...(edge.closesCycle ? { closesCycle: true } : {}),
     };
     edges.push(snapshot);
     incoming.get(edge.to)!.push(snapshot);
@@ -225,6 +228,10 @@ export function compileGraph(input: BraidInput): Graph {
 
   const nodes = [...byId.values()];
   const { closing, component } = selectClosing(nodes, edges, outgoing);
+  for (const edge of edges) {
+    requireValid(!edge.closesCycle || component.get(edge.from) === component.get(edge.to),
+      `Edge '${edge.from}' -> '${edge.to}' sets closesCycle but is not on a cycle`);
+  }
   // Kahn's algorithm is iterative, including for very deep graphs.
   const remaining = new Map(nodes.map(node => [node.id, incoming.get(node.id)!.filter(edge => !closing.has(edge)).length]));
   const topologicalOrder = nodes.filter(node => remaining.get(node.id) === 0);
@@ -250,12 +257,12 @@ export function compileGraph(input: BraidInput): Graph {
 
 /**
  * Choose the edges that close cycles, which decides where each round starts:
- * removing them leaves the graph acyclic. Within each strongly connected
- * component, edges are kept as ordinary dependencies, least likely to close
- * first; an edge that would complete a cycle with the edges kept before it
- * closes the cycle instead. Most likely to close: edges into an entry (a node
- * that an edge from outside the component enters), then choice edges, then
- * edges to nodes listed earlier.
+ * removing them leaves the graph acyclic. Edges marked closesCycle always close.
+ * Within each strongly connected component, the other edges are kept as ordinary
+ * dependencies, least likely to close first; an edge that would complete a cycle
+ * with the edges kept before it closes the cycle instead. Most likely to close:
+ * edges into an entry (a node that an edge from outside the component enters),
+ * then choice edges, then edges to nodes listed earlier.
  */
 function selectClosing(nodes: readonly Pick<BraidNode, "id">[], edges: readonly Edge[], outgoing: Map<string, Edge[]>):
   { closing: Set<Edge>; component: Map<string, number> } {
@@ -273,7 +280,8 @@ function selectClosing(nodes: readonly Pick<BraidNode, "id">[], edges: readonly 
     const entries = new Set(edges.filter(edge => component.get(edge.to) === component.get(internal[0]!.from) &&
       component.get(edge.from) !== component.get(edge.to)).map(edge => edge.to));
     const rank = (edge: Edge) => [entries.has(edge.to) ? 1 : 0, edge.choice !== undefined ? 1 : 0, -order.get(edge.to)!, position.get(edge)!];
-    const sorted = [...internal].sort((a, b) => {
+    for (const edge of internal) if (edge.closesCycle) closing.add(edge);
+    const sorted = internal.filter(edge => !edge.closesCycle).sort((a, b) => {
       const left = rank(a), right = rank(b);
       for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return left[i]! - right[i]!;
       return 0;
@@ -373,11 +381,17 @@ export function reportCycles(graph: Pick<Graph, "edges" | "outgoing" | "closing"
       stack.push([edge.to, 0]);
     }
   }
+  // A node runs only through a choice edge when every edge it waits for is one.
+  const choiceOnly = new Map<string, boolean>();
+  for (const edge of graph.edges) {
+    if (!graph.closing.has(edge)) choiceOnly.set(edge.to, (choiceOnly.get(edge.to) ?? true) && edge.choice !== undefined);
+  }
   const cycles = [...found.values()].map(edges => ({
     nodeIds: edges.map(edge => edge.from),
     edges: edges.map(copyEdge),
     stops: edges.filter(edge => edge.choice !== undefined).map(copyEdge),
     limitedNodeIds: edges.map(edge => edge.from).filter(id => Number.isFinite(maxRuns.get(id) ?? Infinity)),
+    choiceGated: edges.filter(edge => edge.choice !== undefined && !graph.closing.has(edge) && choiceOnly.get(edge.to)).map(copyEdge),
   }));
   return { cycles, truncated };
 }
@@ -393,7 +407,7 @@ function rotate(cycle: readonly Edge[], closing: Set<Edge>, position: Map<Edge, 
 }
 
 function copyEdge(edge: Edge): Edge {
-  return { from: edge.from, to: edge.to, ...(edge.choice !== undefined ? { choice: edge.choice } : {}) };
+  return { from: edge.from, to: edge.to, ...(edge.choice !== undefined ? { choice: edge.choice } : {}), ...(edge.closesCycle ? { closesCycle: true } : {}) };
 }
 
 /** Edges are identified by source, target, and choice. */

@@ -211,9 +211,12 @@ Unknown fields, missing references, and duplicate edges (the same `from`, `to`,
 and `choice`) are rejected. A cycle is a loop, and any edge may close one:
 unconditional, nested, and overlapping cycles are allowed. A decision's choice
 edge can end a cycle, and `maxRuns` on a node in it bounds its rounds; without
-either it repeats until its owner stops it. Each submission or update that
-creates a cycle reports it with a `cycles_created` event, and
-`newCycles(graph, previous)` lists new cycles and whether anything stops them.
+either it repeats until its owner stops it. Braid picks the edge that closes each
+cycle, which decides where each round starts; `closesCycle: true` on an edge picks
+it instead (see [cycles](docs/execution-control.md#cycles)). Each submission or
+update that creates a cycle reports it with a `cycles_created` event, and
+`newCycles(graph, previous)` lists new cycles, whether anything stops them, and
+any node that waits for a choice inside the cycle before its first run.
 Disconnected components are allowed; every root runs.
 Only decision nodes may have choice edges, and choices need not all have exits.
 

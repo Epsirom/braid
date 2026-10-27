@@ -115,6 +115,8 @@ export interface TimeoutPause {
   activeMs: number;
   /** Observed activity when the timeout fired. */
   activity?: string;
+  /** The job's graph timeout, when it has one: its deadline keeps running while work waits. */
+  graphTimeoutMs?: number;
   /** Identifies this pause within the job; a later timeout of the same execution is a new one. */
   eventSequence: number;
 }
@@ -137,6 +139,8 @@ export interface WaitingNotice {
   handle: string;
   revision: number;
   waitingOn: WaitingItem[];
+  /** The job's graph timeout, when it has one: its deadline keeps running while work waits. */
+  graphTimeoutMs?: number;
   /** Identifies this transition within the job; a later one is a new one. */
   eventSequence: number;
 }
@@ -185,6 +189,11 @@ export interface OutstandingJob {
   timedOutExecutionIds?: string[];
   /** The whole job is paused and admits no new executions. */
   paused?: boolean;
+}
+
+function graphTimeout(state: BraidSnapshot): Pick<WaitingNotice, "graphTimeoutMs"> {
+  const limit = state.limits?.graphTimeoutMs;
+  return limit === undefined ? {} : { graphTimeoutMs: limit };
 }
 
 function timedOut(state: BraidSnapshot | undefined): Pick<OutstandingJob, "timedOutExecutionIds"> {
@@ -375,7 +384,8 @@ export class BraidJobs {
           }
           this.changed();
           if (event.type === "execution_suspended" && event.source === "node_timeout" && event.executionId) {
-            const instance = job.run?.snapshot().executions[event.executionId];
+            const state = job.run?.snapshot();
+            const instance = state?.executions[event.executionId];
             const timeout = instance?.suspension?.timeout;
             const activity = job.timeoutActivity.get(event.executionId);
             job.timeoutActivity.delete(event.executionId);
@@ -385,7 +395,7 @@ export class BraidJobs {
                 void Promise.resolve(this.onTimeoutPause({
                   jobId: job.jobId, handle: job.handle, nodeId: event.nodeId, executionId: event.executionId,
                   nodeTimeoutMs: timeout.nodeTimeoutMs, activeMs: timeout.activeMs,
-                  ...(activity ? { activity } : {}), eventSequence: event.sequence,
+                  ...(activity ? { activity } : {}), ...graphTimeout(state!), eventSequence: event.sequence,
                 })).catch(() => {});
               } catch { /* Notification failures must not affect scheduling. */ }
             }
@@ -401,11 +411,12 @@ export class BraidJobs {
           }
           // With nothing active, no later event would wake the parent to resume, update, or cancel.
           if (!this.disposed && event.type === "graph_waiting" && job.run) {
-            const items = waitingOn(job.run.snapshot(), event);
+            const state = job.run.snapshot();
+            const items = waitingOn(state, event);
             if (items) {
               try {
                 void Promise.resolve(this.onWaiting({
-                  jobId: job.jobId, handle: job.handle, revision: event.revision ?? 0, waitingOn: items, eventSequence: event.sequence,
+                  jobId: job.jobId, handle: job.handle, revision: event.revision ?? 0, waitingOn: items, ...graphTimeout(state), eventSequence: event.sequence,
                 })).catch(() => {});
               } catch { /* Notification failures must not affect scheduling. */ }
             }

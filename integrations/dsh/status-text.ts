@@ -192,8 +192,9 @@ export function formatCycles(report: { cycles: readonly GraphCycle[]; truncated:
       const path = [...cycle.nodeIds, cycle.nodeIds[0]].join(" -> ");
       const bounds = [...cycle.stops.length ? [`can stop at ${cycle.stops.map(label).join(", ")}`] : [],
         ...cycle.limitedNodeIds.length ? [`bounded by maxRuns on ${cycle.limitedNodeIds.join(", ")}`] : []];
-      return bounds.length ? `- ${path}: ${bounds.join("; ")}.`
-        : `- ${path}: NOTHING STOPS IT, so it repeats until you pause or cancel the job. If it is unintended, remove one of its edges with braid_update; to bound it, set maxRuns on one of its nodes or route it through a decision's choice edge.`;
+      const gated = cycle.choiceGated.map(edge => ` ${edge.to} runs only after ${edge.from} chooses ${edge.choice}, not before it in the first round; if each round should start at ${edge.to}, set closesCycle: true on ${label(edge)}.`).join("");
+      return (bounds.length ? `- ${path}: ${bounds.join("; ")}.`
+        : `- ${path}: NOTHING STOPS IT, so it repeats until you pause or cancel the job. If it is unintended, remove one of its edges with braid_update; to bound it, set maxRuns on one of its nodes or route it through a decision's choice edge.`) + gated;
     }),
     ...report.truncated ? ["- More cycles than these may exist."] : []].join("\n");
 }
@@ -313,7 +314,7 @@ export function formatTimeoutPause(pause: TimeoutPause): string {
     `resume it with braid_resume({"jobId":"${pause.handle}","executionIds":["${pause.executionId}"],"expectedRevision":<current>}) — it gets the job's nodeTimeoutMs again, or pass nodeTimeoutMs —`,
     "or resume it in braid_update with resume and resumeOptions together with graph changes,",
     `or fail only this execution with braid_cancel({"jobId":"${pause.handle}","executionIds":["${pause.executionId}"]}).`,
-    "The graph timeout keeps running while it is paused.",
+    pause.graphTimeoutMs !== undefined ? "The graph timeout keeps running while it is paused." : "",
   ].filter(Boolean).join(" ");
 }
 
@@ -342,7 +343,8 @@ export function formatWaiting(notice: WaitingNotice): string {
     limit ? `raise its ${limit} and resume the job with braid_resume({"jobId":"${notice.handle}","limits":{"${limit}":<higher>}}) (the job does not resume while the limit is still reached),`
       : job ? `resume the job with braid_resume({"jobId":"${notice.handle}"}),` : "",
     "fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel.",
-    "The graph timeout keeps running while it waits.",
+    // The deadline has passed once the graph timeout paused the job.
+    notice.graphTimeoutMs !== undefined && job?.source !== "graph_timeout" ? "The graph timeout keeps running while it waits." : "",
   ].filter(Boolean).join(" ");
 }
 

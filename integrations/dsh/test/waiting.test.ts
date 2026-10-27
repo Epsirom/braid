@@ -48,7 +48,10 @@ test("the last active execution leaving only held work notifies once", async () 
     `It waits on the held result of node "held" execution ${held} (pauseAfter). ` +
     `Check it with braid_status({"jobId":"${job.handle}"}), then release held results or resume executions with ` +
     `braid_resume({"jobId":"${job.handle}","expectedRevision":0,"executionIds":[...]}) or braid_update with resume, ` +
-    "fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel. The graph timeout keeps running while it waits.");
+    "fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel.");
+  // Only a job with a graph timeout is told that its deadline keeps running.
+  assert.match(formatWaiting({ ...waiting[0]!, graphTimeoutMs: 60_000 }), /braid_cancel\. The graph timeout keeps running while it waits\.$/);
+  assert.doesNotMatch(formatWaiting({ ...waiting[0]!, graphTimeoutMs: 60_000, waitingOn: [{ kind: "job", source: "graph_timeout" }] }), /keeps running/);
   await run("braid_resume", { jobId: job.handle, expectedRevision: 0, executionIds: [held] });
   await jobs.wait(job.handle);
   assert.equal(waiting.length, 1);

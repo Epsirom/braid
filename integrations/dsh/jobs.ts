@@ -58,6 +58,8 @@ export interface TimeoutPause {
   activeMs: number;
   /** Observed activity when the timeout fired. */
   activity?: string;
+  /** The job's graph timeout, when it has one: its deadline keeps running while work waits. */
+  graphTimeoutMs?: number;
   /** Identifies this pause within the job; a later timeout of the same execution is a new one. */
   sequence: number;
 }
@@ -80,8 +82,15 @@ export interface WaitingNotice {
   handle: string;
   revision: number;
   waitingOn: WaitingItem[];
+  /** The job's graph timeout, when it has one: its deadline keeps running while work waits. */
+  graphTimeoutMs?: number;
   /** Identifies this transition within the job; a later one is a new one. */
   sequence: number;
+}
+
+function graphTimeout(state: BraidSnapshot): Pick<WaitingNotice, "graphTimeoutMs"> {
+  const limit = state.limits?.graphTimeoutMs;
+  return limit === undefined ? {} : { graphTimeoutMs: limit };
 }
 
 /**
@@ -251,9 +260,10 @@ export class BraidJobs {
     // With nothing active, no later event would wake the parent to resume, update, or cancel.
     if (event.type === "graph_waiting" && !this.disposed) {
       const job = this.jobs.get(jobId);
-      const items = job && waitingOn(job.run.snapshot(), event);
+      const state = job?.run.snapshot();
+      const items = state && waitingOn(state, event);
       if (items) {
-        try { this.onWaiting({ jobId, handle, revision: event.revision ?? 0, waitingOn: items, sequence: event.sequence }); }
+        try { this.onWaiting({ jobId, handle, revision: event.revision ?? 0, waitingOn: items, ...graphTimeout(state), sequence: event.sequence }); }
         catch { /* Notification failures cannot fail jobs. */ }
       }
       return;
@@ -275,7 +285,8 @@ export class BraidJobs {
     if (this.disposed || !node || !timeout) return;
     try {
       this.onTimeoutPause({ jobId, handle, nodeId: node.id, executionId: node.executionId,
-        nodeTimeoutMs: timeout.nodeTimeoutMs, activeMs: timeout.activeMs, ...(activity ? { activity } : {}), sequence: event.sequence });
+        nodeTimeoutMs: timeout.nodeTimeoutMs, activeMs: timeout.activeMs, ...(activity ? { activity } : {}),
+        ...graphTimeout(this.jobs.get(jobId)!.run.snapshot()), sequence: event.sequence });
     } catch { /* Notification failures cannot fail jobs. */ }
   }
 
