@@ -54,7 +54,7 @@ test("a job paused at maxExecutions wakes the parent and resumes once braid_resu
   gate.resolve();
   await until(() => waiting.length === 1);
   assert.deepEqual(waiting[0]!.waitingOn, [{ kind: "job", source: "execution_limit" }]);
-  assert.match(formatWaiting(waiting[0]!), new RegExp(`It waits on the job pause \\(by its maxExecutions limit\\)\\. .*` +
+  assert.match(formatWaiting(waiting[0]!), new RegExp(`It waits on the job pause \\(by the job's maxExecutions limit\\)\\. .*` +
     `raise its maxExecutions and resume the job with braid_resume\\(\\{"jobId":"${handle}","limits":\\{"maxExecutions":<higher>\\}\\}\\)`));
 
   await assert.rejects(tools.resumeTool.execute("resume", { jobId: handle }, undefined, undefined, ctx), /maxExecutions limit of 2; raise it with setLimits/);

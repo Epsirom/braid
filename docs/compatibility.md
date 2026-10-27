@@ -387,6 +387,13 @@ that node. List the node where rounds start first in `nodes`, and check
 - Pi and DSH: `WaitingNotice` and `TimeoutPause` add `graphTimeoutMs` when the
   job has a graph timeout, and their reminders say that the graph timeout keeps
   running only then.
+- New `WaitReason` value `choice`: a pending instance whose inputs are all choice
+  edges reports it instead of `predecessors`, `stale`, or `hold` while those
+  inputs wait. Code that handles every `WaitReason` needs a case for it. Pi and
+  DSH status show it as "runs only after <decision> chooses <choice>".
+- Pi and DSH waiting reminders name the executions a job pause suspended with
+  that pause, so the cause appears once, and call a job limit "the job's
+  `<limit>` limit" instead of "its `<limit>` limit".
 
 ## Versioning
 

@@ -151,6 +151,32 @@ test("a cycle report names a node that runs only once a choice inside the cycle 
   assert.deepEqual(newCycles(queue(true)).cycles[0]!.choiceGated, []);
 });
 
+test("a node that runs only through a choice edge waits for the choice", async t => {
+  const gate = deferred();
+  const run = startBraid(queue(), { cwd: await outsideGit(t), runner: async request => {
+    await gate.promise;
+    request.decide?.("done");
+    return { output: "ok" };
+  } });
+  t.after(() => run.cancel());
+  const state = run.snapshot();
+  assert.equal(state.nodes.impl!.waitReason, "choice");
+  assert.equal(state.nodes.merge!.waitReason, "predecessors");
+  // With the choice edge closing the cycle, impl is a root of the first round.
+  const impl = deferred();
+  const started = startBraid(queue(true), { cwd: await outsideGit(t), runner: async request => {
+    if (request.execution.executionId === "impl@1") impl.resolve();
+    await gate.promise;
+    request.decide?.("done");
+    return { output: "ok" };
+  } });
+  t.after(() => started.cancel());
+  await impl.promise;
+  gate.resolve();
+  const result = await run.result;
+  assert.equal(result.nodes.impl!.skipReason, "inactive");
+});
+
 test("closesCycle picks the edge that closes a cycle, so each round starts at its target", async t => {
   const edge = { from: "review", to: "impl", choice: "again", closesCycle: true };
   assert.deepEqual(closingEdges(queue(true)), [edge]);

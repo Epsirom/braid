@@ -43,7 +43,6 @@ test("v selects executions with arrow keys, Enter opens a session, and Esc steps
   assert.doesNotMatch(text(panel), /◆/);
 
   // Finished executions are drawn in the timeline, where selection starts at the newest.
-  panel.handleInput("g");
   panel.handleInput("v");
   let view = text(panel);
   assert.match(view, /◆ Selected 2\/2: b@1 · completed/);
@@ -188,7 +187,6 @@ test("a flowchart wider than the panel is cropped around the selected node", asy
   const panel = new BraidPanel(jobs, { requestRender: () => {}, terminal: { rows: 40 } } as never, theme, () => {}, job.handle);
   t.after(() => panel.dispose());
   const lines = () => text(panel, 80).split("\n");
-  panel.handleInput("g");
   assert.ok(lines().some(line => /\[chart 1–76 of \d+ cols\]/.test(line)), "outside selection the left edge is shown");
   assert.ok(lines().some(line => line.includes("reviewer-number-0")));
   panel.handleInput("v");
@@ -216,7 +214,6 @@ test("selecting a node scrolls a tall flowchart to keep it in view", async t => 
   await jobs.wait(job.jobId);
   const panel = new BraidPanel(jobs, { requestRender: () => {}, terminal: { rows: 24 } } as never, theme, () => {}, job.handle);
   t.after(() => panel.dispose());
-  panel.handleInput("g");
   panel.handleInput("v");
   panel.handleInput("\x1b[B");
   const body = () => text(panel, 100).split("\n").slice(7);

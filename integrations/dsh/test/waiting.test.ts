@@ -52,6 +52,9 @@ test("the last active execution leaving only held work notifies once", async () 
   // Only a job with a graph timeout is told that its deadline keeps running.
   assert.match(formatWaiting({ ...waiting[0]!, graphTimeoutMs: 60_000 }), /braid_cancel\. The graph timeout keeps running while it waits\.$/);
   assert.doesNotMatch(formatWaiting({ ...waiting[0]!, graphTimeoutMs: 60_000, waitingOn: [{ kind: "job", source: "graph_timeout" }] }), /keeps running/);
+  // A job pause names the executions it suspended, so the cause is stated once.
+  assert.match(formatWaiting({ ...waiting[0]!, waitingOn: [{ kind: "suspended", executionId: "merge@2", nodeId: "merge", source: "graph_timeout" }, { kind: "job", source: "graph_timeout" }] }),
+    /It waits on the job pause \(by the job's graphTimeoutMs limit\), which suspended node "merge" execution merge@2\. Check/);
   await run("braid_resume", { jobId: job.handle, expectedRevision: 0, executionIds: [held] });
   await jobs.wait(job.handle);
   assert.equal(waiting.length, 1);
@@ -108,4 +111,19 @@ test("a held result that leaves nothing active sends only its own pause reminder
   jobs.cancel(job.handle);
   await jobs.wait(job.handle);
   await jobs.dispose();
+});
+
+test("status says which choice a node that runs only through a choice edge waits for", async () => {
+  const join = gate();
+  const { jobs, run, calls } = setup({ join: join.promise });
+  const job = jobs.start({ goal: "Loop", nodes: [node("impl"), node("tests"), node("join"),
+    { type: "decision", id: "review", prompt: "task:review", choices: ["again", "done"] }], edges: [
+    { from: "impl", to: "join" }, { from: "tests", to: "join" }, { from: "join", to: "review" }, { from: "review", to: "impl", choice: "again" },
+  ] }, {}, context());
+  await until(() => calls("join") === 1);
+  assert.match((await run("braid_status", { jobId: job.handle })).text, /^- impl@1 · node impl · pending · waiting: runs only after review chooses again$/m);
+  assert.match((await run("braid_status", { jobId: job.handle, executionId: "impl@1" })).text,
+    /^Execution impl@1 · node impl \(execute\) · pending · waiting: runs only after review chooses again$/m);
+  join.release();
+  await run("braid_cancel", { jobId: job.handle });
 });

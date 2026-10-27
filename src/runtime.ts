@@ -1167,6 +1167,11 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     // A lineage that already has a result will refresh it: its successors wait on a stale input.
     return result === "predecessors" && own !== "predecessors" ? "stale" : result;
   }
+  /** Whether a node runs only through choice edges: every input it waits for is one. */
+  function choiceOnly(id: string): boolean {
+    const inputs = graph.incoming.get(id)!.filter(edge => !graph.closing.has(edge));
+    return inputs.length > 0 && inputs.every(edge => edge.choice !== undefined);
+  }
   /** Wait reasons of pending heads, without changing anything. */
   function assess(): Map<string, WaitReason> {
     const waits = new Map<string, WaitReason>();
@@ -1176,7 +1181,10 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       if (!lineages.has(id)) continue;
       const upstream = upstreamDirt(id, dirt, cycles);
       const record = head(id);
-      if (record.status === "pending") waits.set(record.executionId, upstream === "round" ? "stale" : upstream ?? (overLimit(record) ? "limit" : runPause ? "run_paused" : "slot"));
+      if (record.status === "pending") {
+        waits.set(record.executionId, upstream === "round" ? "stale" : upstream ? (choiceOnly(id) ? "choice" : upstream)
+          : overLimit(record) ? "limit" : runPause ? "run_paused" : "slot");
+      }
       dirt.set(id, lineageDirt(id, upstream));
     }
     return waits;

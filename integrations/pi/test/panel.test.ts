@@ -215,6 +215,8 @@ test("panel focuses one node with live details and returns to the graph", async 
   assert.doesNotMatch(focused, /Braid completed/);
   assert.ok(panel.render(100).every((line) => visibleWidth(line) === 100));
   panel.handleInput("\x7f");
+  assert.match(panel.render(100).join("\n"), /◆ Selected 2\/2: b@1/, "the timeline draws the finished execution, so selection stays");
+  panel.handleInput("g");
   const live = panel.render(100).join("\n");
   assert.match(live, /Braid completed/);
   assert.doesNotMatch(live, /Selected/, "the live view does not draw a finished execution, so selection ends");

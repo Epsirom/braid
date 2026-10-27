@@ -71,6 +71,9 @@ test("the extension wakes the parent once when the last active execution leaves 
   const notice: WaitingNotice = { jobId: "id", handle, revision: 0, eventSequence: 0, waitingOn: [{ kind: "held", executionId: held, nodeId: "held", source: "definition" }] };
   assert.match(formatWaiting({ ...notice, graphTimeoutMs: 60_000 }), /braid_cancel\. The graph timeout keeps running while it waits\.$/);
   assert.doesNotMatch(formatWaiting({ ...notice, graphTimeoutMs: 60_000, waitingOn: [{ kind: "job", source: "graph_timeout" }] }), /keeps running/);
+  // A job pause names the executions it suspended, so the cause is stated once.
+  assert.match(formatWaiting({ ...notice, waitingOn: [{ kind: "suspended", executionId: "merge@2", nodeId: "merge", source: "graph_timeout" }, { kind: "job", source: "graph_timeout" }] }),
+    /It waits on the job pause \(by the job's graphTimeoutMs limit\), which suspended node "merge" execution merge@2\. Check/);
   await tools.get("braid_resume")!.execute("release", { jobId: handle, expectedRevision: 0, executionIds: [held] }, undefined, undefined, ctx);
   await until(() => of("braid-completed").length === 1);
   assert.equal(of("braid-waiting").length, 1, "a finished job is not reported as waiting");
@@ -171,4 +174,21 @@ test("a timeout pause that leaves nothing active sends only its own reminder", {
     /It waits on suspended node "a" execution e \(node timeout\)\./);
   jobs.cancel(handle);
   await jobs.wait(handle);
+});
+
+test("status says which choice a node that runs only through a choice edge waits for", { timeout: 10_000 }, async t => {
+  const gate = deferred<void>();
+  const { ctx, calls } = workers({ join: gate.promise });
+  const { jobs, tools } = setup(t);
+  const job = jobs.start({ goal: "Loop", nodes: [node("impl"), node("tests"), node("join"),
+    { type: "decision", id: "review", prompt: "task:review", choices: ["again", "done"] }], edges: [
+    { from: "impl", to: "join" }, { from: "tests", to: "join" }, { from: "join", to: "review" }, { from: "review", to: "impl", choice: "again" },
+  ] }, {}, ctx);
+  await until(() => calls("join") === 1);
+  const text = (result: { content: unknown[] }) => (result.content[0] as { text: string }).text;
+  assert.match(text(await tools.statusTool.execute("status", { jobId: job.handle }, undefined, undefined, ctx)),
+    /^- impl@1 · node impl · pending · waiting: runs only after review chooses again$/m);
+  assert.match(text(await tools.statusTool.execute("focused", { jobId: job.handle, executionId: "impl@1" }, undefined, undefined, ctx)),
+    /^Execution impl@1 · node impl \(execute\) · pending · waiting: runs only after review chooses again$/m);
+  gate.resolve();
 });

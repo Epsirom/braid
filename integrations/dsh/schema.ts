@@ -61,7 +61,7 @@ export const edgeParameters = Type.Object({
   from: text("Source node ID."),
   to: text("Target node ID."),
   choice: Type.Optional(text("Only for a decision source: one exact declared choice. Omit for an unconditional dependency, including error recovery.")),
-  closesCycle: Type.Optional(Type.Boolean({ description: "Only for an edge on a cycle: true makes this edge close the cycle, so each round starts at its target. Usually omit and let Braid choose; set it when the cycle report says a node runs only after a choice but each round should start there." })),
+  closesCycle: Type.Optional(Type.Boolean({ description: "Only for an edge on a cycle: true makes this edge close the cycle, so each round starts at its target. Set it on a decision's choice edge back to a node that should also run in the first round, such as review -> impl [choice=again] when impl feeds a merge with other branches; otherwise omit it and let Braid choose." })),
 }, { additionalProperties: false });
 export const edgeIdentityParameters = Type.Object({
   from: text("Source node ID."),
@@ -78,7 +78,9 @@ const templates = Type.Record(Type.String(), text(), { description: templateDesc
 export const braidParameters = Type.Object({
   goal: text("Shared goal included in every worker's context."),
   nodes: Type.Array(nodeParameters, { minItems: 1 }),
-  edges: Type.Array(edgeParameters, { description: "Dependencies between node IDs; use [] for independent roots. Any edge may close a cycle (a loop), and cycles may nest and overlap. Each round starts where an edge from outside enters the cycle (else at the node listed first), or at the target of an edge with closesCycle: true. A decision's choice edge back ends the cycle when the decision chooses otherwise, and maxRuns on a node in the cycle bounds how often it runs, counted across all rounds (unlimited by default); with neither, it repeats until you stop the job, and edges that leave it run in every round. The result lists each new cycle and what can stop it: check it for cycles you did not intend." }),
+  edges: Type.Array(edgeParameters, { description: "Dependencies between node IDs; use [] for independent roots. Any edge may close a cycle (a loop), and cycles may nest and overlap. Each round starts at the target of an edge with closesCycle: true, else where an edge from outside enters the cycle, else at the node listed first. A decision's choice edge back ends the cycle when the decision chooses otherwise, and maxRuns on a node in the cycle bounds how often it runs, counted across all rounds (unlimited by default); with neither, it repeats until you stop the job, and edges that leave it run in every round. The result lists each new cycle and what can stop it: check it for cycles you did not intend. " +
+    "When an outside edge enters the cycle at another node, rounds start there, and a node whose only input is a choice edge runs only after the decision chooses it, never in the first round. That fits a fix step, but not a node that should also run in the first round: " +
+    'for impl, tests, and docs feeding merge, then review (decision, choices ["again","done"]) with review -> impl on again, write that edge as {"from":"review","to":"impl","choice":"again","closesCycle":true}, so impl runs in the first round with tests and docs. Without it, rounds start at merge and impl waits for again. Set it at submission: the result warns when a node runs only after a choice.' }),
   promptTemplates: Type.Optional(templates),
   options: Type.Optional(Type.Object({
     maxConcurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum simultaneous node executions; default 4." })),
