@@ -139,6 +139,12 @@ export interface Edge {
   to: string;
   /** Omit for an unconditional edge, including from a decision node. */
   choice?: string;
+  /**
+   * True makes this edge close the cycle it is on, so each round starts at its
+   * target. Omit to let Braid choose (see closingEdges). Not part of the edge's
+   * identity; the edge must lie on a cycle.
+   */
+  closesCycle?: boolean;
 }
 
 /**
@@ -154,6 +160,12 @@ export interface GraphCycle {
   stops: Edge[];
   /** Nodes on the cycle with a finite maxRuns, which bound how often it repeats. */
   limitedNodeIds: string[];
+  /**
+   * Choice edges on the cycle, other than the closing edge, that are the only
+   * way their target runs: the target waits for the decision to choose the
+   * edge, so it does not run before that decision, even in the first round.
+   */
+  choiceGated: Edge[];
 }
 
 export interface BraidInput {

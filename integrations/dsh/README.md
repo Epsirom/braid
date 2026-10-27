@@ -245,7 +245,9 @@ the node where each round starts, such as
 `{ "from": "check", "to": "work", "choice": "retry" }`; an unconditional cycle
 repeats until the parent stops the job, and edges that leave it run in every
 round. The `braid` and `braid_update` results list each new cycle and what can
-stop it, so an accidental cycle is noticed. To bound the rounds, set `maxRuns` on
+stop it, so an accidental cycle is noticed. They also name a node that runs only
+after a decision in the cycle chooses it: when each round should start there
+instead, set `"closesCycle": true` on that choice edge. To bound the rounds, set `maxRuns` on
 a node in the cycle, so `maxRuns: 3` on `work` allows three rounds; omit it unless
 the user asks for a limit. `maxRuns` counts every run of that node, including
 reruns after an upstream change and runs in earlier rounds of an enclosing

@@ -6,6 +6,7 @@ const edge = {
     from: { type: "string" },
     to: { type: "string" },
     choice: { type: "string", description: "Required on edges from a decision node that route one choice." },
+    closesCycle: { type: "boolean", description: "True to make this edge close the cycle it is on, so each round starts at its target." },
   },
   required: ["from", "to"], additionalProperties: false,
 };

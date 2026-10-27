@@ -66,7 +66,11 @@ test("the extension wakes the parent once when the last active execution leaves 
     `It waits on the held result of node "held" execution ${held} (pauseAfter). ` +
     `Check it with braid_status({"jobId":"${handle}"}), then release held results or resume executions with ` +
     `braid_resume({"jobId":"${handle}","expectedRevision":0,"executionIds":[...]}) or braid_update with resume, ` +
-    "fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel. The graph timeout keeps running while it waits. [/system-reminder]");
+    "fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel. [/system-reminder]");
+  // Only a job with a graph timeout is told that its deadline keeps running.
+  const notice: WaitingNotice = { jobId: "id", handle, revision: 0, eventSequence: 0, waitingOn: [{ kind: "held", executionId: held, nodeId: "held", source: "definition" }] };
+  assert.match(formatWaiting({ ...notice, graphTimeoutMs: 60_000 }), /braid_cancel\. The graph timeout keeps running while it waits\.$/);
+  assert.doesNotMatch(formatWaiting({ ...notice, graphTimeoutMs: 60_000, waitingOn: [{ kind: "job", source: "graph_timeout" }] }), /keeps running/);
   await tools.get("braid_resume")!.execute("release", { jobId: handle, expectedRevision: 0, executionIds: [held] }, undefined, undefined, ctx);
   await until(() => of("braid-completed").length === 1);
   assert.equal(of("braid-waiting").length, 1, "a finished job is not reported as waiting");

@@ -89,6 +89,7 @@ const edgeParameters = Type.Object({
   from: text("Source node ID."),
   to: text("Target node ID."),
   choice: Type.Optional(text("Only for a decision source: one exact declared choice. Omit for an unconditional dependency, including error recovery.")),
+  closesCycle: Type.Optional(Type.Boolean({ description: "Only for an edge on a cycle: true makes this edge close the cycle, so each round starts at its target. Usually omit and let Braid choose; set it when the cycle report says a node runs only after a choice but each round should start there." })),
 }, { additionalProperties: false });
 const edgeIdentityParameters = Type.Object({
   from: text("Source node ID."),
@@ -183,7 +184,7 @@ export function createBraidTools(jobs: BraidJobs) {
         "Use this tool FIRST for nontrivial engineering work: code reviews, bug investigations, design comparisons, test planning, and changes spanning multiple files. " +
         "Run a mutable graph of isolated LLM invocations with parallel branches and joins; the user does not need to mention Braid. " +
         "Use execute, decision, merge, or integrate nodes. Execute/decision nodes require prompt. Only decision nodes declare choices and call decide; matching choice edges activate together. Merge/integrate nodes accept multiple predecessors and an optional prompt, with no workspace or choices field. " +
-        "A cycle is a loop, and any edge may close one; cycles may nest and overlap. Each round starts where an edge from outside enters the cycle (else at the node listed first) and runs new executions with fresh worktrees. A decision's choice edge back ends the cycle when the decision chooses otherwise, and maxRuns on a node in the cycle bounds how often it runs, counted across all rounds (unlimited by default); with neither, the cycle repeats until you stop the job, and edges that leave it run in every round. The tool result lists each new cycle and what can stop it: check it for cycles you did not intend. " +
+        "A cycle is a loop, and any edge may close one; cycles may nest and overlap. Each round starts where an edge from outside enters the cycle (else at the node listed first), or at the target of an edge with closesCycle: true and runs new executions with fresh worktrees. A decision's choice edge back ends the cycle when the decision chooses otherwise, and maxRuns on a node in the cycle bounds how often it runs, counted across all rounds (unlimited by default); with neither, the cycle repeats until you stop the job, and edges that leave it run in every round. The tool result lists each new cycle and what can stop it: check it for cycles you did not intend. " +
         'Example retry loop: nodes work (execute with prompt) and check (decision with prompt and choices ["retry","done"]); edges [{"from":"work","to":"check"},{"from":"check","to":"work","choice":"retry"}]. An optional done edge leaves check to a downstream node. ' +
         "For repeated prompts, define promptTemplates and set node prompt to {template: name, variables: {name: value}}; core renders {{name}} placeholders using explicit string variables before execution. " +
         "Unlabelled edges are unconditional. Joins wait for all possible predecessor paths to resolve. " +

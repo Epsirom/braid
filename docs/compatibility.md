@@ -377,8 +377,16 @@ that node. List the node where rounds start first in `nodes`, and check
 - New: the `cycles_created` event, the `GraphCycle` type, and the `newCycles`
   helper, which report new cycles and whether anything stops or bounds them. An
   exhaustive `switch` over `ExecutionEvent` needs a case for `cycles_created`.
+- New: `Edge.closesCycle` makes an edge close its cycle, so each round starts at
+  its target, and `GraphCycle.choiceGated` lists the choice edges that a node on
+  the cycle waits for before its first run. Code that compares whole
+  `GraphCycle` objects needs the new field.
 - Pi and DSH: `braid` and `braid_update` results list new cycles, and
-  `formatUpdate` takes the previous graph as an optional second argument.
+  `formatUpdate` takes the previous graph as an optional second argument. Their
+  edge schemas accept `closesCycle`.
+- Pi and DSH: `WaitingNotice` and `TimeoutPause` add `graphTimeoutMs` when the
+  job has a graph timeout, and their reminders say that the graph timeout keeps
+  running only then.
 
 ## Versioning
 

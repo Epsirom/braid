@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { braid, newCycles, startBraid, type BraidInput, type BraidRun, type ExecutionEvent } from "../src/index.js";
+import { deferred } from "./helpers.js";
+import { braid, closingEdges, newCycles, startBraid, validateGraph, type BraidInput, type BraidRun, type ExecutionEvent } from "../src/index.js";
 
 const node = (id: string) => ({ type: "execute" as const, id, prompt: id });
 const decision = (id: string, choices: string[]) => ({ type: "decision" as const, id, prompt: id, choices });
@@ -101,12 +102,12 @@ test("a submission or update that creates a cycle reports it and whether anythin
   assert.deepEqual(newCycles(input), { truncated: false, cycles: [{
     nodeIds: ["fix", "test", "review"],
     edges: [{ from: "fix", to: "test" }, { from: "test", to: "review" }, { from: "review", to: "fix", choice: "again" }],
-    stops: [{ from: "review", to: "fix", choice: "again" }], limitedNodeIds: [],
+    stops: [{ from: "review", to: "fix", choice: "again" }], limitedNodeIds: [], choiceGated: [],
   }] });
   // An agent meant to share test results but closed a second cycle that nothing stops.
   const accidental = { ...input, edges: [...input.edges, { from: "test", to: "fix" }] };
   assert.deepEqual(newCycles(accidental, input).cycles, [{
-    nodeIds: ["fix", "test"], edges: [{ from: "fix", to: "test" }, { from: "test", to: "fix" }], stops: [], limitedNodeIds: [],
+    nodeIds: ["fix", "test"], edges: [{ from: "fix", to: "test" }, { from: "test", to: "fix" }], stops: [], limitedNodeIds: [], choiceGated: [],
   }]);
   assert.deepEqual(newCycles(input, input).cycles, []);
 
@@ -130,6 +131,64 @@ test("a submission or update that creates a cycle reports it and whether anythin
   assert.ok(update.type === "cycles_created");
   assert.deepEqual(update.cycles[0]!.stops, []);
   assert.deepEqual(update.cycles[0]!.limitedNodeIds, ["fix"]);
+});
+
+// Implementation, tests, and docs merge for review, which sends the work back to impl.
+const queue = (closesCycle?: boolean): BraidInput => ({ goal: "task queue", nodes: [
+  { ...node("impl"), maxRuns: 3 }, node("tests"), node("docs"), { type: "merge", id: "merge" }, decision("review", ["again", "done"]), node("ship"),
+], edges: [
+  { from: "impl", to: "merge" }, { from: "tests", to: "merge" }, { from: "docs", to: "merge" }, { from: "merge", to: "review" },
+  { from: "review", to: "impl", choice: "again", ...(closesCycle === undefined ? {} : { closesCycle }) }, { from: "review", to: "ship", choice: "done" },
+] });
+
+test("a cycle report names a node that runs only once a choice inside the cycle picks it", () => {
+  // merge is the entry, so impl -> merge closes the cycle and impl waits for review.
+  assert.deepEqual(closingEdges(queue()), [{ from: "impl", to: "merge" }]);
+  const [cycle] = newCycles(queue()).cycles;
+  assert.deepEqual(cycle!.nodeIds, ["merge", "review", "impl"]);
+  assert.deepEqual(cycle!.choiceGated, [{ from: "review", to: "impl", choice: "again" }]);
+  // A choice edge that closes the cycle starts a round instead.
+  assert.deepEqual(newCycles(queue(true)).cycles[0]!.choiceGated, []);
+});
+
+test("closesCycle picks the edge that closes a cycle, so each round starts at its target", async t => {
+  const edge = { from: "review", to: "impl", choice: "again", closesCycle: true };
+  assert.deepEqual(closingEdges(queue(true)), [edge]);
+  assert.deepEqual(newCycles(queue(true)).cycles[0]!.nodeIds, ["impl", "merge", "review"]);
+  // false, like omitting it, lets Braid choose.
+  assert.deepEqual(closingEdges(queue(false)), [{ from: "impl", to: "merge" }]);
+  const result = await braid(queue(true), { cwd: await outsideGit(t), runner: async request => {
+    request.decide?.(request.execution.executionId === "review@1" ? "again" : "done");
+    return { output: request.execution.executionId! };
+  } });
+  assert.equal(result.status, "completed");
+  // impl runs in the first round, and merge waits for it.
+  assert.deepEqual(result.executions["merge@1"]!.predecessorExecutionIds.sort(), ["docs@1", "impl@1", "tests@1"]);
+  assert.deepEqual(result.executions["impl@2"]!.predecessorExecutionIds, ["review@1"]);
+  assert.deepEqual(result.executions["merge@2"]!.predecessorExecutionIds.sort(), ["docs@1", "impl@2", "tests@1"]);
+  assert.equal(result.nodes.ship!.status, "completed");
+});
+
+test("closesCycle must be a boolean on an edge that lies on a cycle, and an update can move it", async t => {
+  const chain: BraidInput = { goal: "x", nodes: [node("a"), node("b")], edges: [{ from: "a", to: "b", closesCycle: true }] };
+  assert.throws(() => validateGraph(chain), /Edge 'a' -> 'b' sets closesCycle but is not on a cycle/);
+  assert.throws(() => validateGraph({ ...queue(), edges: [{ from: "impl", to: "merge", closesCycle: "yes" as never }] }),
+    /closesCycle must be a boolean/);
+  // Edges keep their identity without closesCycle: remove and re-add one to change it.
+  const gate = deferred();
+  const run = startBraid(queue(), { cwd: await outsideGit(t), runner: async request => {
+    await gate.promise;
+    request.decide?.("done");
+    return { output: "ok" };
+  } });
+  t.after(() => run.cancel());
+  const again = { from: "review", to: "impl", choice: "again" };
+  run.update({ expectedRevision: 0, removeEdges: [again], addEdges: [{ ...again, closesCycle: true }] });
+  assert.deepEqual(closingEdges(run.snapshot().graph), [{ ...again, closesCycle: true }]);
+  gate.resolve();
+  const result = await run.result;
+  assert.equal(result.status, "completed");
+  assert.deepEqual(result.executions["merge@1"]!.predecessorExecutionIds.sort(), ["docs@1", "impl@1", "tests@1"]);
 });
 
 test("cycle reports are capped", () => {

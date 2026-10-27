@@ -118,7 +118,23 @@ cycles in this order of preference:
 
 So each round starts at the entry, or, without one, where a choice edge returns,
 or at the cycle node listed first. In the example, `review → edit` closes the
-cycle and each round starts at `edit`. Graphs that earlier versions accepted
+cycle and each round starts at `edit`.
+
+The graph alone cannot always say where a round should start. In
+`impl → merge → review → impl`, where `tests → merge` also enters the cycle,
+`merge` is the entry, so `impl → merge` closes the cycle and `impl` first runs
+only after `review` chooses `again`; the same shape with `build`, `check`, and
+`fix` in place of `merge`, `review`, and `impl` is meant to start at `build`. Set
+`closesCycle: true` on an edge to make it close its cycle, so each round starts
+at its target:
+
+```ts
+{ from: "review", to: "impl", choice: "again", closesCycle: true }
+```
+
+Braid then picks closing edges for any cycles left. An edge with `closesCycle`
+must lie on a cycle. The flag is not part of the edge's identity: to change it in
+an update, remove the edge and add it again. Graphs that earlier versions accepted
 keep their closing edge (see [compatibility](compatibility.md#any-edge-may-close-a-cycle)).
 Which edges close a cycle depends only on the current graph,
 so an update that adds edges to a cycle can change it; `braid_status` in Pi and
@@ -170,12 +186,17 @@ unnoticed. Each submission and update that creates cycles emits
   edges: [{ from: "fix", to: "test" }, { from: "test", to: "fix" }], // the last one closes it
   stops: [],                           // no decision's choice edge
   limitedNodeIds: [],                  // no node with a finite maxRuns
+  choiceGated: [],                     // no node that waits for a choice
 }] }
 ```
 
 `stops` lists the cycle's choice edges, which end it when their decision chooses
 otherwise, and `limitedNodeIds` the nodes on it with a finite `maxRuns`. When
-both are empty, the cycle repeats until its owner stops it. A cycle is new when
+both are empty, the cycle repeats until its owner stops it. `choiceGated` lists
+the choice edges on the cycle, other than the closing edge, that are the only way
+their target runs: that node does not run until the decision chooses the edge,
+not even in the first round. Check it for a node meant to start each round, and
+set `closesCycle` on that edge if so. A cycle is new when
 it uses an edge that the previous graph did not have. At most 20 cycles are
 listed; `truncated` says there may be more. `newCycles(graph, previousGraph?)`
 computes the same list without a run, and Pi's and DSH's `braid` and
