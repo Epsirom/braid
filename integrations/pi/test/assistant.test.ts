@@ -173,7 +173,6 @@ test("Tab toggles the assistant: beside the graph in a wide panel, in place of i
   assert.doesNotMatch(view, /Assistant ·/, "hidden until Tab");
   assert.match(view, /Tab assistant/);
 
-  panel.handleInput("g");
   panel.handleInput("\t");
   view = text(panel);
   assert.match(view, /Assistant · job/, "the graph view talks about the whole job");
@@ -228,7 +227,6 @@ test("node conversations are separate from the job's, bound to the node across i
   };
 
   // The timeline shows finished executions; selection starts at the newest one.
-  panel.handleInput("g");
   panel.handleInput("v");
   panel.handleInput("\x1b[A");
   await ask("what did a do");

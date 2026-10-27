@@ -65,7 +65,8 @@ test("a rerun beyond maxRuns waits pending until the owner raises maxRuns or end
   assert.deepEqual(state.limitedExecutionIds, ["work@3"]);
   assert.deepEqual(state.pausedExecutionIds, []);
   assert.equal(state.nodes.work!.waitReason, "limit");
-  assert.equal(state.nodes.end!.waitReason, "stale");
+  // end runs only once check chooses done.
+  assert.equal(state.nodes.end!.waitReason, "choice");
   const reached = events.find(event => event.type === "limit_reached");
   assert.deepEqual(reached && { limit: reached.limit, value: reached.value, nodeId: reached.nodeId, executionId: reached.executionId },
     { limit: "maxRuns", value: 2, nodeId: "work", executionId: "work@3" });

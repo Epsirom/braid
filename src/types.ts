@@ -186,11 +186,13 @@ export type NodeStatus =
 /**
  * Why a pending instance has not started. predecessors: an input has not run yet;
  * stale: an input has a newer instance, or will get one, that has not settled;
- * hold: an input is held; limit: a rerun at its node's maxRuns; run_paused: the
+ * hold: an input is held; choice: every input is a choice edge, so the instance
+ * runs only once a decision chooses one of them, and its inputs are still waiting
+ * for any of the above; limit: a rerun at its node's maxRuns; run_paused: the
  * run is paused; slot: no concurrency slot is free, or the instance it replaces
  * is still stopping.
  */
-export type WaitReason = "predecessors" | "stale" | "hold" | "limit" | "run_paused" | "slot";
+export type WaitReason = "predecessors" | "stale" | "hold" | "choice" | "limit" | "run_paused" | "slot";
 
 export interface TokenUsage {
   inputTokens: number;

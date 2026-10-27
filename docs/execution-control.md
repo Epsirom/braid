@@ -45,6 +45,7 @@ and `supersedes` on its replacement. Staleness is derived, not stored.
 | `predecessors` | An input has not run yet |
 | `stale` | An input has a newer instance that has not settled, or will get one because something upstream of it is rerunning |
 | `hold` | An input, or something upstream of it, is held |
+| `choice` | Every input is a choice edge, and its inputs still wait for one of the reasons above: it runs only once a decision chooses it |
 | `limit` | It is a rerun beyond its node's `maxRuns` (see [limits](#limits)) |
 | `run_paused` | The run is paused, by `pauseRun` or at a run limit |
 | `slot` | No concurrency slot is free, or the instance it replaces is still stopping |
@@ -132,7 +133,9 @@ at its target:
 { from: "review", to: "impl", choice: "again", closesCycle: true }
 ```
 
-Braid then picks closing edges for any cycles left. An edge with `closesCycle`
+Set it when you submit the graph. Without it, `impl@1` waits with `waitReason:
+"choice"`, which Pi and DSH status show as "runs only after review chooses
+again". Braid then picks closing edges for any cycles left. An edge with `closesCycle`
 must lie on a cycle. The flag is not part of the edge's identity: to change it in
 an update, remove the edge and add it again. Graphs that earlier versions accepted
 keep their closing edge (see [compatibility](compatibility.md#any-edge-may-close-a-cycle)).

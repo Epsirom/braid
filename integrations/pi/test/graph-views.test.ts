@@ -166,7 +166,11 @@ test("g switches the panel between live and timeline; selection and Enter follow
   const text = () => stripTerminalSequences(panel.render(120).join("\n"));
 
   let view = text();
-  assert.match(view, /^╭ Braid · live view /, "the live view is the default");
+  assert.match(view, /^╭ Braid · timeline view /, "the timeline is the default");
+  assert.match(view, /g live view/);
+  panel.handleInput("g");
+  view = text();
+  assert.match(view, /^╭ Braid · live view /);
   assert.match(view, /g timeline view/);
   assert.match(view, /▶ ACTIVE work@3/);
   assert.match(view, /○ ship@1/, "pending executions are live");

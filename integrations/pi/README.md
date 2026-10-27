@@ -423,19 +423,19 @@ between them; the panel title (`Braid · live view` or `Braid · timeline view`)
 and the footer show the active one, and the panel keeps your choice while it is
 open, across jobs and sessions.
 
-- **Live view** (default): only executions that have not released their result
+- **Timeline view** (default): every execution, oldest first, in one flat
+  graph: every round of a cycle appears below the round before it, labelled by
+  its execution ID (`review@2`). Skipped executions show `⊘` and the reason, pending ones `○`.
+  Replaced executions stay and show `superseded → <executionId>`, and executions
+  of removed nodes show `removed`.
+- **Live view**: only executions that have not released their result
   downstream yet: pending, running, and held. It shows what the job is doing
   now and what comes next, and stays small however long the job runs. A pending
   execution shows why it waits (`waits predecessors`, `stale`, `hold`,
-  `run paused`, or `slot`); a running one shows whether its worker is in a
-  `model` request or a `tool`, `· hold` if its result will be held, and paused
+  `choice`, `limit`, `run paused`, or `slot`); a running one shows whether its
+  worker is in a `model` request or a `tool`, `· hold` if its result will be held, and paused
   or pausing. When nothing is live, for example once the job has finished, the
   view says so and points to the timeline.
-- **Timeline view**: every execution, oldest first, in one flat graph: every
-  round of a cycle appears below the round before it, labelled by its execution
-  ID (`review@2`). Skipped executions show `⊘` and the reason, pending ones `○`.
-  Replaced executions stay and show `superseded → <executionId>`, and executions
-  of removed nodes show `removed`.
 
 In both views, solid edges are the inputs an execution ran with. Dotted edges
 show the input a pending execution will use or the upstream result a skipped

@@ -67,10 +67,10 @@ export function pausedBy(suspension: ExecutionSuspension): string {
 /** A node timeout pause waits for the parent's decision. */
 const TIMEOUT_PAUSE_NOTE = "Its node timeout ran out. Resume it with braid_resume (optionally with nodeTimeoutMs; the default is the job's nodeTimeoutMs again), or fail only this execution with braid_cancel and executionIds. Its successors wait until then.";
 
-function executionLine(execution: NodeResult): string {
+function executionLine(execution: NodeResult, graph?: Pick<BraidInput, "nodes" | "edges">): string {
   const parts = [execution.executionId ?? "(no execution)", `node ${execution.id}`];
   parts.push(execution.skipReason ? `${execution.status} (${execution.skipReason})` : execution.status);
-  if (execution.waitReason) parts.push(`waiting: ${waitReasons[execution.waitReason]}`);
+  if (execution.waitReason) parts.push(`waiting: ${waitText(execution, graph)}`);
   if (execution.held) parts.push("held");
   if (execution.supersedes) parts.push(`replaces ${execution.supersedes}`);
   if (execution.supersededBy) parts.push(`superseded by ${execution.supersededBy}`);
@@ -93,8 +93,16 @@ type Control = Pick<BraidSnapshot, "status" | "revision" | "pausedExecutionIds">
 
 const waitReasons = {
   predecessors: "an input has not run yet", stale: "an input is being rerun", hold: "an input is held",
-  limit: "its node's maxRuns; raise it or release this rerun to end it", run_paused: "the job is paused", slot: "a free slot",
+  choice: "a decision to choose it", limit: "its node's maxRuns; raise it or release this rerun to end it", run_paused: "the job is paused", slot: "a free slot",
 } as const;
+
+/** Why a pending execution waits. A choice wait names the choices it runs after. */
+function waitText(execution: NodeResult, graph: Pick<BraidInput, "nodes" | "edges"> | undefined): string {
+  if (execution.waitReason !== "choice" || !graph) return waitReasons[execution.waitReason!];
+  const closing = new Set(closingEdges(graph));
+  const edges = graph.edges.filter(edge => edge.to === execution.id && edge.choice !== undefined && !closing.has(edge));
+  return edges.length ? `runs only after ${edges.map(edge => `${edge.from} chooses ${edge.choice}`).join(" or ")}` : waitReasons.choice;
+}
 
 /** Held (pauseAfter) and suspended executions are resumed the same way; a job pause has its own resume. */
 function control(execution: Control | undefined): string {
@@ -225,7 +233,7 @@ export function formatNodeStatus({ job, node, activity, now }: NodeStatus): stri
     ...node.suspension ? [`Execution is ${node.suspension.state}, ${pausedBy(node.suspension)}${node.suspension.suspendedAt !== undefined ? ` since ${iso(node.suspension.suspendedAt)}` : ""}.${node.suspension.source === "user" ? ` ${USER_PAUSE_NOTE}` : node.suspension.source === "node_timeout" ? ` ${TIMEOUT_PAUSE_NOTE}` : ""}`] : [],
     ...pendingHold(node) ? [`Its result will be held when it finishes (set by ${holdSource(node.holdAfter!)}).${node.holdAfter!.source === "user" ? ` ${USER_HOLD_NOTE}` : ""}`] : [],
     `Execution ${node.executionId ?? "(none yet)"} · node ${node.id}${node.node ? ` (${node.node.type})` : ""} · ${node.skipReason ? `${node.status} (${node.skipReason})` : node.status}` +
-      `${node.waitReason ? ` · waiting: ${waitReasons[node.waitReason]}` : ""}${node.held ? " · held" : ""}`,
+      `${node.waitReason ? ` · waiting: ${waitText(node, job.execution?.graph)}` : ""}${node.held ? " · held" : ""}`,
     ...node.supersedes ? [`It replaces ${node.supersedes}.`] : [],
     ...node.supersededBy ? [`Superseded by ${node.supersededBy}; it no longer feeds successors.`] : []];
   const timing = [node.startedAt !== undefined && `started ${iso(node.startedAt)}`, node.latencyMs !== undefined && `took ${duration(node.latencyMs)}`,
@@ -261,7 +269,7 @@ export function formatJobStatus(job: JobSnapshot, now: number): string {
   header.push(`Goal: ${clip(job.goal, GOAL_CHARS)}`);
   const sections = [header.join("\n")];
   const executions = Object.values(state?.executions ?? {});
-  if (executions.length) sections.push([`Executions (${executions.length}), oldest first; each node's latest is its current one:`, ...executions.map(executionLine)].join("\n"));
+  if (executions.length) sections.push([`Executions (${executions.length}), oldest first; each node's latest is its current one:`, ...executions.map(execution => executionLine(execution, job.execution?.graph))].join("\n"));
   const terminal = new Set(job.result?.terminalExecutionIds ?? []);
   const outputs = executions.filter(execution => execution.output !== undefined);
   if (outputs.length) sections.push(["Outputs:", ...outputs.map(execution =>
@@ -293,9 +301,17 @@ export function formatTimeoutPause(pause: TimeoutPause): string {
 const jobLimits: Record<string, string> = { execution_limit: "maxExecutions", graph_timeout: "graphTimeoutMs", token_limit: "maxTokens" };
 const waitingSource = (source: string) =>
   ({ definition: "pauseAfter", replan: "its replan request", node_timeout: "node timeout", agent: "you", maxRuns: "its node's maxRuns",
-    ...Object.fromEntries(Object.entries(jobLimits).map(([key, limit]) => [key, `its ${limit} limit`])) } as Record<string, string>)[source] ?? source;
-const waitingItem = (item: WaitingItem) => item.kind === "job" ? `the job pause (by ${waitingSource(item.source)})`
-  : `${item.kind === "held" ? "the held result of" : item.kind === "limited" ? "the rerun of" : "suspended"} node ${JSON.stringify(item.nodeId)} execution ${item.executionId} (${waitingSource(item.source)})`;
+    ...Object.fromEntries(Object.entries(jobLimits).map(([key, limit]) => [key, `the job's ${limit} limit`])) } as Record<string, string>)[source] ?? source;
+const executionItem = (item: WaitingItem) => `node ${JSON.stringify(item.nodeId)} execution ${item.executionId}`;
+/** A job pause names the executions it suspended, so the cause is stated once. */
+const waitingItem = (item: WaitingItem, items: readonly WaitingItem[]) => {
+  if (item.kind !== "job") return `${item.kind === "held" ? "the held result of" : item.kind === "limited" ? "the rerun of" : "suspended"} ${executionItem(item)} (${waitingSource(item.source)})`;
+  const suspended = items.filter(other => other.kind === "suspended" && other.source === item.source);
+  return `the job pause (by ${waitingSource(item.source)})${suspended.length ? `, which suspended ${suspended.map(executionItem).join(", ")}` : ""}`;
+};
+/** Items to list: executions a listed job pause suspended are named with it. */
+const listed = (items: readonly WaitingItem[]) => items.filter(item =>
+  item.kind !== "suspended" || !items.some(other => other.kind === "job" && other.source === item.source)).map(item => waitingItem(item, items));
 
 /** The waking reminder for a job with nothing active that waits on paused work. */
 export function formatWaiting(notice: WaitingNotice): string {
@@ -304,8 +320,8 @@ export function formatWaiting(notice: WaitingNotice): string {
   const limit = job && jobLimits[job.source];
   return [
     `Braid job ${notice.handle} has no active work at revision ${notice.revision}: nothing more runs until you act.`,
-    `It waits on ${notice.waitingOn.filter(item => item.source !== "user").map(waitingItem).join("; ")}.`,
-    users.length ? `The user paused ${users.map(waitingItem).join("; ")}: leave those unless the user asks.` : "",
+    `It waits on ${listed(notice.waitingOn.filter(item => item.source !== "user")).join("; ")}.`,
+    users.length ? `The user paused ${listed(users).join("; ")}: leave those unless the user asks.` : "",
     `Check it with braid_status({"jobId":"${notice.handle}"}), then release held results or resume executions with`,
     `braid_resume({"jobId":"${notice.handle}","expectedRevision":${notice.revision},"executionIds":[...]}) or braid_update with resume,`,
     notice.waitingOn.some(item => item.kind === "limited")

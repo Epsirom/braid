@@ -37,7 +37,8 @@ export type NodeFocus = { nodeId: string } | { executionId: string };
  * A live, scrollable panel. Esc steps back one level: session → node selection →
  * graph → close. Closing the panel leaves jobs running. Tab toggles an assistant
  * that answers questions about the job and can message running executions. g
- * switches between the live executions and the timeline of every execution.
+ * switches between the timeline of every execution (the default) and the live
+ * executions.
  */
 export class BraidPanel implements Component {
   private selected: string | undefined;
@@ -45,7 +46,7 @@ export class BraidPanel implements Component {
   /** Execution highlighted in selection mode (`v`); undefined in the plain graph view. */
   private choosing: string | undefined;
   /** Kept for the life of the panel, across jobs and sessions. */
-  private view: GraphView = "live";
+  private view: GraphView = "timeline";
   /** The timeline expands every generation instead of the most recent ones. */
   private allHistory = false;
   /** Keep the newest transcript lines in view until the user scrolls up. */
