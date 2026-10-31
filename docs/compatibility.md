@@ -413,6 +413,24 @@ is resumed by the reminder within the same run.
   `session.prompt()` returns once the jobs finish. Only interactive Pi
   (`mode: "tui"`) still settles while jobs run.
 
+### Status reads for agents that poll
+
+- New: `NodeResult.inputsChanged` on a held instance whose inputs changed since
+  it ran. Releasing it reruns its node, as before; the marker only says so.
+- `cancelExecutions` still rejects executions that are not running, and its error
+  now names the first one and its state, for example `test@2 is completed and held`.
+  Likewise, `resume` names the first execution it cannot resume, and says when an
+  execution is still running and is held when it finishes.
+- Pi and DSH: a whole-job `braid_status` shows each running execution's elapsed
+  time, phase, and model request and tool call counts. Reading a running job
+  again when nothing changed (the same statuses, holds, wait reasons, and
+  revision) returns a short reply with that progress instead of the whole status.
+  `formatJobStatus` takes an optional activity lookup as its third argument.
+  Each started execution in the list also names its inputs (`inputs merge@2`),
+  since generations count per node.
+- Pi and DSH: `WaitingItem` adds `inputsChanged`, and the waiting reminder suggests
+  `braid_cancel` with `executionIds` only when it waits on suspended executions.
+
 ## Versioning
 
 Core, Pi, and DSH release together with matching versions. During 0.x, patch releases

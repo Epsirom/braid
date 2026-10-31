@@ -48,7 +48,7 @@ test("the last active execution leaving only held work notifies once", async () 
     `It waits on the held result of node "held" execution ${held} (pauseAfter). ` +
     `Check it with braid_status({"jobId":"${job.handle}"}), then release held results or resume executions with ` +
     `braid_resume({"jobId":"${job.handle}","expectedRevision":0,"executionIds":[...]}) or braid_update with resume, ` +
-    "fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel.");
+    "or cancel the job with braid_cancel.");
   // Only a job with a graph timeout is told that its deadline keeps running.
   assert.match(formatWaiting({ ...waiting[0]!, graphTimeoutMs: 60_000 }), /braid_cancel\. The graph timeout keeps running while it waits\.$/);
   assert.doesNotMatch(formatWaiting({ ...waiting[0]!, graphTimeoutMs: 60_000, waitingOn: [{ kind: "job", source: "graph_timeout" }] }), /keeps running/);
@@ -126,4 +126,40 @@ test("status says which choice a node that runs only through a choice edge waits
     /^Execution impl@1 · node impl \(execute\) · pending · waiting: runs only after review chooses again$/m);
   join.release();
   await run("braid_cancel", { jobId: job.handle });
+});
+
+test("braid_status shows running progress, answers an unchanged job briefly, and says what releasing a changed held result does", async () => {
+  const impl = gate();
+  const { jobs, run, calls } = setup({ impl: impl.promise });
+  const job = jobs.start({ goal: "Impl and test", nodes: [node("impl"), node("test", { pauseAfter: true })], edges: [] }, {}, context());
+  await until(() => calls("impl") === 1 && jobs.get(job.handle).execution.pausedExecutionIds.length === 1);
+  const status = async () => (await run("braid_status", { jobId: job.handle })).text;
+  assert.match(await status(), /^- impl@1 · node impl · running · \d+ms so far · model for \d+ms · model requests 1, tool calls 0$/m);
+  const unchanged = await status();
+  assert.match(unchanged, /^Braid job job-\d+ · running · nothing changed since your full braid_status \d+ms ago \(revision 0\); that read still applies\.$/m);
+  assert.match(unchanged, /^Running:\n- impl@1 · \d+ms so far · model for \d+ms · model requests 1, tool calls 0$/m);
+  assert.doesNotMatch(unchanged, /Executions/);
+  await run("braid_update", { jobId: job.handle, expectedRevision: 0, addEdges: [{ from: "impl", to: "test" }] });
+  assert.match(await status(), /^- test@1 · node test · completed · held, inputs changed; releasing it reruns its node with the new inputs, and this result does not go downstream/m);
+  assert.match((await run("braid_status", { jobId: job.handle, executionId: "test@1" })).text,
+    /^Its inputs changed; releasing it reruns its node with the new inputs, and this result does not go downstream\.$/m);
+  await assert.rejects(run("braid_cancel", { jobId: job.handle, executionIds: ["test@1"] }),
+    /test@1 is completed and held: .*\. braid_cancel with executionIds fails only running or paused executions: release a held result with braid_resume, or replace its node with braid_update\./);
+  impl.release();
+  await run("braid_cancel", { jobId: job.handle });
+});
+
+test("resuming a running execution that will be held says when and what to do now; job reads name each execution's inputs", async () => {
+  const a = gate();
+  const { jobs, run, calls } = setup({ a: a.promise });
+  const job = jobs.start({ goal: "Chain", nodes: [node("a", { pauseAfter: true }), node("b")], edges: [{ from: "a", to: "b" }] }, {}, context());
+  await until(() => calls("a") === 1);
+  const hint = /a@1 is running and is held when it finishes: resume it then; its completion reminder says when\. To change it now, upsert its node in braid_update without resuming it: that replaces the running execution/;
+  await assert.rejects(run("braid_resume", { jobId: job.handle, expectedRevision: 0, executionIds: ["a@1"] }), hint);
+  await assert.rejects(run("braid_update", { jobId: job.handle, expectedRevision: 0, resume: ["a@1"] }), hint);
+  a.release();
+  await until(() => jobs.get(job.handle).execution.pausedExecutionIds.length === 1);
+  await run("braid_resume", { jobId: job.handle, expectedRevision: 0, executionIds: ["a@1"] });
+  await jobs.wait(job.handle);
+  assert.match((await run("braid_status", { jobId: job.handle })).text, /^- b@1 · node b · completed · [^\n]* · inputs a@1$/m);
 });

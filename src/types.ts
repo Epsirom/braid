@@ -533,6 +533,12 @@ export interface NodeResult extends Partial<NodeOutput> {
   waitReason?: WaitReason;
   /** True while this settled instance's result is held: its outgoing edges wait for a resume. */
   held?: boolean;
+  /**
+   * True on a held instance whose inputs changed since it ran, for example by a new edge
+   * into it or a rerun upstream: releasing it reruns its node with the new inputs, and
+   * this result does not go downstream.
+   */
+  inputsChanged?: boolean;
   /** The started instance this one replaced. */
   supersedes?: string;
   /** The instance that replaced this one. Set only on started instances. */

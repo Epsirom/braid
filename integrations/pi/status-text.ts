@@ -67,11 +67,21 @@ export function pausedBy(suspension: ExecutionSuspension): string {
 /** A node timeout pause waits for the parent's decision. */
 const TIMEOUT_PAUSE_NOTE = "Its node timeout ran out. Resume it with braid_resume (optionally with nodeTimeoutMs; the default is the job's nodeTimeoutMs again), or fail only this execution with braid_cancel and executionIds. Its successors wait until then.";
 
-function executionLine(execution: NodeResult, graph?: Pick<BraidInput, "nodes" | "edges">): string {
+/** How long a running execution has run and what it is doing, so progress shows without a focused read. */
+function progress(execution: NodeResult, now: number, activity: ExecutionActivity | undefined): string[] {
+  if (execution.status !== "running" || execution.startedAt === undefined) return [];
+  const parts = [`${duration(now - execution.startedAt)} so far`];
+  // A suspended execution says so itself; its phase would repeat it.
+  if (activity && !activity.finishedAt && !execution.suspension) parts.push(`${activity.phase} for ${duration(now - activity.phaseStartedAt)}`);
+  if (activity) parts.push(`model requests ${activity.modelRequests}, tool calls ${activity.toolCalls}`);
+  return parts;
+}
+
+function executionLine(execution: NodeResult & Partial<Pick<NodeExecution, "predecessorExecutionIds">>, graph?: Pick<BraidInput, "nodes" | "edges">, now = 0, activity?: ExecutionActivity): string {
   const parts = [execution.executionId ?? "(no execution)", `node ${execution.id}`];
-  parts.push(execution.skipReason ? `${execution.status} (${execution.skipReason})` : execution.status);
+  parts.push(execution.skipReason ? `${execution.status} (${execution.skipReason})` : execution.status, ...progress(execution, now, activity));
   if (execution.waitReason) parts.push(`waiting: ${waitText(execution, graph)}`);
-  if (execution.held) parts.push("held");
+  if (execution.held) parts.push(execution.inputsChanged ? `held, ${INPUTS_CHANGED}` : "held");
   if (execution.supersedes) parts.push(`replaces ${execution.supersedes}`);
   if (execution.supersededBy) parts.push(`superseded by ${execution.supersededBy}`);
   if (execution.suspension) parts.push(`${execution.suspension.state}, ${pausedBy(execution.suspension)}`);
@@ -79,6 +89,8 @@ function executionLine(execution: NodeResult, graph?: Pick<BraidInput, "nodes" |
   if (execution.replan) parts.push("requested a replan");
   if (execution.latencyMs !== undefined) parts.push(duration(execution.latencyMs));
   if (execution.decision) parts.push(`decision ${execution.decision}`);
+  // Generations count per node, so name the inputs: review@1 may have run with merge@2.
+  if (execution.status !== "pending" && execution.predecessorExecutionIds?.length) parts.push(`inputs ${execution.predecessorExecutionIds.join(", ")}`);
   if (execution.error) parts.push(failure(execution.error));
   return `- ${parts.join(" · ")}`;
 }
@@ -115,6 +127,9 @@ function control(execution: Control | undefined): string {
   if (limits.length) parts.push(`limits: ${limits.map(([key, value]) => `${key} ${value}`).join(", ")}`);
   return parts.join(" · ");
 }
+
+/** What releasing a held result whose inputs changed does. */
+const INPUTS_CHANGED = "inputs changed; releasing it reruns its node with the new inputs, and this result does not go downstream";
 
 /** Paused-by-user work is the user's call: say so wherever the parent sees it. */
 const USER_PAUSE_NOTE = "The user paused this; do not resume it unless the user asks.";
@@ -234,6 +249,7 @@ export function formatNodeStatus({ job, node, activity, now }: NodeStatus): stri
     ...pendingHold(node) ? [`Its result will be held when it finishes (set by ${holdSource(node.holdAfter!)}).${node.holdAfter!.source === "user" ? ` ${USER_HOLD_NOTE}` : ""}`] : [],
     `Execution ${node.executionId ?? "(none yet)"} · node ${node.id}${node.node ? ` (${node.node.type})` : ""} · ${node.skipReason ? `${node.status} (${node.skipReason})` : node.status}` +
       `${node.waitReason ? ` · waiting: ${waitText(node, job.execution?.graph)}` : ""}${node.held ? " · held" : ""}`,
+    ...node.inputsChanged ? [`Its ${INPUTS_CHANGED}.`] : [],
     ...node.supersedes ? [`It replaces ${node.supersedes}.`] : [],
     ...node.supersededBy ? [`Superseded by ${node.supersededBy}; it no longer feeds successors.`] : []];
   const timing = [node.startedAt !== undefined && `started ${iso(node.startedAt)}`, node.latencyMs !== undefined && `took ${duration(node.latencyMs)}`,
@@ -255,7 +271,7 @@ export function formatNodeStatus({ job, node, activity, now }: NodeStatus): stri
 }
 
 /** The whole job: control state, every execution, then their outputs and the current definition. */
-export function formatJobStatus(job: JobSnapshot, now: number): string {
+export function formatJobStatus(job: JobSnapshot, now: number, activityOf?: (executionId: string) => ExecutionActivity | undefined): string {
   const state = job.result ?? job.execution;
   // Control fields lead: a long goal or output must not push them out of a truncated preview.
   const header = [`Braid job ${job.handle} · ${job.status}`, `ID: ${job.jobId}`, control(job.execution)];
@@ -269,7 +285,8 @@ export function formatJobStatus(job: JobSnapshot, now: number): string {
   header.push(`Goal: ${clip(job.goal, GOAL_CHARS)}`);
   const sections = [header.join("\n")];
   const executions = Object.values(state?.executions ?? {});
-  if (executions.length) sections.push([`Executions (${executions.length}), oldest first; each node's latest is its current one:`, ...executions.map(execution => executionLine(execution, job.execution?.graph))].join("\n"));
+  if (executions.length) sections.push([`Executions (${executions.length}), oldest first; each node's latest is its current one:`, ...executions.map(execution => executionLine(execution, job.execution?.graph, now,
+    execution.status === "running" && execution.executionId ? activityOf?.(execution.executionId) : undefined))].join("\n"));
   const terminal = new Set(job.result?.terminalExecutionIds ?? []);
   const outputs = executions.filter(execution => execution.output !== undefined);
   if (outputs.length) sections.push(["Outputs:", ...outputs.map(execution =>
@@ -278,6 +295,25 @@ export function formatJobStatus(job: JobSnapshot, now: number): string {
   if (workspaces.length) sections.push(["Workspaces:", ...workspaces.map(execution => `- ${execution.executionId}: ${workspaceLine(execution.workspace!)}`)].join("\n"));
   if (job.execution) sections.push(`Current graph (revision ${job.execution.revision}):\n${formatGraph(job.execution.graph)}`);
   return sections.join("\n\n");
+}
+
+/** What a full read shows that changes only through job events, not while executions just keep running. */
+export function statusFingerprint(job: JobSnapshot): string {
+  const state = job.execution;
+  return JSON.stringify([job.status, state?.revision, state?.status, state?.pausedExecutionIds, state?.suspendedExecutionIds,
+    state?.limitedExecutionIds, state?.pause, state?.limits, Object.values(state?.executions ?? {}).map(execution => [execution.executionId,
+      execution.status, execution.held, execution.inputsChanged, execution.waitReason, execution.supersededBy, execution.suspension?.state, execution.decision])]);
+}
+
+/** A repeated full read of a running job that has not changed: progress only, and a reason to stop reading. */
+export function formatUnchanged(job: JobSnapshot, now: number, readAt: number, activityOf?: (executionId: string) => ExecutionActivity | undefined): string {
+  const running = Object.values(job.execution?.executions ?? {}).filter(execution => execution.status === "running");
+  return [
+    `Braid job ${job.handle} · ${job.status} · nothing changed since your full braid_status ${duration(now - readAt)} ago (revision ${job.execution?.revision ?? 0}); that read still applies.`,
+    ...running.length ? ["Running:", ...running.map(execution =>
+      `- ${[execution.executionId, ...progress(execution, now, activityOf?.(execution.executionId!)), ...execution.suspension ? [`${execution.suspension.state}, ${pausedBy(execution.suspension)}`] : []].join(" · ")}`)] : [],
+    "A reminder wakes you when an execution finishes or the job needs you: end your turn instead of reading again. To check on one execution, read it with braid_status and its executionId.",
+  ].join("\n");
 }
 
 /** The waking reminder for an execution its node timeout paused. */
@@ -305,7 +341,7 @@ const waitingSource = (source: string) =>
 const executionItem = (item: WaitingItem) => `node ${JSON.stringify(item.nodeId)} execution ${item.executionId}`;
 /** A job pause names the executions it suspended, so the cause is stated once. */
 const waitingItem = (item: WaitingItem, items: readonly WaitingItem[]) => {
-  if (item.kind !== "job") return `${item.kind === "held" ? "the held result of" : item.kind === "limited" ? "the rerun of" : "suspended"} ${executionItem(item)} (${waitingSource(item.source)})`;
+  if (item.kind !== "job") return `${item.kind === "held" ? "the held result of" : item.kind === "limited" ? "the rerun of" : "suspended"} ${executionItem(item)} (${waitingSource(item.source)}${item.inputsChanged ? `; ${INPUTS_CHANGED}` : ""})`;
   const suspended = items.filter(other => other.kind === "suspended" && other.source === item.source);
   return `the job pause (by ${waitingSource(item.source)})${suspended.length ? `, which suspended ${suspended.map(executionItem).join(", ")}` : ""}`;
 };
@@ -329,7 +365,7 @@ export function formatWaiting(notice: WaitingNotice): string {
       : "",
     limit ? `raise its ${limit} and resume the job with braid_resume({"jobId":"${notice.handle}","limits":{"${limit}":<higher>}}) (the job does not resume while the limit is still reached),`
       : job ? `resume the job with braid_resume({"jobId":"${notice.handle}"}),` : "",
-    "fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel.",
+    notice.waitingOn.some(item => item.kind === "suspended") ? "fail suspended executions with braid_cancel and executionIds, or cancel the job with braid_cancel." : "or cancel the job with braid_cancel.",
     // The deadline has passed once the graph timeout paused the job.
     notice.graphTimeoutMs !== undefined && job?.source !== "graph_timeout" ? "The graph timeout keeps running while it waits." : "",
   ].filter(Boolean).join(" ");
