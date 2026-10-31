@@ -607,7 +607,7 @@ export default function braidExtension(pi: ExtensionAPI) {
   });
   pi.on("before_agent_start", (event, ctx) => {
     return {
-      systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${BRAID_ASYNC_GUIDANCE}${isSingleShot(ctx) ? `\n${BRAID_DRAIN_GUIDANCE}\n${BRAID_FINISH_GUIDANCE}` : holdsSettlement(pi, ctx) ? `\n${BRAID_HOLD_GUIDANCE}` : ""}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
+      systemPrompt: `${event.systemPrompt}\n\n## Braid execution policy\n${BRAID_USAGE_GUIDANCE}\n${BRAID_ASYNC_GUIDANCE}${isSingleShot(ctx) ? `\n${BRAID_DRAIN_GUIDANCE}\n${BRAID_FINISH_GUIDANCE}` : holdsSettlement(ctx) ? `\n${BRAID_HOLD_GUIDANCE}` : ""}\n\nFor the current user request, make this delegation choice before using read, grep, find, edit, write, or bash. Completion reminders refer to existing jobs: retrieve their results instead of submitting the same graph again.`,
     };
   });
 }

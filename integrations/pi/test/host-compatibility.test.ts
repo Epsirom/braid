@@ -18,7 +18,6 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import braidExtension from "../index.js";
-import { EARLY_SETTLE_FLAG } from "../drain.js";
 import { deferred, input, response } from "./helpers.js";
 
 for (const templated of [false, true]) for (const notifyNode of [false, true]) {
@@ -178,7 +177,6 @@ test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and 
     }],
   });
   await resourceLoader.reload();
-  resourceLoader.getExtensions().runtime.flagValues.set(EARLY_SETTLE_FLAG, true);
   const model = modelRuntime.getModel("braid-offline", "fixture");
   assert.ok(model);
   const { session, extensionsResult } = await createAgentSession({
@@ -188,9 +186,8 @@ test(`Pi host preserves ${templated ? "templated" : "plain"} worker context and 
   });
   t.after(async () => { releaseWorker.resolve(); releaseOther.resolve(); await session.abort(); session.dispose(); });
   assert.deepEqual(extensionsResult.errors, []);
-  // SDK sessions default to print mode, and RPC runs also wait for jobs before settling.
-  // This host keeps running, so it opts into settle-driven reminders.
-  await session.bindExtensions({ mode: "rpc", onError: (error) => failures.push(error) });
+  // Only the terminal UI settles while jobs run; print, JSON, and RPC runs wait for them.
+  await session.bindExtensions({ mode: "tui", onError: (error) => failures.push(error) });
   await session.prompt("Run one Braid background job.");
   await finished.promise;
   await session.waitForIdle();

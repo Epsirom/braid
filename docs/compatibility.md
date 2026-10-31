@@ -404,13 +404,14 @@ is resumed by the reminder within the same run.
 
 - While the run waits, Pi is busy: send user input as `steer`, `follow_up`, or
   `prompt` with `streamingBehavior`, which the parent answers at once. A plain
-  `prompt` fails with "Agent is already processing", and `abort` returns only
-  once the jobs end.
+  `prompt` fails with "Agent is already processing".
+- `abort` ends the wait at once. The run settles as aborted and the jobs keep
+  running; their reminders start new runs if Pi keeps running.
 - Paused work does not keep the run open, and RPC runs never cancel it.
-- Hosts that keep Pi running and relied on reminders starting new runs after
-  the run settles, including SDK hosts that bound `mode: "rpc"` for that reason
-  as the 0.4 guide suggested, pass `--braid-early-settle` (the
-  `braid-early-settle` extension flag in the SDK) to keep that behavior.
+- SDK hosts that bound `mode: "rpc"` so that reminders start new runs after the
+  run settles, as the 0.4 guide suggested, now get them within the same run:
+  `session.prompt()` returns once the jobs finish. Only interactive Pi
+  (`mode: "tui"`) still settles while jobs run.
 
 ## Versioning
 

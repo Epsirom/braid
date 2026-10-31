@@ -21,7 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import braidExtension from "../index.js";
 import { input, response } from "./helpers.js";
-import { EARLY_SETTLE_FLAG, parseDuration } from "../drain.js";
+import { parseDuration } from "../drain.js";
 
 // Each run cold-starts the Pi CLI. Test files run in parallel, and a loaded
 // Windows runner can take well over 10s per run, so keep generous headroom.
@@ -308,7 +308,7 @@ type ParentStep = (call: number, last: string, prompt: string) => AssistantMessa
 
 /** An in-process session whose parent model answers each call with `parent`. */
 async function sdkSession(t: TestContext, options: {
-  workerDelayMs: number; mode?: "rpc"; earlySettle?: boolean; parent: ParentStep;
+  workerDelayMs: number; mode?: "rpc" | "tui"; parent: ParentStep;
 }) {
   const cwd = await mkdtemp(join(tmpdir(), "braid-drain-sdk-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
@@ -349,14 +349,13 @@ async function sdkSession(t: TestContext, options: {
     },
   });
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
-  let settled = 0;
+  const settles: boolean[] = [];
   const resourceLoader = new DefaultResourceLoader({
     cwd, agentDir: join(cwd, "agent"), settingsManager,
     noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-    extensionFactories: [braidExtension, pi => { pi.on("agent_settled", () => { settled++; }); }],
+    extensionFactories: [braidExtension, pi => { pi.on("agent_settled", event => { settles.push(event.aborted); }); }],
   });
   await resourceLoader.reload();
-  if (options.earlySettle) resourceLoader.getExtensions().runtime.flagValues.set(EARLY_SETTLE_FLAG, true);
   const model = modelRuntime.getModel("braid-offline", "fixture");
   assert.ok(model);
   const { session } = await createAgentSession({
@@ -368,7 +367,9 @@ async function sdkSession(t: TestContext, options: {
   return {
     session,
     parentCalls: () => parentCalls,
-    settled: () => settled,
+    settled: () => settles.length,
+    /** Whether each settled run was aborted, in order. */
+    settles,
     failures,
     reminders: (customType: string) => session.messages.filter(message => message.role === "custom" && message.customType === customType).length,
   };
@@ -429,6 +430,33 @@ test("RPC sessions settle only after running jobs finish, and answer steered mes
   assert.equal(sdk.reminders("braid-completed"), 1);
 });
 
+test("Abort ends an RPC session's wait at once; the run settles as aborted and the job keeps running", { timeout: 15_000 }, async (t) => {
+  const sdk = await sdkSession(t, {
+    workerDelayMs: 1_500,
+    mode: "rpc",
+    parent: (call, last) => {
+      if (call === 1) return launch();
+      if (call === 2) return say("Waiting.");
+      assert.match(last, /Braid job job-1 finished with status completed/);
+      return say("Done.");
+    },
+  });
+  const run = sdk.session.prompt("Run one Braid background job.");
+  await until(() => sdk.parentCalls() >= 2);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const started = Date.now();
+  await sdk.session.abort();
+  await run;
+  assert.ok(Date.now() - started < 1_000, `abort took ${Date.now() - started} ms`);
+  assert.deepEqual(sdk.settles, [true]);
+  assert.equal(sdk.reminders("braid-completed"), 0);
+  // The job was not cancelled: its reminder starts a new run once it finishes.
+  await until(() => sdk.settled() === 2);
+  assert.deepEqual(sdk.failures, []);
+  assert.deepEqual(sdk.settles, [true, false]);
+  assert.equal(sdk.parentCalls(), 3);
+});
+
 test("RPC sessions settle when only paused work remains, without cancelling it", { timeout: 15_000 }, async (t) => {
   const sdk = await sdkSession(t, {
     workerDelayMs: 50,
@@ -447,11 +475,10 @@ test("RPC sessions settle when only paused work remains, without cancelling it",
   assert.equal(sdk.reminders("braid-completed"), 0);
 });
 
-test("--braid-early-settle lets RPC sessions settle while jobs run, and reminders start new runs", { timeout: 15_000 }, async (t) => {
+test("TUI sessions settle while jobs run, and reminders start new runs", { timeout: 15_000 }, async (t) => {
   const sdk = await sdkSession(t, {
     workerDelayMs: 300,
-    mode: "rpc",
-    earlySettle: true,
+    mode: "tui",
     parent: (call, last, prompt) => {
       if (call === 1) {
         assert.doesNotMatch(prompt, /This run stays open/);

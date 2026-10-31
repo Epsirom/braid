@@ -119,18 +119,17 @@ While the run waits, Pi is busy, so send user input as `steer`, `follow_up`, or
 `prompt` with `streamingBehavior`. Braid lets a queued message through at once:
 the parent answers it in a turn of its own, and the run then keeps waiting. A
 plain `prompt` fails with "Agent is already processing", as it does during any
-long tool call. `abort` does not interrupt the wait: Pi finishes aborting only
-once the jobs end. To stop sooner, steer the parent to cancel the jobs, or stop
-the process.
+long tool call. `abort` ends the wait at once: the run settles with
+`aborted: true`, and the jobs keep running, as stopping the foreground response
+never cancels them. If Pi keeps running, their reminders start new runs; if the
+host ends Pi, they are lost. To cancel jobs, steer the parent to cancel them.
 
 Paused work does not keep the run open. When only paused executions, held
 results, reruns at `maxRuns`, or paused jobs remain, the run settles and that
 work waits for the next message. It is lost if the host ends Pi at that point.
 
-Hosts that keep Pi running between prompts and want the earlier behavior, where
-a run settles at once and each reminder starts a new run, pass
-`--braid-early-settle` (in the SDK, the `braid-early-settle` extension flag).
-Print and JSON runs always wait.
+Only interactive Pi settles while jobs run; there, each reminder starts a new
+run.
 
 ### Migrating from blocking mode
 

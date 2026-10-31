@@ -11,15 +11,12 @@ import type { BraidJobs, OutstandingJob } from "./jobs.js";
 /** Pi exits once print and JSON runs settle, so Braid drains jobs before that. */
 export const isSingleShot = (ctx: Pick<ExtensionContext, "mode">) => ctx.mode === "print" || ctx.mode === "json";
 
-export const EARLY_SETTLE_FLAG = "braid-early-settle";
-
 /**
  * RPC and SDK hosts treat agent_settled as the end of a run and may end Pi then,
- * which would take running jobs with it, so only the terminal UI settles early
- * unless the host opts in.
+ * which would take running jobs with it, so only the terminal UI settles while
+ * jobs run and lets their reminders start new runs.
  */
-export const holdsSettlement = (pi: Pick<ExtensionAPI, "getFlag">, ctx: Pick<ExtensionContext, "mode">) =>
-  isSingleShot(ctx) || (ctx.mode !== "tui" && pi.getFlag(EARLY_SETTLE_FLAG) !== true);
+export const holdsSettlement = (ctx: Pick<ExtensionContext, "mode">) => ctx.mode !== "tui";
 
 export const BRAID_HOLD_GUIDANCE =
   "This run stays open while Braid jobs are running, so submit, end your turn, and continue from the reminder as usual. " +
@@ -73,10 +70,6 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
     description: "Wall-clock budget for Braid jobs in print/JSON mode (e.g. 90000, 90s, 30m, 2h); on expiry, outstanding jobs are cancelled and the run exits 1",
     type: "string",
   });
-  pi.registerFlag(EARLY_SETTLE_FLAG, {
-    description: "RPC and SDK sessions: let a run settle while Braid jobs are running; their reminders then start new runs. Print/JSON runs always wait",
-    type: "boolean",
-  });
   let closed = false;
   let timer: NodeJS.Timeout | undefined;
   let timedOut = false;
@@ -101,14 +94,16 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
     timedOut = true;
     cancelOutstanding("--braid-ci-timeout expired; cancelled outstanding Braid jobs");
   };
-  const nextChange = () => new Promise<void>(resolve => {
+  const nextChange = (signal?: AbortSignal) => new Promise<void>(resolve => {
     const done = () => {
       clearTimeout(tick);
       unsubscribe();
+      signal?.removeEventListener("abort", done);
       resolve();
     };
     const tick = setTimeout(done, RECHECK_MS);
     const unsubscribe = jobs.subscribe(done);
+    signal?.addEventListener("abort", done, { once: true });
   });
 
   const finishParameters = Type.Object({
@@ -173,8 +168,25 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
     timer.unref();
   });
 
+  // Running jobs are awaited in the final turn, where the run's abort signal is live,
+  // so abort ends the wait at once and the run settles as aborted with jobs still running.
+  // agent_before_settle has no abort signal; it waits only for jobs left by a turn that
+  // did not end normally, then reports stalls and the outcome.
+  pi.on("turn_end", async (event, ctx) => {
+    if (!holdsSettlement(ctx) || event.toolResults.length) return;
+    if (event.message.role !== "assistant" || event.message.stopReason !== "stop") return;
+    const signal = ctx.signal;
+    while (!closed && !timedOut && !signal?.aborted) {
+      // A queued reminder or host message continues this run in its next turn,
+      // and the wait resumes when that turn ends.
+      if (hasPendingReminders() || ctx.hasPendingMessages()) return;
+      if (jobs.outstanding().every(job => job.stalled)) return;
+      await nextChange(signal);
+    }
+  });
+
   pi.on("agent_before_settle", async (event: AgentBeforeSettleEvent, ctx): Promise<BoundaryResult | undefined> => {
-    if (!holdsSettlement(pi, ctx)) return;
+    if (!holdsSettlement(ctx)) return;
     const singleShot = isSingleShot(ctx);
     while (!closed) {
       // A queued reminder or host message continues this run, and the hold resumes
