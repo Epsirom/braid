@@ -21,7 +21,7 @@ For the previous release, use the
 It registers:
 
 - `braid` — submit a graph, optionally with cycles; receive a `jobId`
-  immediately (print/JSON runs wait for it before exiting).
+  immediately (print/JSON runs wait for it before exiting, RPC runs before settling).
 - `braid_status` — retrieve progress and results with `{ "jobId": "..." }`, or
   add `"executionId": "..."` for an exact invocation's full output/error.
   `"nodeId": "..."` selects that node's latest invocation. Omit all IDs
@@ -104,9 +104,32 @@ prints only the parent's final response. `braid_finish` is not offered in
 interactive or RPC sessions.
 
 Pi SDK sessions default to print mode too, so `session.prompt()` returns only
-after outstanding Braid jobs drain. Hosts that stay running and want reminders
-to start new runs after settling should bind with another mode, for example
-`session.bindExtensions({ mode: "rpc" })`.
+after outstanding Braid jobs drain.
+
+### RPC and SDK hosts
+
+Jobs run inside the Pi process, so they end with it. RPC hosts usually treat
+`agent_settled` as the end of a run and may close Pi's stdin then, so in
+`--mode rpc` (and SDK sessions bound with `mode: "rpc"`) a run does not settle
+while a Braid job is running. The parent still submits, ends its turn, and is
+resumed by the reminder; `agent_settled` arrives once the jobs are done and the
+parent has handled their reminders.
+
+While the run waits, Pi is busy, so send user input as `steer`, `follow_up`, or
+`prompt` with `streamingBehavior`. Braid lets a queued message through at once:
+the parent answers it in a turn of its own, and the run then keeps waiting. A
+plain `prompt` fails with "Agent is already processing", as it does during any
+long tool call. `abort` ends the wait at once: the run settles with
+`aborted: true`, and the jobs keep running, as stopping the foreground response
+never cancels them. If Pi keeps running, their reminders start new runs; if the
+host ends Pi, they are lost. To cancel jobs, steer the parent to cancel them.
+
+Paused work does not keep the run open. When only paused executions, held
+results, reruns at `maxRuns`, or paused jobs remain, the run settles and that
+work waits for the next message. It is lost if the host ends Pi at that point.
+
+Only interactive Pi settles while jobs run; there, each reminder starts a new
+run.
 
 ### Migrating from blocking mode
 
@@ -377,6 +400,7 @@ that: one notice with the latest state per execution or job is added to its next
 turn, and it is told not to resume work the user paused unless the user asks.
 In print and JSON runs, a job held only by pauses counts as stalled: the parent
 gets one warning, and the job is cancelled if it ends the next turn without resuming.
+In RPC runs, such a job lets the run settle and waits for the next message.
 
 ## Live flow panel
 

@@ -11,6 +11,18 @@ import type { BraidJobs, OutstandingJob } from "./jobs.js";
 /** Pi exits once print and JSON runs settle, so Braid drains jobs before that. */
 export const isSingleShot = (ctx: Pick<ExtensionContext, "mode">) => ctx.mode === "print" || ctx.mode === "json";
 
+/**
+ * RPC and SDK hosts treat agent_settled as the end of a run and may end Pi then,
+ * which would take running jobs with it, so only the terminal UI settles while
+ * jobs run and lets their reminders start new runs.
+ */
+export const holdsSettlement = (ctx: Pick<ExtensionContext, "mode">) => ctx.mode !== "tui";
+
+export const BRAID_HOLD_GUIDANCE =
+  "This run stays open while Braid jobs are running, so submit, end your turn, and continue from the reminder as usual. " +
+  "Messages from the user can arrive before then: answer them and end your turn again; the jobs keep running. " +
+  "Paused executions, including results held by a node's replan request, reruns waiting at a node's maxRuns, and paused jobs do not keep the run open: when only paused work remains, the run ends and that work waits for the user's next message.";
+
 export const BRAID_DRAIN_GUIDANCE =
   "This is a single-shot run. It stays open until every Braid job finishes and its reminder is delivered, so submit, end your turn, and continue from the reminder as usual. " +
   "Paused executions, including results held by a node's replan request, reruns waiting at a node's maxRuns, and paused jobs are not resumed automatically: resume or cancel them before ending your turn. If only paused work remains when you end a turn, you get one warning; ending the next turn without resuming it cancels those jobs and the run exits with a failure status.";
@@ -21,8 +33,8 @@ export const BRAID_FINISH_GUIDANCE =
 
 export type BraidFinishOutcome = { status: "success" | "failure"; summary: string };
 
-/** The run's wall-clock budget is checked by a timer, so the drain also wakes periodically. */
-const RECHECK_MS = 1_000;
+/** Queued host input and the run's wall-clock budget are not job changes, so the drain also wakes periodically. */
+const RECHECK_MS = 100;
 
 export function parseDuration(value: string): number {
   const match = /^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h)?\s*$/.exec(value);
@@ -48,9 +60,10 @@ const stalledReminder = (jobs: OutstandingJob[]) =>
   `If you end your turn again without doing so, Braid cancels these jobs and the run exits with a failure status. [/system-reminder]`;
 
 /**
- * Keeps print and JSON runs alive until every Braid job reaches a terminal
- * status. Reminders are steered into the run as in interactive mode, so the
- * parent keeps the async model: it ends its turn and the reminder resumes it.
+ * Keeps runs without a terminal UI open until every Braid job reaches a
+ * terminal status, or in RPC and SDK sessions until only paused work remains.
+ * Reminders are steered into the run as in interactive mode, so the parent
+ * keeps the async model: it ends its turn and the reminder resumes it.
  */
 export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingReminders: () => boolean): void {
   pi.registerFlag("braid-ci-timeout", {
@@ -81,14 +94,16 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
     timedOut = true;
     cancelOutstanding("--braid-ci-timeout expired; cancelled outstanding Braid jobs");
   };
-  const nextChange = () => new Promise<void>(resolve => {
+  const nextChange = (signal?: AbortSignal) => new Promise<void>(resolve => {
     const done = () => {
       clearTimeout(tick);
       unsubscribe();
+      signal?.removeEventListener("abort", done);
       resolve();
     };
     const tick = setTimeout(done, RECHECK_MS);
     const unsubscribe = jobs.subscribe(done);
+    signal?.addEventListener("abort", done, { once: true });
   });
 
   const finishParameters = Type.Object({
@@ -153,15 +168,36 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
     timer.unref();
   });
 
+  // Running jobs are awaited in the final turn, where the run's abort signal is live,
+  // so abort ends the wait at once and the run settles as aborted with jobs still running.
+  // agent_before_settle has no abort signal; it waits only for jobs left by a turn that
+  // did not end normally, then reports stalls and the outcome.
+  pi.on("turn_end", async (event, ctx) => {
+    if (!holdsSettlement(ctx) || event.toolResults.length) return;
+    if (event.message.role !== "assistant" || event.message.stopReason !== "stop") return;
+    const signal = ctx.signal;
+    while (!closed && !timedOut && !signal?.aborted) {
+      // A queued reminder or host message continues this run in its next turn,
+      // and the wait resumes when that turn ends.
+      if (hasPendingReminders() || ctx.hasPendingMessages()) return;
+      if (jobs.outstanding().every(job => job.stalled)) return;
+      await nextChange(signal);
+    }
+  });
+
   pi.on("agent_before_settle", async (event: AgentBeforeSettleEvent, ctx): Promise<BoundaryResult | undefined> => {
-    if (!isSingleShot(ctx)) return;
+    if (!holdsSettlement(ctx)) return;
+    const singleShot = isSingleShot(ctx);
     while (!closed) {
-      // A queued reminder continues this run; Pi settles only when its queues are empty.
-      if (hasPendingReminders()) return;
+      // A queued reminder or host message continues this run, and the hold resumes
+      // after that turn; Pi settles only when its queues are empty.
+      if (hasPendingReminders() || ctx.hasPendingMessages()) return;
       if (timedOut) cancelOutstanding("--braid-ci-timeout expired; cancelled outstanding Braid jobs");
       const outstanding = jobs.outstanding();
       if (!outstanding.length) return settle(event);
       if (outstanding.every(job => job.stalled)) {
+        // A long-lived session can resume paused work on the user's next message.
+        if (!singleShot) return;
         const key = JSON.stringify(outstanding.map(job => [job.jobId, job.revision, job.pausedExecutionIds, job.suspendedExecutionIds, job.paused]));
         if (key !== warnedStall) {
           warnedStall = key;

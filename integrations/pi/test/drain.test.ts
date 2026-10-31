@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import {
   createAssistantMessageEventStream,
   getCurrentSystemPrompt,
@@ -304,7 +304,12 @@ test("--braid-ci-timeout accepts milliseconds and s/m/h suffixes", () => {
   for (const value of ["", "0", "-5s", "5d", "soon", "1e3"]) assert.throws(() => parseDuration(value), /Invalid --braid-ci-timeout/);
 });
 
-test("SDK sessions in Pi's default print mode return from prompt only after jobs and reminders drain", { timeout: 15_000 }, async (t) => {
+type ParentStep = (call: number, last: string, prompt: string) => AssistantMessage["content"];
+
+/** An in-process session whose parent model answers each call with `parent`. */
+async function sdkSession(t: TestContext, options: {
+  workerDelayMs: number; mode?: "rpc" | "tui"; parent: ParentStep;
+}) {
   const cwd = await mkdtemp(join(tmpdir(), "braid-drain-sdk-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   const modelRuntime = await ModelRuntime.create({
@@ -312,6 +317,7 @@ test("SDK sessions in Pi's default print mode return from prompt only after jobs
     modelsStorePath: join(cwd, "models-cache.json"), allowModelNetwork: false, refreshOnCreate: false,
   });
   let parentCalls = 0;
+  const failures: string[] = [];
   modelRuntime.registerProvider("braid-offline", {
     api: "openai-completions", apiKey: "offline-test-key", baseUrl: "https://offline.invalid",
     models: [{ id: "fixture", name: "Offline", reasoning: false, input: ["text"],
@@ -320,13 +326,20 @@ test("SDK sessions in Pi's default print mode return from prompt only after jobs
       const stream = createAssistantMessageEventStream();
       const message: AssistantMessage = { ...response(), api: model.api, provider: model.provider, model: model.id };
       void (async () => {
-        if (getCurrentSystemPrompt(context.messages).includes("You are an isolated Braid worker")) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        } else if (++parentCalls === 1) {
-          message.content = [{ type: "toolCall", id: "launch", name: "braid", arguments: input }];
-          message.stopReason = "toolUse";
+        const prompt = getCurrentSystemPrompt(context.messages);
+        if (prompt.includes("You are an isolated Braid worker")) {
+          await new Promise(resolve => setTimeout(resolve, options.workerDelayMs));
         } else {
-          message.content = [{ type: "text", text: parentCalls === 2 ? "Waiting." : "Reported." }];
+          const latest = context.messages.at(-1)!;
+          const last = typeof latest.content === "string" ? latest.content
+            : latest.content.map(part => "text" in part ? part.text : JSON.stringify(part)).join("\n");
+          try {
+            message.content = options.parent(++parentCalls, last, prompt);
+          } catch (error) {
+            failures.push(`parent call ${parentCalls}: ${String(error)}`);
+            message.content = [{ type: "text", text: "Step failed." }];
+          }
+          if (message.content.some(part => part.type === "toolCall")) message.stopReason = "toolUse";
         }
         stream.push({ type: "start", partial: message });
         stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
@@ -336,11 +349,11 @@ test("SDK sessions in Pi's default print mode return from prompt only after jobs
     },
   });
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
-  let settled = 0;
+  const settles: boolean[] = [];
   const resourceLoader = new DefaultResourceLoader({
     cwd, agentDir: join(cwd, "agent"), settingsManager,
     noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-    extensionFactories: [braidExtension, pi => { pi.on("agent_settled", () => { settled++; }); }],
+    extensionFactories: [braidExtension, pi => { pi.on("agent_settled", event => { settles.push(event.aborted); }); }],
   });
   await resourceLoader.reload();
   const model = modelRuntime.getModel("braid-offline", "fixture");
@@ -350,9 +363,136 @@ test("SDK sessions in Pi's default print mode return from prompt only after jobs
     sessionManager: SessionManager.inMemory(cwd), noTools: "builtin",
   });
   t.after(() => session.dispose());
-  await session.bindExtensions({});
-  await session.prompt("Run one Braid background job.");
-  assert.equal(parentCalls, 3);
-  assert.equal(settled, 1);
-  assert.equal(session.messages.filter(message => message.role === "custom" && message.customType === "braid-completed").length, 1);
+  await session.bindExtensions(options.mode ? { mode: options.mode } : {});
+  return {
+    session,
+    parentCalls: () => parentCalls,
+    settled: () => settles.length,
+    /** Whether each settled run was aborted, in order. */
+    settles,
+    failures,
+    reminders: (customType: string) => session.messages.filter(message => message.role === "custom" && message.customType === customType).length,
+  };
+}
+
+const launch = (graph: typeof input | typeof paused = input): AssistantMessage["content"] => [{ type: "toolCall", id: "launch", name: "braid", arguments: graph }];
+const say = (text: string): AssistantMessage["content"] => [{ type: "text", text }];
+
+async function until(condition: () => boolean, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    assert.ok(Date.now() < deadline, "condition not reached in time");
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
+
+test("SDK sessions in Pi's default print mode return from prompt only after jobs and reminders drain", { timeout: 15_000 }, async (t) => {
+  const sdk = await sdkSession(t, {
+    workerDelayMs: 100,
+    parent: call => call === 1 ? launch() : say(call === 2 ? "Waiting." : "Reported."),
+  });
+  await sdk.session.prompt("Run one Braid background job.");
+  assert.deepEqual(sdk.failures, []);
+  assert.equal(sdk.parentCalls(), 3);
+  assert.equal(sdk.settled(), 1);
+  assert.equal(sdk.reminders("braid-completed"), 1);
+});
+
+test("RPC sessions settle only after running jobs finish, and answer steered messages meanwhile", { timeout: 15_000 }, async (t) => {
+  let completedBeforeSteer: number | undefined;
+  const sdk: Awaited<ReturnType<typeof sdkSession>> = await sdkSession(t, {
+    workerDelayMs: 1_500,
+    mode: "rpc",
+    parent: (call, last, prompt) => {
+      if (call === 1) {
+        assert.match(prompt, /This run stays open while Braid jobs are running/);
+        assert.doesNotMatch(prompt, /single-shot/);
+        return launch();
+      }
+      if (call === 2) return say("Waiting.");
+      if (call === 3) {
+        assert.match(last, /Any news\?/);
+        completedBeforeSteer = sdk.reminders("braid-completed");
+        return say("Still running.");
+      }
+      assert.match(last, /Braid job job-1 finished with status completed/);
+      return say("Done.");
+    },
+  });
+  const run = sdk.session.prompt("Run one Braid background job.");
+  await until(() => sdk.parentCalls() >= 2);
+  await sdk.session.steer("Any news?");
+  await run;
+  assert.deepEqual(sdk.failures, []);
+  assert.equal(completedBeforeSteer, 0);
+  assert.equal(sdk.parentCalls(), 4);
+  assert.equal(sdk.settled(), 1);
+  assert.equal(sdk.reminders("braid-completed"), 1);
+});
+
+test("Abort ends an RPC session's wait at once; the run settles as aborted and the job keeps running", { timeout: 15_000 }, async (t) => {
+  const sdk = await sdkSession(t, {
+    workerDelayMs: 1_500,
+    mode: "rpc",
+    parent: (call, last) => {
+      if (call === 1) return launch();
+      if (call === 2) return say("Waiting.");
+      assert.match(last, /Braid job job-1 finished with status completed/);
+      return say("Done.");
+    },
+  });
+  const run = sdk.session.prompt("Run one Braid background job.");
+  await until(() => sdk.parentCalls() >= 2);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const started = Date.now();
+  await sdk.session.abort();
+  await run;
+  assert.ok(Date.now() - started < 1_000, `abort took ${Date.now() - started} ms`);
+  assert.deepEqual(sdk.settles, [true]);
+  assert.equal(sdk.reminders("braid-completed"), 0);
+  // The job was not cancelled: its reminder starts a new run once it finishes.
+  await until(() => sdk.settled() === 2);
+  assert.deepEqual(sdk.failures, []);
+  assert.deepEqual(sdk.settles, [true, false]);
+  assert.equal(sdk.parentCalls(), 3);
+});
+
+test("RPC sessions settle when only paused work remains, without cancelling it", { timeout: 15_000 }, async (t) => {
+  const sdk = await sdkSession(t, {
+    workerDelayMs: 50,
+    mode: "rpc",
+    parent: (call, last) => {
+      if (call === 1) return launch(paused);
+      if (call === 2) return say("Waiting.");
+      assert.match(last, /node "a" execution .* finished with status completed.*paused/s);
+      return say("Leaving it paused.");
+    },
+  });
+  await sdk.session.prompt("Run a Braid job that pauses.");
+  assert.deepEqual(sdk.failures, []);
+  assert.equal(sdk.parentCalls(), 3);
+  assert.equal(sdk.settled(), 1);
+  assert.equal(sdk.reminders("braid-completed"), 0);
+});
+
+test("TUI sessions settle while jobs run, and reminders start new runs", { timeout: 15_000 }, async (t) => {
+  const sdk = await sdkSession(t, {
+    workerDelayMs: 300,
+    mode: "tui",
+    parent: (call, last, prompt) => {
+      if (call === 1) {
+        assert.doesNotMatch(prompt, /This run stays open/);
+        return launch();
+      }
+      if (call === 2) return say("Waiting.");
+      assert.match(last, /Braid job job-1 finished with status completed/);
+      return say("Done.");
+    },
+  });
+  await sdk.session.prompt("Run one Braid background job.");
+  assert.equal(sdk.parentCalls(), 2);
+  assert.equal(sdk.settled(), 1);
+  await until(() => sdk.settled() === 2);
+  assert.deepEqual(sdk.failures, []);
+  assert.equal(sdk.parentCalls(), 3);
 });
