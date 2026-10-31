@@ -395,6 +395,23 @@ that node. List the node where rounds start first in `nodes`, and check
   that pause, so the cause appears once, and call a job limit "the job's
   `<limit>` limit" instead of "its `<limit>` limit".
 
+### Pi RPC runs wait for running jobs
+
+In Pi's `--mode rpc`, and in SDK sessions bound with `mode: "rpc"`, a run no
+longer settles while a Braid job is running, so a host that ends Pi at
+`agent_settled` no longer loses the job. The parent submits, ends its turn, and
+is resumed by the reminder within the same run.
+
+- While the run waits, Pi is busy: send user input as `steer`, `follow_up`, or
+  `prompt` with `streamingBehavior`, which the parent answers at once. A plain
+  `prompt` fails with "Agent is already processing", and `abort` returns only
+  once the jobs end.
+- Paused work does not keep the run open, and RPC runs never cancel it.
+- Hosts that keep Pi running and relied on reminders starting new runs after
+  the run settles, including SDK hosts that bound `mode: "rpc"` for that reason
+  as the 0.4 guide suggested, pass `--braid-early-settle` (the
+  `braid-early-settle` extension flag in the SDK) to keep that behavior.
+
 ## Versioning
 
 Core, Pi, and DSH release together with matching versions. During 0.x, patch releases
