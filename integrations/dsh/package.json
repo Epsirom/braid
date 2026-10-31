@@ -32,7 +32,7 @@
     "@deepseek-ai/dsh-typert-registry": "0.2.0-rc.2"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/cordis": "^4.0.5",
     "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
     "@deepseek-ai/dsh-api-gateway": "0.2.0-rc.2",
     "@deepseek-ai/dsh-bash-local": "0.2.0-rc.2",
