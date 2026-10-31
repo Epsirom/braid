@@ -74,6 +74,8 @@ export interface WaitingItem {
   executionId?: string;
   nodeId?: string;
   source: string;
+  /** A held result whose inputs changed since it ran: releasing it reruns its node. */
+  inputsChanged?: boolean;
 }
 
 /** A job has nothing active any more and waits on paused work the parent owns. */
@@ -105,7 +107,8 @@ function waitingOn(state: BraidSnapshot, event: Extract<ExecutionEvent, { type: 
   const execution = (kind: WaitingItem["kind"], executionId: string, source: string | undefined): WaitingItem =>
     ({ kind, executionId, nodeId: state.executions[executionId]?.id ?? "?", source: source ?? "caller" });
   const items = [
-    ...event.pausedExecutionIds.map(id => execution("held", id, state.executions[id]?.holdAfter?.source)),
+    ...event.pausedExecutionIds.map(id => ({ ...execution("held", id, state.executions[id]?.holdAfter?.source),
+      ...(state.executions[id]?.inputsChanged ? { inputsChanged: true } : {}) })),
     ...event.suspendedExecutionIds.map(id => execution("suspended", id, state.executions[id]?.suspension?.source)),
     ...event.limitedExecutionIds.map(id => execution("limited", id, "maxRuns")),
     ...event.pause ? [{ kind: "job" as const, source: event.pause.source }] : [],

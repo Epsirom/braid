@@ -25,7 +25,11 @@ It registers:
 - `braid_status` — retrieve progress and results with `{ "jobId": "..." }`, or
   add `"executionId": "..."` for an exact invocation's full output/error.
   `"nodeId": "..."` selects that node's latest invocation. Omit all IDs
-  to list jobs in the current session.
+  to list jobs in the current session. A job read names each execution's inputs
+  and shows how long each running execution has run, its phase, and its model
+  requests and tool calls. Reading a
+  running job again when nothing changed returns only that progress and a reminder
+  to wait.
 - `braid_update` / `braid_resume` — add, edit, rerun, or remove nodes, or release paused executions.
 - `braid_pause` — pause running executions, or the whole job, without losing their
   work; with `after: true`, hold a running execution's result once it finishes.

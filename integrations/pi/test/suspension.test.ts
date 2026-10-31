@@ -95,7 +95,7 @@ test("a pause by the user sends the parent a notice and asks it not to resume", 
   const status = textOf(await tools.statusTool.execute("status", { jobId: handle }, undefined, undefined, ctx));
   assert.match(status, /job paused by user at /);
   assert.match(status, /The user paused this; do not resume it unless the user asks\./);
-  assert.match(status, new RegExp(`${executionId} · node a · running · suspended, paused by user`));
+  assert.match(status, new RegExp(`${executionId} · node a · running · [^\n]*suspended, paused by user`));
   jobs.resumeJob(handle, "user");
   await jobs.wait(handle);
   assert.equal(jobs.get(handle)!.status, "completed");

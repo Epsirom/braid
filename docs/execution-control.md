@@ -36,7 +36,11 @@ instances remain available separately, even when the job completes.
 
 Markers: `held: true` while a settled instance's result is held (it is also in
 `pausedExecutionIds`), `supersededBy` on a started instance that was replaced,
-and `supersedes` on its replacement. Staleness is derived, not stored.
+and `supersedes` on its replacement. `inputsChanged: true` on a held instance
+means its inputs changed since it ran, for example through a new edge into it or
+a rerun upstream: releasing it reruns its node with the new inputs instead of
+passing this result downstream, and successors wait for the rerun. Staleness is
+derived, not stored.
 
 `waitReason` on a pending instance is one of:
 

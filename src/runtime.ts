@@ -658,7 +658,10 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   function mark(record: NodeResult, waits: Map<string, WaitReason>) {
     const wait = waits.get(record.executionId!);
     if (wait) record.waitReason = wait;
-    if (paused.has(record.executionId!)) record.held = true;
+    if (!paused.has(record.executionId!)) return;
+    record.held = true;
+    const execution = executions.get(record.executionId!)!;
+    if (lineages.get(execution.id)?.instances.at(-1) === execution && outdated(execution)) record.inputsChanged = true;
   }
   function heads(): Record<string, NodeResult> {
     const nodes: Record<string, NodeResult> = {};
@@ -728,8 +731,15 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     return paused.has(id) || state === "pausing" || state === "suspended" || (limited.has(id) && atRunLimit(executions.get(id)!));
   }
   function validateResume(ids: readonly string[], options?: ResumeOptions) {
-    if (!Array.isArray(ids) || new Set(ids).size !== ids.length || ids.some(id => !resumable(id)))
+    if (!Array.isArray(ids) || new Set(ids).size !== ids.length)
       throw new Error("resume must contain unique held, paused, or limited execution IDs");
+    const other = ids.find(id => !resumable(id));
+    if (other !== undefined) {
+      const record = executions.get(other);
+      throw new Error(`resume must contain unique held, paused, or limited execution IDs; ${other} is ${!record ? "unknown"
+        : record.status === "running" && record.holdAfter ? "running and is held when it finishes: resume it then"
+        : record.status}`);
+    }
     if (options === undefined) return;
     if (!options || typeof options !== "object" || Object.keys(options).some(key => key !== "nodeTimeoutMs"))
       throw new TypeError("Unknown resume option");
@@ -808,9 +818,14 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   function cancelExecutions(ids: readonly string[], options?: CancelExecutionsOptions): BraidSnapshot {
     assertActive();
     const source = controlSource(options, "cancel");
-    if (!Array.isArray(ids) || !ids.length || new Set(ids).size !== ids.length ||
-        ids.some(id => !running.has(id) || settled(executions.get(id)!)))
+    if (!Array.isArray(ids) || !ids.length || new Set(ids).size !== ids.length)
       throw new Error("cancelExecutions must contain unique running execution IDs");
+    const stopped = ids.find(id => !running.has(id) || settled(executions.get(id)!));
+    if (stopped !== undefined) {
+      const record = executions.get(stopped);
+      throw new Error(`cancelExecutions must contain unique running execution IDs; ${stopped} is ${!record ? "unknown"
+        : `${record.status}${paused.has(stopped) ? " and held: release it to pass its result on, or to rerun it if its inputs changed" : ""}`}`);
+    }
     for (const id of ids) {
       const record = executions.get(id)!;
       const timeout = record.suspension?.source === "node_timeout" ? record.suspension.timeout : undefined;

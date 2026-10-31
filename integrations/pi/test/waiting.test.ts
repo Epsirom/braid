@@ -66,7 +66,7 @@ test("the extension wakes the parent once when the last active execution leaves 
     `It waits on the held result of node "held" execution ${held} (pauseAfter). ` +
     `Check it with braid_status({"jobId":"${handle}"}), then release held results or resume executions with ` +
     `braid_resume({"jobId":"${handle}","expectedRevision":0,"executionIds":[...]}) or braid_update with resume, ` +
-    "fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel. [/system-reminder]");
+    "or cancel the job with braid_cancel. [/system-reminder]");
   // Only a job with a graph timeout is told that its deadline keeps running.
   const notice: WaitingNotice = { jobId: "id", handle, revision: 0, eventSequence: 0, waitingOn: [{ kind: "held", executionId: held, nodeId: "held", source: "definition" }] };
   assert.match(formatWaiting({ ...notice, graphTimeoutMs: 60_000 }), /braid_cancel\. The graph timeout keeps running while it waits\.$/);
@@ -191,4 +191,57 @@ test("status says which choice a node that runs only through a choice edge waits
   assert.match(text(await tools.statusTool.execute("focused", { jobId: job.handle, executionId: "impl@1" }, undefined, undefined, ctx)),
     /^Execution impl@1 · node impl \(execute\) · pending · waiting: runs only after review chooses again$/m);
   gate.resolve();
+});
+
+test("braid_status shows running progress, answers an unchanged job briefly, and says what releasing a changed held result does", { timeout: 10_000 }, async t => {
+  const gate = deferred<void>();
+  const { ctx, calls } = workers({ impl: gate.promise });
+  const { jobs, tools } = setup(t);
+  const text = (result: { content: unknown[] }) => (result.content[0] as { text: string }).text;
+  const status = async () => text(await tools.statusTool.execute("status", { jobId: job.handle }, undefined, undefined, ctx));
+  const job = jobs.start({ goal: "Impl and test", nodes: [node("impl"), node("test", { pauseAfter: true })], edges: [] }, {}, ctx);
+  await until(() => calls("impl") === 1 && jobs.get(job.handle)!.execution!.pausedExecutionIds.length === 1);
+  const full = await status();
+  assert.match(full, /^- impl@1 · node impl · running · \d+ms so far · model for \d+ms · model requests 1, tool calls 0$/m);
+  const unchanged = await status();
+  assert.match(unchanged, /^Braid job job-\d+ · running · nothing changed since your full braid_status \d+ms ago \(revision 0\); that read still applies\.$/m);
+  assert.match(unchanged, /^Running:\n- impl@1 · \d+ms so far · model for \d+ms · model requests 1, tool calls 0$/m);
+  assert.match(unchanged, /end your turn instead of reading again/);
+  assert.doesNotMatch(unchanged, /Executions/);
+  // A new edge into the held test changes its inputs.
+  await tools.updateTool.execute("edge", { jobId: job.handle, expectedRevision: 0, addEdges: [{ from: "impl", to: "test" }] }, undefined, undefined, ctx);
+  const changed = await status();
+  assert.match(changed, /^- test@1 · node test · completed · held, inputs changed; releasing it reruns its node with the new inputs, and this result does not go downstream/m);
+  assert.match(text(await tools.statusTool.execute("focused", { jobId: job.handle, executionId: "test@1" }, undefined, undefined, ctx)),
+    /^Its inputs changed; releasing it reruns its node with the new inputs, and this result does not go downstream\.$/m);
+  await assert.rejects(tools.cancelTool.execute("cancel", { jobId: job.handle, executionIds: ["test@1"] }, undefined, undefined, ctx),
+    /test@1 is completed and held: .*\. braid_cancel with executionIds fails only running or paused executions: release a held result with braid_resume, or replace its node with braid_update\./);
+  gate.resolve();
+});
+
+test("a waiting reminder says when a held result's inputs changed, and offers braid_cancel with executionIds only for suspended work", () => {
+  const notice: WaitingNotice = { jobId: "id", handle: "job-1", revision: 2, eventSequence: 0,
+    waitingOn: [{ kind: "held", executionId: "test@2", nodeId: "test", source: "replan", inputsChanged: true }] };
+  const held = formatWaiting(notice);
+  assert.match(held, /the held result of node "test" execution test@2 \(its replan request; inputs changed; releasing it reruns its node with the new inputs, and this result does not go downstream\)/);
+  assert.match(held, /braid_update with resume, or cancel the job with braid_cancel\.$/);
+  assert.match(formatWaiting({ ...notice, waitingOn: [{ kind: "suspended", executionId: "a@1", nodeId: "a", source: "agent" }] }),
+    /fail suspended executions with braid_cancel and executionIds, or cancel the job with braid_cancel\.$/);
+});
+
+test("resuming a running execution that will be held says when and what to do now; job reads name each execution's inputs", { timeout: 10_000 }, async t => {
+  const gate = deferred<void>();
+  const { ctx, calls } = workers({ a: gate.promise });
+  const { jobs, tools } = setup(t);
+  const job = jobs.start({ goal: "Chain", nodes: [node("a", { pauseAfter: true }), node("b")], edges: [{ from: "a", to: "b" }] }, {}, ctx);
+  await until(() => calls("a") === 1);
+  const hint = /a@1 is running and is held when it finishes: resume it then; its completion reminder says when\. To change it now, upsert its node in braid_update without resuming it: that replaces the running execution/;
+  await assert.rejects(tools.resumeTool.execute("resume", { jobId: job.handle, expectedRevision: 0, executionIds: ["a@1"] }, undefined, undefined, ctx), hint);
+  await assert.rejects(tools.updateTool.execute("update", { jobId: job.handle, expectedRevision: 0, resume: ["a@1"] }, undefined, undefined, ctx), hint);
+  gate.resolve();
+  await until(() => jobs.get(job.handle)!.execution!.pausedExecutionIds.length === 1);
+  await tools.resumeTool.execute("release", { jobId: job.handle, expectedRevision: 0, executionIds: ["a@1"] }, undefined, undefined, ctx);
+  await jobs.wait(job.jobId);
+  const text = (result: { content: unknown[] }) => (result.content[0] as { text: string }).text;
+  assert.match(text(await tools.statusTool.execute("status", { jobId: job.handle }, undefined, undefined, ctx)), /^- b@1 · node b · completed · [^\n]* · inputs a@1$/m);
 });

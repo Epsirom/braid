@@ -258,6 +258,45 @@ test("an edge from a new node into a settled lineage reruns it once", async t =>
   assert.deepEqual(clone?.type === "execution_created" && [clone.cause, clone.trigger], ["cloned", "fix@1"]);
 });
 
+test("a held instance whose inputs changed is marked, and releasing it reruns it instead of passing it on", async t => {
+  const gates: Record<string, () => void> = {};
+  const inputs: Record<string, string[]> = {};
+  const run = startBraid({ goal: "impl and test", nodes: [node("impl"), { ...node("test"), pauseAfter: true }, node("merge")],
+    edges: [{ from: "impl", to: "merge" }, { from: "test", to: "merge" }] }, {
+    cwd: await outsideGit(t), runner: async request => {
+      const id = request.execution.executionId!;
+      inputs[id] = request.predecessors.map(value => value.executionId!);
+      if (id !== "test@2" && id !== "merge@1") await new Promise<void>(resolve => { gates[id] = resolve; });
+      return { output: id };
+    },
+  });
+  t.after(() => run.cancel());
+  await until(() => !!gates["impl@1"] && !!gates["test@1"]);
+  assert.throws(() => run.resume(["test@1"], 0), /test@1 is running and is held when it finishes: resume it then/);
+  // test@1 started before it had an input from impl.
+  run.update({ expectedRevision: 0, addEdges: [{ from: "impl", to: "test" }] });
+  gates["test@1"]!();
+  await until(() => run.snapshot().pausedExecutionIds.includes("test@1"));
+  assert.equal(run.snapshot().executions["test@1"]!.inputsChanged, true);
+  assert.throws(() => run.cancelExecutions(["test@1"]), /test@1 is completed and held: release it to pass its result on, or to rerun it if its inputs changed/);
+  gates["impl@1"]!();
+  await until(() => run.snapshot().status === "waiting");
+  run.resume(["test@1"], 1);
+  // The rerun keeps the node's pauseAfter.
+  await until(() => run.snapshot().pausedExecutionIds.includes("test@2"));
+  assert.equal(run.snapshot().executions["test@2"]!.inputsChanged, undefined);
+  run.resume(["test@2"], 1);
+  const result = await run.result;
+  assert.equal(result.status, "completed");
+  assert.deepEqual(inputs["test@2"], ["impl@1"]);
+  assert.deepEqual(inputs["merge@1"]!.sort(), ["impl@1", "test@2"]);
+  // A held instance whose inputs did not change is not marked.
+  const held = startBraid({ goal: "hold", nodes: [{ ...node("a"), pauseAfter: true }], edges: [] }, { cwd: await outsideGit(t), runner: async () => ({ output: "a" }) });
+  t.after(() => held.cancel());
+  await until(() => held.snapshot().pausedExecutionIds.length === 1);
+  assert.equal(held.snapshot().executions["a@1"]!.inputsChanged, undefined);
+});
+
 test("rerunning a decision records skipped instances for branches it no longer takes", async t => {
   let run!: BraidRun;
   let choice = "left";
