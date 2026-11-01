@@ -135,6 +135,7 @@ try {
       on: (event, handler) => handlers.set(event, handler), sendMessage: message => { reminders++; finished(message); },
     });
     assert.equal(flags.has('braid-blocking'), false);
+    assert.ok(flags.has('braid-timeout'));
     assert.ok(flags.has('braid-ci-timeout'));
     assert.equal(commands.has('braid:blocking'), false);
     assert.deepEqual([...tools.keys()].sort(), ['braid', 'braid_cancel', 'braid_finish', 'braid_pause', 'braid_resume', 'braid_status', 'braid_update']);

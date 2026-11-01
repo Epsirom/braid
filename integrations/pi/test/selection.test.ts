@@ -49,6 +49,8 @@ function extension(onSend?: (message: Parameters<ExtensionAPI["sendMessage"]>[0]
 test("extension registers background tools, a panel command, and guidance to wait for reminders", async () => {
   const fake = extension();
   assert.equal(fake.flags.has("braid-blocking"), false);
+  assert.match(fake.flags.get("braid-timeout")!.description!, /^Wall-clock budget for Braid jobs/);
+  assert.match(fake.flags.get("braid-ci-timeout")!.description!, /^Deprecated, removed in 0\.7\.0: alias for --braid-timeout/);
   assert.deepEqual(
     [...fake.tools.keys()],
     ["braid_finish", "braid", "braid_status", "braid_cancel", "braid_update", "braid_resume", "braid_pause"],
