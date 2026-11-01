@@ -8,9 +8,9 @@ import Registry from "@deepseek-ai/dsh-typert-registry";
 import Gateway from "@deepseek-ai/dsh-api-gateway";
 import type { GenerateOptions, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { startBraid } from "@chrok/braid";
-import { BraidJobs, type ControlNotice, type TimeoutPause } from "../jobs.js";
+import { BraidJobs, type ControlNotice, type PausePendingNotice, type TimeoutPause, type WaitingNotice } from "../jobs.js";
 import { createBraidTools, type ToolValue } from "../tools.js";
-import { formatControlNotice, formatTimeoutPause } from "../status-text.js";
+import { formatControlNotice, formatPausePending, formatTimeoutPause } from "../status-text.js";
 import { BraidPanel, panelJob } from "../panel.js";
 import { createDshRunner } from "../runner.js";
 import { answer, calls, context, directory, input, llm, payload, until } from "./helpers.js";
@@ -124,4 +124,45 @@ test("a node timeout interrupts a shell call, keeps its partial work, and does n
   assert.match(results[0]!, /started/, "partial output is kept");
   assert.match(results[1]!, /Not run: the node timeout paused this execution before this call started/);
   assert.equal(execFileSync("git", ["show", `${result.nodes.a!.workspace!.checkpointRef}:partial.txt`], { cwd, encoding: "utf8" }), "partial");
+});
+
+test("a graph timeout tells the parent about a worker stuck in a shell call, and cancelling it stops the command", { timeout: 20_000 }, async () => {
+  const cwd = directory(true);
+  let requests = 0;
+  const runtime = llm(() => ++requests === 1
+    ? calls({ name: "bash", args: { command: "echo started; sleep 30", description: "Run the tests" } })
+    : answer("unreachable"));
+  const pending: PausePendingNotice[] = [];
+  const waiting: WaitingNotice[] = [];
+  const jobs = new BraidJobs(runtime, undefined, undefined, undefined, undefined,
+    notice => { waiting.push(notice); }, notice => { pending.push(notice); });
+  const tools = createBraidTools(() => jobs, () => { throw new Error("unused"); });
+  const run = (name: string, args: object) => tools.find(tool => tool.name === name)!.execute(args as never, { signal: new AbortController().signal } as never) as unknown as Promise<ToolValue>;
+  const job = jobs.start({ goal: "Run the tests", nodes: [{ type: "execute", id: "test", prompt: "Run node --test" }], edges: [] },
+    { graphTimeoutMs: 1_000, pauseNoticeMs: 500 }, context(cwd));
+  await until(() => pending.length === 1, 10_000);
+  const executionId = "test@1";
+  assert.deepEqual(pending[0]!.executions.map(execution => [execution.executionId, execution.nodeId]), [[executionId, "test"]]);
+  assert.match(pending[0]!.executions[0]!.activity!, /^tool for .* · bash running /);
+  assert.deepEqual([pending[0]!.source, pending[0]!.value], ["graph_timeout", 1_000]);
+  const text = formatPausePending(pending[0]!);
+  for (const part of [
+    `Braid job ${job.handle} reached its graphTimeoutMs limit of 1.0s and is paused: no new executions start.`,
+    'cannot pause yet: node "test" execution test@1 (tool for ',
+    "wait: each pauses when its current tool returns, and you get a reminder once nothing is active;",
+    `braid_cancel({"jobId":"${job.handle}","executionIds":["test@1"]}), which stops its running tool;`,
+    `braid_resume({"jobId":"${job.handle}","limits":{"graphTimeoutMs":<higher>}});`,
+    `or cancel the job with braid_cancel({"jobId":"${job.handle}"}).`,
+  ]) assert.ok(text.includes(part), `${JSON.stringify(part)} in ${text}`);
+  assert.equal(waiting.length, 0, "the job is not waiting while the command runs");
+
+  const cancelled = Date.now();
+  await run("braid_cancel", { jobId: job.handle, executionIds: [executionId] });
+  await until(() => waiting.length === 1, 10_000);
+  assert.ok(Date.now() - cancelled < 5_000, "the command was stopped, not awaited");
+  assert.equal(jobs.getNode(job.handle, undefined, executionId).error?.code, "CANCELLED");
+  assert.deepEqual(waiting[0]!.waitingOn, [{ kind: "job", source: "graph_timeout" }]);
+  assert.equal(pending.length, 1, "reported once");
+  assert.equal(requests, 1);
+  await jobs.dispose();
 });

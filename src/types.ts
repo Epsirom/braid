@@ -393,6 +393,19 @@ export type ExecutionEvent = Readonly<
     | { type: "execution_hold_removed"; nodeId: string; source: string }
     | { type: "replan_requested"; nodeId: string; reason: string; suggestion?: ReplanSuggestion }
     | { type: "graph_paused"; source: string }
+    | {
+        /**
+         * The run pause is still waiting on running executions pauseNoticeMs after it began.
+         * A pause takes effect at an execution's next checkpoint, so one inside a long tool
+         * call keeps running, and graph_waiting is not emitted until it pauses or ends.
+         * Emitted at most once per run pause.
+         */
+        type: "graph_pause_pending";
+        source: string;
+        pausedAt: number;
+        /** Executions that are still running: not suspended and not finished. */
+        runningExecutionIds: readonly string[];
+      }
     | { type: "graph_resumed" }
     | {
         /**
@@ -495,6 +508,11 @@ export interface BraidOptions extends BraidLimits {
    * cannot resume.
    */
   onLimit?: "pause" | "fail";
+  /**
+   * How long a run pause waits for running executions to pause or finish before it
+   * emits graph_pause_pending. Infinity disables the event. Default: 30000.
+   */
+  pauseNoticeMs?: number;
   /** Caller cancellation, independent of node and graph deadlines. */
   signal?: AbortSignal;
   /** Live observer. Throws/rejections are ignored; returned work is not awaited. */

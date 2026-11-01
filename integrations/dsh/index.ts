@@ -9,7 +9,7 @@ import type { BraidInput } from "@chrok/braid";
 import { assertCoreVersion } from "./core-version.js";
 import { BraidJobs, type ControlNotice, type JobOptions, type JobSnapshot } from "./jobs.js";
 import { createBraidTools } from "./tools.js";
-import { formatControlNotice, formatJobList, formatReceipt, formatReplanRequest, formatTimeoutPause, formatWaiting } from "./status-text.js";
+import { formatControlNotice, formatJobList, formatPausePending, formatReceipt, formatReplanRequest, formatTimeoutPause, formatWaiting } from "./status-text.js";
 import { BRAID_USAGE_GUIDANCE, BRAID_WAIT_REMINDER } from "./schema.js";
 import { renderPanel } from "./display.js";
 import { BraidPanel } from "./panel.js";
@@ -103,6 +103,14 @@ export function apply(ctx: Context): void {
       const message = createUserMessage({
         source: { kind: "braid", reminderId, form: "notice", summary: `Braid ${notice.handle}: waiting on paused work`.slice(0, 120) },
         content: [{ type: "text", text: `[system-reminder] ${formatWaiting(notice)} [/system-reminder]` }],
+      });
+      pending.set(reminderId, message); send(agent, message);
+    }, notice => {
+      // The job is paused but not waiting yet: without this, the parent would wait silently for a stuck tool.
+      const reminderId = JSON.stringify([notice.jobId, "pause-pending", notice.sequence]);
+      const message = createUserMessage({
+        source: { kind: "braid", reminderId, form: "notice", summary: `Braid ${notice.handle}: paused at a limit, executions still running`.slice(0, 120) },
+        content: [{ type: "text", text: `[system-reminder] ${formatPausePending(notice)} [/system-reminder]` }],
       });
       pending.set(reminderId, message); send(agent, message);
     });

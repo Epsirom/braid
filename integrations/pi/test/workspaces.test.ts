@@ -10,7 +10,8 @@ import type { MergeSource, SourceCheckoutStatus } from "@chrok/braid";
 import { createPiRunner } from "../runner.js";
 import { braid, startBraid, type NodeWorkspace as PiNodeWorkspace } from "@chrok/braid";
 import { createWorktreeWriteTools } from "../write-tools.js";
-import { BraidJobs } from "../jobs.js";
+import { BraidJobs, type PausePendingNotice, type WaitingNotice } from "../jobs.js";
+import { formatPausePending } from "../status-text.js";
 import { createBraidTools } from "../index.js";
 import { createAvailableReadTools } from "../read-tools.js";
 import { createWorkspaceShellTools } from "../shell-tools.js";
@@ -191,6 +192,57 @@ test("a node timeout interrupts a shell call, keeps its partial work, and does n
   assert.match(textOf(0), /started/, "partial output is kept");
   assert.match(textOf(1), /Not run: the node timeout paused this execution before this call started/);
   assert.equal(await git(fixture.root, "show", `${result.nodes.work!.workspace!.checkpointRef}:partial.txt`), "partial");
+});
+
+test("a graph timeout tells the parent about a worker stuck in a shell call, and cancelling it stops the command", { timeout: 20_000 }, async t => {
+  const fixture = await repository(t);
+  let requests = 0;
+  const ctx = { ...context(async () => ++requests === 1
+    ? toolResponse({ type: "toolCall", id: "tests", name: "bash", arguments: { command: "echo started; sleep 30" } })
+    : response("unreachable")), cwd: fixture.root };
+  const pending: PausePendingNotice[] = [];
+  const waiting: WaitingNotice[] = [];
+  const jobs = new BraidJobs(undefined, undefined, undefined, undefined, undefined,
+    notice => { waiting.push(notice); }, notice => { pending.push(notice); });
+  t.after(() => jobs.dispose());
+  const { cancelTool } = createBraidTools(jobs);
+  const job = jobs.start({ goal: "Run the tests", nodes: [{ type: "execute", id: "test", prompt: "Run node --test" }], edges: [] },
+    { graphTimeoutMs: 1_000, pauseNoticeMs: 500 }, ctx);
+  const until = async (condition: () => boolean) => {
+    const deadline = Date.now() + 10_000;
+    while (!condition()) {
+      assert.ok(Date.now() < deadline, "condition not reached");
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  };
+  await until(() => pending.length === 1);
+  const executionId = "test@1";
+  assert.deepEqual(pending[0]!.executions.map(execution => [execution.executionId, execution.nodeId]), [[executionId, "test"]]);
+  assert.match(pending[0]!.executions[0]!.activity!, /^tool for .* · bash running /);
+  assert.equal(pending[0]!.source, "graph_timeout");
+  assert.equal(pending[0]!.value, 1_000);
+  const text = formatPausePending(pending[0]!);
+  for (const part of [
+    `Braid job ${job.handle} reached its graphTimeoutMs limit of 1.0s and is paused: no new executions start.`,
+    'cannot pause yet: node "test" execution test@1 (tool for ',
+    "wait: each pauses when its current tool returns, and you get a reminder once nothing is active;",
+    `braid_cancel({"jobId":"${job.handle}","executionIds":["test@1"]}), which stops its running tool;`,
+    `braid_resume({"jobId":"${job.handle}","limits":{"graphTimeoutMs":<higher>}});`,
+    `or cancel the job with braid_cancel({"jobId":"${job.handle}"}).`,
+  ]) assert.ok(text.includes(part), `${JSON.stringify(part)} in ${text}`);
+  assert.equal(waiting.length, 0, "the job is not waiting while the command runs");
+
+  const cancelled = Date.now();
+  await cancelTool.execute("cancel", { jobId: job.handle, executionIds: [executionId] }, undefined, undefined, ctx);
+  await until(() => waiting.length === 1);
+  assert.ok(Date.now() - cancelled < 5_000, "the command was stopped, not awaited");
+  assert.equal(jobs.getNode(job.handle, undefined, executionId).error?.code, "CANCELLED");
+  assert.deepEqual(waiting[0]!.waitingOn, [{ kind: "job", source: "graph_timeout" }]);
+  assert.equal(pending.length, 1, "reported once");
+  assert.equal(requests, 1);
+  jobs.cancel(job.handle);
+  await jobs.wait(job.handle);
+  for (const workspace of Object.values(jobs.get(job.handle)!.workspaces ?? {})) fixture.onWorkspace(workspace);
 });
 
 test("Pi braid tool submits read-only review and decision nodes with Git inspection but no write tools", async t => {
