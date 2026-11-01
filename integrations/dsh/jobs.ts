@@ -11,6 +11,8 @@ export interface JobOptions extends BraidLimits {
   onNodeTimeout?: "pause" | "fail";
   /** Default "pause": a rerun at its node's maxRuns waits, or the job pauses at a job limit, and the parent is woken. */
   onLimit?: "pause" | "fail";
+  /** How long a limit pause waits for running executions before the parent is told they are still running. Default: core's 30000. */
+  pauseNoticeMs?: number;
   maxToolRounds?: number;
   maxToolCalls?: number;
 }
@@ -116,6 +118,34 @@ function waitingOn(state: BraidSnapshot, event: Extract<ExecutionEvent, { type: 
   return items.some(item => item.source !== "user") ? items : undefined;
 }
 
+/** An execution a limit pause is still waiting on. */
+export interface RunningExecution {
+  executionId: string;
+  nodeId: string;
+  /** Observed activity, such as the running tool and how long it has run. */
+  activity?: string;
+}
+
+/**
+ * A job limit paused the job, but executions are still running after the core's grace period:
+ * each pauses only at its next model request, so one inside a long tool call keeps the job from waiting.
+ */
+export interface PausePendingNotice {
+  jobId: string;
+  handle: string;
+  /** The pause source: "graph_timeout" or "token_limit". */
+  source: string;
+  /** The limit's value, when the job still has it. */
+  value?: number;
+  pausedAt: number;
+  executions: RunningExecution[];
+  /** Identifies this pause within the job. */
+  sequence: number;
+}
+
+/** Limit pauses that pause running executions, by the job option each raises. */
+const pausingLimits: Record<string, keyof BraidLimits> = { graph_timeout: "graphTimeoutMs", token_limit: "maxTokens" };
+
 /** A pause, resume, hold change, or cancellation someone other than the parent agent made, such as the user in the panel. */
 export interface ControlNotice {
   jobId: string;
@@ -168,6 +198,7 @@ export class BraidJobs {
     private onTimeoutPause: (pause: TimeoutPause) => void = () => {},
     private onReplanRequested: (notice: ReplanNotice) => void = () => {},
     private onWaiting: (notice: WaitingNotice) => void = () => {},
+    private onPausePending: (notice: PausePendingNotice) => void = () => {},
   ) {}
 
   /** The parent made the change itself; anyone else's change becomes a notice for it. */
@@ -269,6 +300,21 @@ export class BraidJobs {
         try { this.onWaiting({ jobId, handle, revision: event.revision ?? 0, waitingOn: items, ...graphTimeout(state), sequence: event.sequence }); }
         catch { /* Notification failures cannot fail jobs. */ }
       }
+      return;
+    }
+    // Nothing wakes the parent while a limit pause waits on executions stuck in long tool calls.
+    if (event.type === "graph_pause_pending" && Object.hasOwn(pausingLimits, event.source) && !this.disposed) {
+      const job = this.jobs.get(jobId);
+      if (!job) return;
+      const state = job.run.snapshot();
+      const value = state.limits[pausingLimits[event.source]!];
+      const executions = event.runningExecutionIds.map(executionId => {
+        const activity = job.activity.get(executionId);
+        return { executionId, nodeId: state.executions[executionId]?.id ?? "?",
+          ...(activity ? { activity: formatActivityStatus(activity, event.timestamp) } : {}) };
+      });
+      try { this.onPausePending({ jobId, handle, source: event.source, ...(value === undefined ? {} : { value }), pausedAt: event.pausedAt, executions, sequence: event.sequence }); }
+      catch { /* Notification failures cannot fail jobs. */ }
       return;
     }
     if (!["execution_paused", "node_completed", "node_failed"].includes(event.type) || !event.executionId) return;

@@ -300,6 +300,7 @@ length or token cap (see [resource limits](docs/resource-limits.md)).
 | `graphTimeoutMs` | Unlimited | Whole execution deadline, including node queueing, paused gates, and suspensions; starts after validation |
 | `onNodeTimeout` | `"pause"` (`"fail"` in `braid()`) | `"pause"` suspends a timed-out execution with its work until it is resumed or cancelled (needs an interruptible runner); `"fail"` fails it with `NODE_TIMEOUT` |
 | `onLimit` | `"pause"` (`"fail"` in `braid()`) | What reaching a node's `maxRuns`, `maxExecutions`, `graphTimeoutMs`, or `maxTokens` does: `"pause"` keeps the rerun pending or pauses the run until the owner raises the limit; `"fail"` fails the run with `RUN_LIMIT`, `EXECUTION_LIMIT`, `GRAPH_TIMEOUT`, or `TOKEN_LIMIT` |
+| `pauseNoticeMs` | `30000` | How long a run pause waits for running executions to pause or finish before emitting `graph_pause_pending`; `Infinity` turns the event off |
 | `signal` | None | Caller cancellation signal; aborts running nodes and marks queued nodes cancelled |
 | `onEvent` | None | Live observer for graph and execution creation, starts, handoffs, completions, skips, failures, and graph completion |
 
@@ -394,7 +395,8 @@ deleted instances. Instance events carry `executionId` and the instance's
 changes to a running execution's hold; `replan_requested` reports a node asking
 its graph owner to replan; `execution_suspending`/`execution_suspended`
 report pauses of running executions, and `graph_paused`/`graph_resumed` pauses
-of the whole run. `graph_waiting` reports that the last active execution
+of the whole run; `graph_pause_pending` reports a run pause still waiting on
+running executions, such as one inside a long tool call. `graph_waiting` reports that the last active execution
 settled, was held, or suspended, and only held, suspended, or paused work
 remains. `graph_completed` or `graph_failed` terminates
 the log. Completion/failure is published after checkpointing. Node events repeat

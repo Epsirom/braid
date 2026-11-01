@@ -80,9 +80,11 @@ function validateOptions(options: BraidOptions): void {
     throw new TypeError('onNodeTimeout must be "pause" or "fail"');
   if (options.onLimit !== undefined && options.onLimit !== "pause" && options.onLimit !== "fail")
     throw new TypeError('onLimit must be "pause" or "fail"');
-  const value = options.nodeTimeoutMs;
-  if (value !== undefined && value !== Infinity && (!Number.isFinite(value) || value <= 0 || value > 2_147_483_647))
-    throw new TypeError("nodeTimeoutMs must be Infinity or a positive number no greater than 2147483647");
+  for (const key of ["nodeTimeoutMs", "pauseNoticeMs"] as const) {
+    const value = options[key];
+    if (value !== undefined && value !== Infinity && (!Number.isFinite(value) || value <= 0 || value > 2_147_483_647))
+      throw new TypeError(`${key} must be Infinity or a positive number no greater than 2147483647`);
+  }
   validateLimits(options);
 }
 
@@ -196,6 +198,12 @@ function checkResponse(response: ModelResponse): void {
 
 /** How long an interrupted runner has to reach its next checkpoint before the execution fails. */
 const INTERRUPT_GRACE_MS = 10_000;
+/**
+ * How long a run pause waits for running executions before it reports them. Most reach a
+ * checkpoint within one model response and its tool calls; one still running after this is
+ * likely inside a long tool call, and the owner should hear about it instead of waiting silently.
+ */
+const PAUSE_NOTICE_MS = 30_000;
 
 /** What the scheduler can do to one running invocation. */
 interface InvocationHandle {
@@ -571,6 +579,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
   const nodeTimeoutMs = options.nodeTimeoutMs ?? Infinity;
   const onNodeTimeout = options.onNodeTimeout ?? "pause";
   const onLimit = options.onLimit ?? "pause";
+  const pauseNoticeMs = options.pauseNoticeMs ?? PAUSE_NOTICE_MS;
   const startedAt = Date.now();
   const started = performance.now();
   let graphDeadline = started + limits.graphTimeoutMs;
@@ -637,6 +646,18 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       Math.max(0, Math.ceil(graphDeadline - performance.now()))) : undefined;
   };
   startTimer();
+  // Reports a run pause that is still waiting on running executions.
+  let pauseNotice: ReturnType<typeof setTimeout> | undefined;
+  function watchPause() {
+    clearTimeout(pauseNotice);
+    const pause = runPause;
+    pauseNotice = pause && Number.isFinite(pauseNoticeMs) ? setTimeout(() => {
+      pauseNotice = undefined;
+      if (runPause !== pause || controller.signal.aborted) return;
+      const ids = [...running.keys()].filter(id => !suspended.has(id) && !settled(executions.get(id)!));
+      if (ids.length) log.emit({ type: "graph_pause_pending", source: pause.source, pausedAt: pause.pausedAt, runningExecutionIds: ids, revision });
+    }, pauseNoticeMs) : undefined;
+  }
   const context = (record: NodeExecution) => ({ executionId: record.executionId, revision: record.revision });
   const workspaces = new GitWorkspaces(resolve(options.cwd ?? process.cwd()), workspace => {
     const record = executions.get(workspace.executionId!);
@@ -700,6 +721,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       const record = executions.get(id)!;
       if (!settled(record)) requestPause(record, source, true);
     }
+    watchPause();
     wake();
   }
   function setLimits(changes: BraidLimits): BraidSnapshot {
@@ -877,6 +899,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       const record = executions.get(id)!;
       if (!settled(record)) requestPause(record, source, true);
     }
+    watchPause();
     wake();
     return snapshot();
   }
@@ -886,6 +909,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     const limit = Object.hasOwn(runLimits, runPause.source) ? runLimits[runPause.source as RunLimitSource] : undefined;
     if (limit?.reached()) throw new Error(`The run is paused at its ${limit.limit} limit of ${limits[limit.limit]}; raise it with setLimits before resuming`);
     runPause = undefined;
+    watchPause();
     const continued = stageResume([...pausedByRun].filter(resumable));
     pausedByRun.clear();
     status = "running";
@@ -1435,6 +1459,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
       paused.clear();
       limited.clear();
       runPause = undefined;
+      clearTimeout(pauseNotice);
       try { await workspaces.archivePending("Execution checkpoint retained for inspection and future recovery"); }
       catch (error) { cleanupError = { code: "CLEANUP_FAILED", message: error instanceof Error ? error.message : String(error) }; }
       try { await workspaces.close(); }

@@ -355,7 +355,12 @@ of failing it (`options.onLimit: "fail"` fails it). `maxExecutions` only stops n
 executions; the other two also pause running ones. Once nothing is active, the
 parent gets the waiting reminder, and `braid_resume({ jobId, limits })` raises the
 limit and resumes the job. The job does not resume while the limit is still
-reached. `/braid:review` bounds its rounds with `maxRuns` on its writer node and
+reached. A running execution pauses only before its next model request, so one
+inside a long tool call keeps running. If any are still running 30 seconds after
+`graphTimeoutMs` or `maxTokens` paused the job, the parent gets one reminder that
+names them with their current tool and how long it has run, and says how to
+wait, fail one with `braid_cancel` and `executionIds` (which aborts its tool),
+raise the limit, or cancel the job. `/braid:review` bounds its rounds with `maxRuns` on its writer node and
 keeps failing at that limit.
 
 See [execution control](../../docs/execution-control.md) for cycle schemas, exact

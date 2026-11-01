@@ -405,6 +405,22 @@ that node. List the node where rounds start first in `nodes`, and check
   of another template, the validation error adds that templates cannot include
   other templates.
 
+### Limit pauses report executions stuck in tool calls
+
+A run pause takes effect at each execution's next checkpoint, so an execution
+inside a long tool call kept a paused run from reaching `waiting`, and Pi and DSH
+parents were never told. Core now emits `graph_pause_pending` once per run pause
+when executions are still running `pauseNoticeMs` (default 30 seconds) after the
+pause began. Pi and DSH turn it into a reminder for `graphTimeoutMs` and
+`maxTokens` pauses; the waiting reminder still follows once nothing is active.
+
+- `ExecutionEvent` adds `graph_pause_pending`. An exhaustive `switch` needs a
+  case (or a default) for it.
+- New optional member: `BraidOptions.pauseNoticeMs`; `Infinity` turns the event
+  off. Pi and DSH `JobOptions` pass it through; agents cannot set it.
+- Pi and DSH `BraidJobs` constructors take an optional seventh callback,
+  `onPausePending`, with a `PausePendingNotice`.
+
 ### Pi RPC runs wait for running jobs
 
 In Pi's `--mode rpc`, and in SDK sessions bound with `mode: "rpc"`, a run no

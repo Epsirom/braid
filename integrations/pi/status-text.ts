@@ -5,7 +5,7 @@ import {
   type ExecutionSuspension, type NodeExecution, type NodeResult, type NodeWorkspace,
 } from "@chrok/braid";
 import type { Usage } from "@earendil-works/pi-ai";
-import type { JobSnapshot, ReplanNotice, TimeoutPause, WaitingItem, WaitingNotice } from "./jobs.js";
+import type { JobSnapshot, PausePendingNotice, ReplanNotice, TimeoutPause, WaitingItem, WaitingNotice } from "./jobs.js";
 
 /** Model-facing text documents for the parent Braid tools. */
 
@@ -383,7 +383,7 @@ const jobLimits: Record<string, string> = { execution_limit: "maxExecutions", gr
 const waitingSource = (source: string) =>
   ({ definition: "pauseAfter", replan: "its replan request", node_timeout: "node timeout", agent: "you", maxRuns: "its node's maxRuns",
     ...Object.fromEntries(Object.entries(jobLimits).map(([key, limit]) => [key, `the job's ${limit} limit`])) } as Record<string, string>)[source] ?? source;
-const executionItem = (item: WaitingItem) => `node ${JSON.stringify(item.nodeId)} execution ${item.executionId}`;
+const executionItem = (item: Pick<WaitingItem, "nodeId" | "executionId">) => `node ${JSON.stringify(item.nodeId)} execution ${item.executionId}`;
 /** A job pause names the executions it suspended, so the cause is stated once. */
 const waitingItem = (item: WaitingItem, items: readonly WaitingItem[]) => {
   if (item.kind !== "job") return `${item.kind === "held" ? "the held result of" : item.kind === "limited" ? "the rerun of" : "suspended"} ${executionItem(item)} (${waitingSource(item.source)}${item.inputsChanged ? `; ${INPUTS_CHANGED}` : ""})`;
@@ -414,6 +414,23 @@ export function formatWaiting(notice: WaitingNotice): string {
     // The deadline has passed once the graph timeout paused the job.
     notice.graphTimeoutMs !== undefined && job?.source !== "graph_timeout" ? "The graph timeout keeps running while it waits." : "",
   ].filter(Boolean).join(" ");
+}
+
+/** The waking reminder for a limit pause still waiting on executions inside long tool calls. */
+export function formatPausePending(notice: PausePendingNotice): string {
+  const limit = jobLimits[notice.source] ?? notice.source;
+  const value = notice.value === undefined ? "" : ` of ${limit === "graphTimeoutMs" ? duration(notice.value) : notice.value}`;
+  const ids = JSON.stringify(notice.executions.map(execution => execution.executionId));
+  return [
+    `Braid job ${notice.handle} reached its ${limit} limit${value} and is paused: no new executions start.`,
+    "A running execution pauses only before its next model request, so these are still running and cannot pause yet:",
+    `${notice.executions.map(execution => `${executionItem(execution)}${execution.activity ? ` (${execution.activity})` : ""}`).join("; ")}.`,
+    `Check them with braid_status({"jobId":"${notice.handle}","executionId":"<id>"}), then either`,
+    "wait: each pauses when its current tool returns, and you get a reminder once nothing is active;",
+    `fail a stuck execution with braid_cancel({"jobId":"${notice.handle}","executionIds":${ids}}), which stops its running tool;`,
+    `raise the limit and resume the job with braid_resume({"jobId":"${notice.handle}","limits":{"${limit}":<higher>}});`,
+    `or cancel the job with braid_cancel({"jobId":"${notice.handle}"}).`,
+  ].join(" ");
 }
 
 /** The waking reminder for a running execution that asked the parent to replan. */
