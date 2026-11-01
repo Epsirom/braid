@@ -101,7 +101,8 @@ for timeout behavior and TypeScript interface changes.
 ## 0.4 implemented changes
 
 - [x] Pi print and JSON runs drain background jobs before exiting, with a
-  paused-execution warning, cancellation, and `--braid-ci-timeout`.
+  paused-execution warning, cancellation, and `--braid-ci-timeout` (now
+  `--braid-timeout`).
 - [x] `braid_finish` for explicit single-shot run outcomes and exit status.
 - [x] Deprecate Pi blocking mode for removal in 0.5.0.
 

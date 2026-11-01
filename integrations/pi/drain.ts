@@ -37,12 +37,18 @@ export type BraidFinishOutcome = { status: "success" | "failure"; summary: strin
 /** Queued host input and the run's wall-clock budget are not job changes, so the drain also wakes periodically. */
 const RECHECK_MS = 100;
 
-export function parseDuration(value: string): number {
+/** `--braid-ci-timeout` is a deprecated alias; `--braid-timeout` wins when both are given. */
+export const BRAID_CI_TIMEOUT_DEPRECATION =
+  "--braid-ci-timeout is deprecated and will be removed in 0.7.0; use --braid-timeout instead.";
+
+const TIMEOUT_EXPIRED = "--braid-timeout expired; cancelled outstanding Braid jobs";
+
+export function parseDuration(value: string, flag = "--braid-timeout"): number {
   const match = /^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h)?\s*$/.exec(value);
   const scale = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 } as const;
   const ms = match ? Number(match[1]) * scale[(match[2] ?? "ms") as keyof typeof scale] : NaN;
   if (!(ms > 0) || ms > 2_147_483_647)
-    throw new Error(`Invalid --braid-ci-timeout ${JSON.stringify(value)}: use a positive duration such as 90000, 90s, 30m, or 2h`);
+    throw new Error(`Invalid ${flag} ${JSON.stringify(value)}: use a positive duration such as 90000, 90s, 30m, or 2h`);
   return ms;
 }
 
@@ -67,13 +73,18 @@ const stalledReminder = (jobs: OutstandingJob[]) =>
  * keeps the async model: it ends its turn and the reminder resumes it.
  */
 export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingReminders: () => boolean): void {
+  pi.registerFlag("braid-timeout", {
+    description: "Wall-clock budget for Braid jobs in print/JSON mode, from the first prompt (e.g. 90000, 90s, 30m, 2h); on expiry, outstanding Braid jobs are cancelled and the exit code is set to 1",
+    type: "string",
+  });
   pi.registerFlag("braid-ci-timeout", {
-    description: "Wall-clock budget for Braid jobs in print/JSON mode (e.g. 90000, 90s, 30m, 2h); on expiry, outstanding jobs are cancelled and the run exits 1",
+    description: "Deprecated, removed in 0.7.0: alias for --braid-timeout, which wins when both are given",
     type: "string",
   });
   let closed = false;
   let timer: NodeJS.Timeout | undefined;
   let timedOut = false;
+  let warnedDeprecation = false;
   let warnedStall: string | undefined;
   const failures = new Set<string>();
   let outcome: BraidFinishOutcome | undefined;
@@ -93,7 +104,7 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
   };
   const expire = (): void => {
     timedOut = true;
-    cancelOutstanding("--braid-ci-timeout expired; cancelled outstanding Braid jobs");
+    cancelOutstanding(TIMEOUT_EXPIRED);
   };
   const nextChange = (signal?: AbortSignal) => new Promise<void>(resolve => {
     const done = () => {
@@ -162,10 +173,17 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
-    const budget = pi.getFlag("braid-ci-timeout");
-    if (timer || timedOut || !isSingleShot(ctx) || typeof budget !== "string") return;
-    // The budget covers the whole run, starting at its first prompt.
-    timer = setTimeout(expire, parseDuration(budget));
+    const budget = pi.getFlag("braid-timeout");
+    const legacy = pi.getFlag("braid-ci-timeout");
+    if (typeof legacy === "string" && !warnedDeprecation) {
+      warnedDeprecation = true;
+      if (ctx.hasUI) ctx.ui.notify(BRAID_CI_TIMEOUT_DEPRECATION, "warning");
+      else console.error(`Braid: ${BRAID_CI_TIMEOUT_DEPRECATION}`);
+    }
+    const [value, flag] = typeof budget === "string" ? [budget, "--braid-timeout"] : [legacy, "--braid-ci-timeout"];
+    if (timer || timedOut || !isSingleShot(ctx) || typeof value !== "string") return;
+    // Braid jobs get this budget from the run's first prompt.
+    timer = setTimeout(expire, parseDuration(value, flag));
     timer.unref();
   });
 
@@ -193,7 +211,7 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
       // A queued reminder or host message continues this run, and the hold resumes
       // after that turn; Pi settles only when its queues are empty.
       if (hasPendingReminders() || ctx.hasPendingMessages()) return;
-      if (timedOut) cancelOutstanding("--braid-ci-timeout expired; cancelled outstanding Braid jobs");
+      if (timedOut) cancelOutstanding(TIMEOUT_EXPIRED);
       const outstanding = jobs.outstanding();
       if (!outstanding.length) return settle(event);
       if (outstanding.every(job => job.stalled)) {

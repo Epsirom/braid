@@ -124,8 +124,8 @@ Version 0.4 changes how the Pi extension behaves in print and JSON modes:
 - In print and JSON modes, ending a turn while only paused executions remain
   produces one warning; ending the next turn without resuming them cancels those
   jobs and sets exit status 1. Resume or cancel paused executions before the
-  parent finishes. `--braid-ci-timeout` and a final `braid_finish` failure also
-  exit 1.
+  parent finishes. `--braid-ci-timeout` (renamed `--braid-timeout` in 0.6) and a
+  final `braid_finish` failure also exit 1.
 - In 0.4, blocking mode (`--braid-blocking`, `/braid:blocking`) is deprecated
   for removal in 0.5.0. Drop the flag or command: print and JSON runs wait for
   background jobs without blocking each tool call.
@@ -438,6 +438,20 @@ is resumed by the reminder within the same run.
   run settles, as the 0.4 guide suggested, now get them within the same run:
   `session.prompt()` returns once the jobs finish. Only interactive Pi
   (`mode: "tui"`) still settles while jobs run.
+
+### Pi `--braid-timeout`
+
+Pi's `--braid-ci-timeout` is renamed `--braid-timeout`, since it bounds Braid
+jobs, not the whole CI run. Its behavior is unchanged.
+
+- Replace `--braid-ci-timeout <duration>` with `--braid-timeout <duration>`.
+- `--braid-ci-timeout` keeps working as a deprecated alias until 0.7.0. Using it
+  prints `Braid: --braid-ci-timeout is deprecated and will be removed in 0.7.0;
+  use --braid-timeout instead.` on stderr (a warning notice in the terminal UI).
+  When both flags are given, `--braid-timeout` wins.
+- The expiry line on stderr and its `forcedFailures` entry in JSON output now
+  read `--braid-timeout expired; cancelled outstanding Braid jobs`, whichever
+  flag set the budget. Update scripts that match the old text.
 
 ### Status reads for agents that poll
 

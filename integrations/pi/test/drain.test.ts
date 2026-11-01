@@ -256,11 +256,33 @@ test("Pi CLI print mode treats a paused job as stalled instead of waiting foreve
   assert.match(stderr, /Braid: paused work was never resumed; cancelled job-1/);
 });
 
-test("--braid-ci-timeout cancels outstanding jobs, lets the parent report, and exits 1", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
+const deprecations = (stderr: string) => stderr.match(/Braid: --braid-ci-timeout is deprecated and will be removed in 0\.7\.0; use --braid-timeout instead\./g)?.length ?? 0;
+
+test("--braid-timeout cancels outstanding jobs, lets the parent report, and exits 1", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
+  const { code, stdout, stderr } = await runPi("timeout", "text", ["--braid-timeout", "300ms"]);
+  assert.equal(code, 1, stderr);
+  assert.match(stdout, /TIMED OUT/);
+  assert.match(stderr, /Braid: --braid-timeout expired; cancelled outstanding Braid jobs/);
+  assert.equal(deprecations(stderr), 0, stderr);
+});
+
+test("deprecated --braid-ci-timeout still cancels outstanding jobs and warns once on stderr", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
   const { code, stdout, stderr } = await runPi("timeout", "text", ["--braid-ci-timeout", "300ms"]);
   assert.equal(code, 1, stderr);
   assert.match(stdout, /TIMED OUT/);
-  assert.match(stderr, /Braid: --braid-ci-timeout expired; cancelled outstanding Braid jobs/);
+  assert.match(stderr, /Braid: --braid-timeout expired; cancelled outstanding Braid jobs/);
+  assert.equal(deprecations(stderr), 1, stderr);
+});
+
+test("--braid-timeout wins over the deprecated --braid-ci-timeout", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
+  // With the alias's hour, the job would outlive the CLI timeout.
+  const { code, stdout, stderr } = await runPi("timeout", "json", ["--braid-ci-timeout", "1h", "--braid-timeout", "300ms"]);
+  assert.equal(code, 1, stderr);
+  assert.match(stdout, /TIMED OUT/);
+  assert.match(stderr, /Braid: --braid-timeout expired; cancelled outstanding Braid jobs/);
+  assert.equal(deprecations(stderr), 1, stderr);
+  // The notice goes to stderr, so JSON output stays parseable.
+  for (const line of stdout.trim().split("\n")) JSON.parse(line);
 });
 
 test("braid_finish with failure exits 1 and reports the summary in JSON output", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
@@ -283,25 +305,26 @@ test("braid_finish with success keeps the run open for outstanding jobs and exit
   assert.doesNotMatch(stderr, /Braid:/);
 });
 
-test("braid_finish success does not mask a --braid-ci-timeout cancellation", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
-  const { code, stdout, stderr } = await runPi("finishAfterTimeout", "json", ["--braid-ci-timeout", "300ms"]);
+test("braid_finish success does not mask a --braid-timeout cancellation", { timeout: CLI_TEST_TIMEOUT_MS }, async () => {
+  const { code, stdout, stderr } = await runPi("finishAfterTimeout", "json", ["--braid-timeout", "300ms"]);
   assert.equal(code, 1, stderr);
   assert.match(stdout, /CLAIMED SUCCESS/);
-  assert.match(stderr, /Braid: --braid-ci-timeout expired; cancelled outstanding Braid jobs/);
+  assert.match(stderr, /Braid: --braid-timeout expired; cancelled outstanding Braid jobs/);
   const finish = stdout.trim().split("\n").map(line => JSON.parse(line))
     .find(event => event.type === "entry_appended" && event.entry.customType === "braid-finish");
   assert.deepEqual(finish?.entry.data, {
     status: "success", summary: "Nothing to report.",
-    forcedFailures: ["--braid-ci-timeout expired; cancelled outstanding Braid jobs"],
+    forcedFailures: ["--braid-timeout expired; cancelled outstanding Braid jobs"],
   });
 });
 
-test("--braid-ci-timeout accepts milliseconds and s/m/h suffixes", () => {
+test("--braid-timeout accepts milliseconds and s/m/h suffixes", () => {
   assert.equal(parseDuration("250"), 250);
   assert.equal(parseDuration("90s"), 90_000);
   assert.equal(parseDuration("1.5m"), 90_000);
   assert.equal(parseDuration("2h"), 7_200_000);
-  for (const value of ["", "0", "-5s", "5d", "soon", "1e3"]) assert.throws(() => parseDuration(value), /Invalid --braid-ci-timeout/);
+  for (const value of ["", "0", "-5s", "5d", "soon", "1e3"]) assert.throws(() => parseDuration(value), /Invalid --braid-timeout/);
+  assert.throws(() => parseDuration("soon", "--braid-ci-timeout"), /Invalid --braid-ci-timeout "soon"/);
 });
 
 type ParentStep = (call: number, last: string, prompt: string) => AssistantMessage["content"];
