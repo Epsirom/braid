@@ -61,8 +61,12 @@ test("a node timeout pauses the execution, reports what it was doing, and resume
   const result = jobs.get(job.handle).result!;
   assert.equal(result.nodes.a!.output, "finished after timeout", JSON.stringify(result.nodes.a!.error));
   assert.equal(requests.length, 2);
-  assert.deepEqual(requests[1]!.messages, requests[0]!.messages, "the interrupted response never entered the context");
-  assert.match(requests[1]!.system!, /Node time budget: (4\d{3}|5000) ms remaining/);
+  // The retry replaces the unanswered budget reminder; the system prompt stays the same.
+  assert.deepEqual(requests[1]!.messages.slice(0, -1), requests[0]!.messages.slice(0, -1), "the interrupted response never entered the context");
+  assert.equal(requests[1]!.messages.length, 2);
+  assert.match(JSON.stringify(requests[1]!.messages.at(-1)), /Node time budget: (4\d{3}|5000) ms remaining/);
+  assert.equal(requests[1]!.system, requests[0]!.system);
+  assert.doesNotMatch(requests[1]!.system!, /system-reminder/);
   await jobs.dispose();
 });
 

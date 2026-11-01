@@ -6,7 +6,7 @@ import type { Context } from "@earendil-works/pi-ai";
 import type { BraidResult } from "@chrok/braid";
 import { createBraidTools } from "../index.js";
 import { BraidJobs } from "../jobs.js";
-import { readOnlyCwd } from "./helpers.js";
+import { budgetReminder, readOnlyCwd } from "./helpers.js";
 
 for (const scenario of [
   {
@@ -38,8 +38,9 @@ for (const scenario of [
       modelRegistry: {
         find: () => model,
         complete: async (_model: unknown, context: Context) => {
-          if (!scenario.error) assert.doesNotMatch(context.systemPrompt!, /system-reminder/);
-          else assert.match(context.systemPrompt!, new RegExp(`${scenario.error === "NODE_TIMEOUT" ? "Node" : "Graph"} time budget: 1000 ms remaining`));
+          assert.doesNotMatch(context.systemPrompt!, /system-reminder/);
+          if (!scenario.error) assert.equal(budgetReminder(context), "");
+          else assert.match(budgetReminder(context), new RegExp(`${scenario.error === "NODE_TIMEOUT" ? "Node" : "Graph"} time budget: 1000 ms remaining`));
           clock.advanceWithoutTimers(600_000);
           return {
             role: "assistant",

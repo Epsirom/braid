@@ -562,9 +562,10 @@ before executing the over-budget batch. Returning final text at the limit is
 allowed. See the [Pi budget options](integrations/pi/README.md#node-filesystem-capabilities)
 for configuration, including `nodeTimeoutMs` and `graphTimeoutMs`.
 
-For finite budgets, Pi inserts a system reminder with remaining tool and time
-budgets before every model call. The OpenAI-compatible adapter also refreshes
-finite time-budget reminders before each request. The core supplies optional
+For finite budgets, Pi appends a system reminder with remaining tool and time
+budgets to the conversation before every model call. The OpenAI-compatible
+adapter does the same for finite time budgets. The system prompt and earlier
+messages stay unchanged, so providers can reuse the cached prompt prefix. The core supplies optional
 `request.deadlines` on the `performance.now()` clock for adapters to calculate
 remaining node and shared graph time. Reminders do not extend hard limits or
 interrupt a model response already in progress. The core API sets no node or

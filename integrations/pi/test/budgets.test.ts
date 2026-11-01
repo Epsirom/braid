@@ -3,13 +3,14 @@ import test from "node:test";
 import type { Context } from "@earendil-works/pi-ai";
 import { BraidJobs } from "../jobs.js";
 import { createBraidTools } from "../index.js";
-import { context, input, response } from "./helpers.js";
+import { budgetReminder, context, input, lastMessage, response } from "./helpers.js";
 
 test("Pi tool options reach the worker and rejected calls consume the budget", async (t) => {
   const ctx = context(async () => response());
   const prompts: string[] = [];
   t.mock.method(ctx.modelRegistry, "complete", async (_model: unknown, worker: Context) => {
-    prompts.push(worker.systemPrompt!);
+    assert.doesNotMatch(worker.systemPrompt!, /system-reminder/);
+    prompts.push(budgetReminder(worker));
     if (prompts.length === 1) {
       return {
         ...response(),
@@ -17,7 +18,7 @@ test("Pi tool options reach the worker and rejected calls consume the budget", a
         content: [{ type: "toolCall" as const, id: "unavailable", name: "write", arguments: {} }],
       };
     }
-    const result = worker.messages.at(-1)!;
+    const result = lastMessage(worker);
     assert.equal(result.role, "toolResult");
     if (result.role === "toolResult") assert.equal(result.isError, true);
     return response("Finished within budget");

@@ -349,7 +349,9 @@ next model request; if one is still inside a long tool call 30 seconds after
 `graphTimeoutMs` or `maxTokens` paused the job, the parent gets one reminder
 naming it with its current tool, and `braid_cancel` with `executionIds` aborts
 that tool. Limits count rejected tool calls too. Workers
-receive remaining budget/deadline reminders before model requests. Graph deadlines
+receive remaining budget/deadline reminders as messages at the end of their
+conversation before model requests; the system prompt does not change, so the
+provider's prompt cache stays valid. Graph deadlines
 continue during pauses and do not reset on resume or update.
 
 `braid_status.usage` aggregates DSH usage, including completed provider rounds

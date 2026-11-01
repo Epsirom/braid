@@ -809,9 +809,11 @@ Tool limits must be positive safe integers. Counts include `decide`, `git`,
 tool requests. A batch exceeding either tool limit is rejected before execution
 and fails the node; a final text response is still allowed at the exact limit.
 
-When any budget is finite, the worker's system prompt contains a `system-reminder`
-before its first model call and refreshes it before each continuation. It reports
-finite tool limits and remaining rounds/calls, and remaining node/graph time.
+When any budget is finite, the worker receives a `system-reminder` message at the
+end of its conversation before each model call. It reports finite tool limits and
+remaining rounds/calls, and remaining node/graph time. Earlier reminders stay in
+the conversation and the system prompt does not change, so each request extends
+the previous one and the provider's prompt cache stays valid.
 Workers must reserve a call for `decide` or `finish_merge` when required and finish
 within the remaining budgets. Graph time is shared across all nodes; a queued
 node receives the remaining graph time, not a fresh graph timeout. Reminders do

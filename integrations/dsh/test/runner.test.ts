@@ -74,6 +74,23 @@ test("tool limits fail before an over-budget batch can write", async () => {
   assert.equal(existsSync(join(cwd, "no.txt")), false);
 });
 
+test("finite tool budgets add a reminder per request without changing the system prompt or earlier messages", async () => {
+  const cwd = directory(); writeFileSync(join(cwd, "file.txt"), "original");
+  const seen: { system?: string | undefined; messages: GenerateOptions["messages"] }[] = [];
+  const result = await braid(input, { cwd, defaultModel: "fake/model", runner: createDshRunner(llm(options => {
+    seen.push(structuredClone({ system: options.system, messages: options.messages }));
+    return seen.length === 1 ? calls({ name: "read", args: { file_path: "file.txt" } }) : answer();
+  }), { cwd, maxToolCalls: 3 }) });
+  assert.equal(result.nodes.a!.status, "completed");
+  const [first, last] = seen;
+  assert.match(JSON.stringify(first!.messages.at(-1)), /Tool call budget: 0\/3 used/);
+  assert.match(JSON.stringify(last!.messages.at(-1)), /Tool call budget: 1\/3 used/);
+  // A provider can reuse the previous request as a cached prefix.
+  assert.equal(last!.system, first!.system);
+  assert.doesNotMatch(String(first!.system), /system-reminder/);
+  assert.deepEqual(last!.messages.slice(0, first!.messages.length), first!.messages);
+});
+
 test("writable workers edit isolated snapshots and checkpoints exclude ignored outputs", async () => {
   const cwd = directory(true); writeFileSync(join(cwd, ".gitignore"), "ignored.txt\n");
   let round = 0;

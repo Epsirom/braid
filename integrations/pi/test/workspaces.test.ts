@@ -15,7 +15,7 @@ import { formatPausePending } from "../status-text.js";
 import { createBraidTools } from "../index.js";
 import { createAvailableReadTools } from "../read-tools.js";
 import { createWorkspaceShellTools } from "../shell-tools.js";
-import { context, deferred, input, response } from "./helpers.js";
+import { budgetReminder, context, deferred, input, lastMessage, response } from "./helpers.js";
 
 const exec = promisify(execFile);
 async function git(cwd: string, ...args: string[]) {
@@ -503,7 +503,7 @@ test("Pi merge agent inspects, applies, and finishes through core tools before a
     }
     assert.equal(payload.nodeId, "integrate");
     assert.match(worker.systemPrompt!, /core has not merged anything/);
-    assert.match(worker.systemPrompt!, /Reserve budget.*finish_merge/);
+    assert.match(budgetReminder(worker), /Reserve budget.*finish_merge/);
     assert.ok(worker.tools!.some(tool => tool.name === "finish_merge"));
     const source = payload.mergeSources![0]!;
     if (turn === 0) {
@@ -518,7 +518,7 @@ test("Pi merge agent inspects, applies, and finishes through core tools before a
       await assert.rejects(readFile(join(fixture.root, "chosen.txt")), { code: "ENOENT" });
       return toolResponse({ type: "toolCall", id: "inspect", name: "git", arguments: { command: "diff", args: ["--binary", source.changes!.baseCommit!, source.checkpointRef!] } });
     }
-    const toolResult = worker.messages.at(-1)!;
+    const toolResult = lastMessage(worker);
     assert.equal(toolResult.role, "toolResult");
     if (toolResult.role === "toolResult") {
       assert.equal(toolResult.isError, false, JSON.stringify(toolResult.content));

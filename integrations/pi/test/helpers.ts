@@ -13,6 +13,18 @@ initTheme("dark");
 export const readOnlyCwd = mkdtempSync(join(tmpdir(), "braid-read-only-test-"));
 after(() => rmSync(readOnlyCwd, { recursive: true, force: true }));
 
+/** Pi appends a budget reminder as the last user message; empty when no budget is finite. */
+export function budgetReminder(context: Context): string {
+  const last = context.messages.at(-1);
+  return last?.role === "user" && typeof last.content === "string" && last.content.startsWith("<system-reminder>")
+    ? last.content : "";
+}
+
+/** The last message before any trailing budget reminder. */
+export function lastMessage(context: Context): Context["messages"][number] {
+  return context.messages.at(budgetReminder(context) ? -2 : -1)!;
+}
+
 export function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
