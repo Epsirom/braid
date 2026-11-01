@@ -236,9 +236,9 @@ test("Pi runner uses exact model lookup, fresh context, decide, and one bounded 
   assert.equal(second.messages.length, 3);
   assert.deepEqual(
     fake.options.map(
-      (item) => (item as { cacheRetention: string }).cacheRetention,
+      (item) => (item as { cacheRetention?: string }).cacheRetention,
     ),
-    ["none", "none"],
+    [undefined, undefined],
   );
   assert.equal(reports.length, 2);
   assert.ok(progress.every((update) => update.contextTokens > 0));

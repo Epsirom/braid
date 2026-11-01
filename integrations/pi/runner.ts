@@ -346,10 +346,11 @@ export function createPiRunner(
         // The registry resolves stored API keys, OAuth, custom headers and endpoints.
         // complete() is stream().result(); streaming only adds observation.
         // pi-ai retries rejected requests before a response starts, honoring Retry-After.
+        // cacheRetention is left to pi-ai (default "short", or PI_CACHE_RETENTION): each
+        // request resends the whole conversation, so caching its prefix saves most input cost.
         const requestOptions = {
           signal: step,
           sessionId,
-          cacheRetention: "none" as const,
           transport: "sse" as const,
           maxRetries: maxModelRetries,
           maxRetryDelayMs: MAX_MODEL_RETRY_DELAY_MS,
