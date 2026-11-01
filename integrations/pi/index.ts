@@ -143,12 +143,13 @@ export const BRAID_WAIT_REMINDER =
 
 const BRAID_USAGE_GUIDANCE = [
   "Braid is a proactive execution primitive, not only a user-requested command.",
-  "Selection rule: for a code review, bug investigation, design comparison, test-planning request, or change spanning multiple files, call braid FIRST when two or more concerns can be handled independently. Nodes can analyze the project and implement changes in isolated Git worktrees. Do this without waiting for the user to say Braid; do not read everything in the parent and then decide whether to delegate.",
+  "Selection rule: call braid when the work has two or more parts that can run in parallel, or a step that needs its own context, such as an independent review or verification that should not inherit the author's reasoning. Code reviews, bug investigations, design comparisons, test planning, and changes spanning multiple files often qualify. Nodes can analyze the project and implement changes in isolated Git worktrees. Do this without waiting for the user to say Braid; do not read everything in the parent and then decide whether to delegate.",
   BRAID_FILESYSTEM_GUIDANCE,
   "For repeated instructions, define promptTemplates once and use prompt={template: name, variables: {name: value}} on nodes. Values are strings inserted literally into {{name}} placeholders; plain-string prompts remain supported.",
   "When Braid fits, submit a graph: use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. Read terminal outputs before relying on them.",
+  "Each node starts with a fresh context and re-reads the project, while one execution keeps its context and prompt cache across steps. Give work its own node only when it runs in parallel with other nodes, needs a context of its own (an independent review or verification, or a fresh start once a context grows too long), needs a different workspace or model, or must hold its result for review (pauseAfter) or feed a merge. Otherwise keep consecutive steps in one node: one writable node can investigate, fix, and test, where a chain such as investigate -> fix -> test makes each node rediscover what its predecessor knew.",
   "Make the delegation choice once per user request. Reminders and definition errors are not new tasks. If the same definition problem recurs, stop resubmitting and report the concrete mismatch; do not launch repeated probe/replacement jobs. In braid_update, add new nodes together with their dependencies: a node added without incoming edges can start immediately, even while another execution is paused.",
-  "Do not use braid for a simple one-step answer, a trivial direct edit, a single shell command, or when decomposition adds no value. Writable nodes can implement and test their work. The parent reviews results and performs any remaining validation after Braid completes.",
+  "Do not use braid for a simple one-step answer, a trivial direct edit, a single shell command, or work whose steps only run one after another with no step needing its own context. Writable nodes can implement and test their work. The parent reviews results and performs any remaining validation after Braid completes.",
 ].join("\n");
 
 function isJobSnapshot(value: unknown): value is JobSnapshot {
@@ -200,7 +201,7 @@ export function createBraidTools(jobs: BraidJobs, { unchangedWaitMs = UNCHANGED_
       name: "braid",
       label: "Braid",
       description:
-        "Use this tool FIRST for nontrivial engineering work: code reviews, bug investigations, design comparisons, test planning, and changes spanning multiple files. " +
+        "Use this tool when work has parts that can run in parallel or a step that needs its own context, such as an independent review; code reviews, bug investigations, design comparisons, test planning, and changes spanning multiple files often do. " +
         "Run a mutable graph of isolated LLM invocations with parallel branches and joins; the user does not need to mention Braid. " +
         "Use execute, decision, merge, or integrate nodes. Execute/decision nodes require prompt. Only decision nodes declare choices and call decide; matching choice edges activate together. Merge/integrate nodes accept multiple predecessors and an optional prompt, with no workspace or choices field. " +
         "A cycle is a loop, and any edge may close one; cycles may nest and overlap. Each round runs new executions with fresh worktrees. It starts at the target of an edge with closesCycle: true, else where an edge from outside enters the cycle, else at the node listed first. A decision's choice edge back ends the cycle when the decision chooses otherwise, and maxRuns on a node in the cycle bounds how often it runs, counted across all rounds (unlimited by default); with neither, the cycle repeats until you stop the job, and edges that leave it run in every round. The tool result lists each new cycle and what can stop it: check it for cycles you did not intend. " +
@@ -212,16 +213,17 @@ export function createBraidTools(jobs: BraidJobs, { unchangedWaitMs = UNCHANGED_
         "Nodes see only the goal, their prompt, labelled direct-predecessor outputs, and their filesystem capabilities: " +
         "no parent history, inherited extension/MCP tools, or recursive Braid tools. " +
         BRAID_FILESYSTEM_GUIDANCE + " " +
+        "Each node starts with a fresh context, so keep consecutive steps that need no separate context in one node instead of a chain of nodes. " +
         "Do not use it for a simple one-step answer or trivial direct edit. " +
         "Use braid_cancel(jobId) to stop it. Humans can open /braid for the live flow panel. " +
         "Follow the current session's Braid execution policy in the system prompt for waiting, result retrieval, and pause/notification controls. " +
         "Read result.status: failed graphs can still return successful terminal outputs.",
       promptSnippet:
-        "Use FIRST for nontrivial code review/debug/design/implementation work; set workspace=read-only for analysis/synthesis, use worktrees for edits, merge to combine snapshots, and integrate to apply changes",
+        "Use for code review/debug/design/implementation work with parallel parts or steps that need their own context; keep consecutive steps in one node; set workspace=read-only for analysis/synthesis, use worktrees for edits, merge to combine snapshots, and integrate to apply changes",
       promptGuidelines: [
-        "Call braid before direct repository inspection when a code task has two or more separable review, debugging, design, test-planning, or implementation concerns; the Braid nodes can inspect the project and edit isolated Git worktrees.",
+        "Call braid before direct repository inspection when a code task has two or more review, debugging, design, test-planning, or implementation concerns that can run in parallel, or a step that needs its own context such as an independent review; the Braid nodes can inspect the project and edit isolated Git worktrees.",
         "Use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. The user does not need to mention Braid or design the graph.",
-        "Do not use braid for simple one-step answers or trivial direct edits. Let writable nodes run shell commands and tests for their work; use merge nodes to combine and validate snapshots before explicit integration.",
+        "Do not use braid for simple one-step answers or trivial direct edits. Give work its own node only when it runs in parallel, needs its own context, needs a different workspace or model, or must hold its result for review; keep other consecutive steps in one node, since each node starts cold and re-reads the project. Let writable nodes run shell commands and tests for their work; use merge nodes to combine and validate snapshots before explicit integration.",
         BRAID_FILESYSTEM_GUIDANCE,
         "Decision nodes additionally receive decide. Execute and decision nodes can call request_replan to ask you to change the plan; they cannot change the graph themselves. Nodes cannot call recursive Braid.",
         "Leave maxToolRounds, maxToolCalls, nodeTimeoutMs, graphTimeoutMs, maxExecutions, maxTokens, maxRuns, onNodeTimeout, and onLimit unset unless the user asks for limits: tool, time, execution, token, and run budgets are unlimited by default, which suits background work. When limits are set, nodes receive system reminders of their remaining tool and time budgets before each model call, a node timeout pauses the execution, maxRuns keeps a rerun waiting, and the other limits pause the job; each sends you a reminder to raise the limit or stop.",

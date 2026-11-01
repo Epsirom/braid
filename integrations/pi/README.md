@@ -612,12 +612,19 @@ Tool selection is made by the parent Pi model. It is not possible for an
 extension to force a model tool call safely for every prompt. This adapter adds
 an explicit per-turn planning policy to Pi's system prompt and tool metadata:
 
-- for code reviews, bug investigations, design comparisons, test planning, or
-  changes spanning multiple files, call Braid first when two or more concerns
-  can be handled independently; use `workspace: "read-only"` for analysis,
+- call Braid when the work has two or more parts that can run in parallel, or a
+  step that needs its own context, such as an independent review; code reviews,
+  bug investigations, design comparisons, test planning, and changes spanning
+  multiple files often qualify; use `workspace: "read-only"` for analysis,
   review, routing, and synthesis, and worktrees for implementation;
-- do not use Braid for simple one-step answers, trivial direct edits, or a single
-  shell command; writable nodes can implement, test, and fix their own work;
+- give work its own node only when it runs in parallel, needs its own context,
+  needs a different workspace or model, or must hold its result for review or
+  feed a merge; keep other consecutive steps in one node, because each node
+  starts with a fresh context and re-reads the project, while one execution
+  keeps its context and prompt cache;
+- do not use Braid for simple one-step answers, trivial direct edits, a single
+  shell command, or steps that only run one after another; writable nodes can
+  implement, test, and fix their own work;
 - the user does not need to say “Braid” or design the graph;
 - when Braid fits, the model should submit a graph and refine it with live updates when needed, continue independent work, and retrieve the terminal outputs after
   the completion reminder.
