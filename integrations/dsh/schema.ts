@@ -73,7 +73,7 @@ export const limitFields = {
   maxExecutions: limitCount("Total started or skipped executions across all rounds and updates. Usually omit: by default there is no limit. Reaching it stops new executions and pauses the job until you raise it."),
   maxTokens: limitCount("Total input and output tokens reported by all executions. Usually omit: by default there is no limit. Checked as executions finish; reaching it pauses the job and its running executions until you raise it."),
 };
-const templateDescription = "Named prompt strings. Placeholders use {{name}} with names matching [A-Za-z_][A-Za-z0-9_]*. Node variables must match exactly; string values are inserted literally.";
+export const templateDescription = "Named prompt strings. Placeholders use {{name}} with names matching [A-Za-z_][A-Za-z0-9_]*. Node variables must match exactly; string values are inserted literally. Templates never include each other: every {{name}} is filled only from the node's variables, even when name is another template's key, and every variable must be used in the template.";
 const templates = Type.Record(Type.String(), text(), { description: templateDescription });
 export const braidParameters = Type.Object({
   goal: text("Shared goal included in every worker's context."),

@@ -147,12 +147,21 @@ function userPaused(execution: Control | undefined, executions: readonly NodeRes
 
 /** The submission receipt. The caller already has the graph it submitted. */
 export function formatReceipt(job: JobSnapshot, message: string): string {
-  const cycles = job.execution ? formatCycles(newCycles(job.execution.graph)) : "";
+  const cycles = job.execution ? formatCycles(newCycles(job.execution.graph), { handle: job.handle, revision: job.execution.revision }) : "";
   return [`Braid job ${job.handle} started (${job.status}).`, `ID: ${job.jobId}`, ...cycles ? [cycles] : [], message].join("\n");
 }
 
-/** A notice for the cycles a submission or update created, so an accidental one is noticed. */
-export function formatCycles(report: { cycles: readonly GraphCycle[]; truncated: boolean }): string {
+/** The braid_update call that makes `edge` close its cycle: edges keep their identity without closesCycle, so it is removed and re-added. */
+function closeCycleCall(edge: Edge, job: { handle: string; revision: number }): string {
+  const identity = { from: edge.from, to: edge.to, ...edge.choice !== undefined ? { choice: edge.choice } : {} };
+  return `braid_update(${JSON.stringify({ jobId: job.handle, expectedRevision: job.revision, removeEdges: [identity], addEdges: [{ ...identity, closesCycle: true }] })})`;
+}
+
+/**
+ * A notice for the cycles a submission or update created, so an accidental one is noticed.
+ * A node that waits for a choice gets the exact braid_update call that starts rounds there instead.
+ */
+export function formatCycles(report: { cycles: readonly GraphCycle[]; truncated: boolean }, job: { handle: string; revision: number }): string {
   if (!report.cycles.length) return "";
   const label = (edge: Edge) => `${edge.from} -> ${edge.to}${edge.choice !== undefined ? ` [choice=${edge.choice}]` : ""}`;
   return [`New cycles (accepted; each round runs new executions, starting at the first node listed):`,
@@ -160,7 +169,8 @@ export function formatCycles(report: { cycles: readonly GraphCycle[]; truncated:
       const path = [...cycle.nodeIds, cycle.nodeIds[0]].join(" -> ");
       const bounds = [...cycle.stops.length ? [`can stop at ${cycle.stops.map(label).join(", ")}`] : [],
         ...cycle.limitedNodeIds.length ? [`bounded by maxRuns on ${cycle.limitedNodeIds.join(", ")}`] : []];
-      const gated = cycle.choiceGated.map(edge => ` ${edge.to} runs only after ${edge.from} chooses ${edge.choice}, not before it in the first round; if each round should start at ${edge.to}, set closesCycle: true on ${label(edge)}.`).join("");
+      const gated = cycle.choiceGated.map(edge => ` ${edge.to} runs only after ${edge.from} chooses ${edge.choice}, not before it in the first round; ` +
+        `if each round should start at ${edge.to}, call ${closeCycleCall(edge, job)} now, which sets closesCycle: true on ${label(edge)}.`).join("");
       return (bounds.length ? `- ${path}: ${bounds.join("; ")}.`
         : `- ${path}: NOTHING STOPS IT, so it repeats until you pause or cancel the job. If it is unintended, remove one of its edges with braid_update; to bound it, set maxRuns on one of its nodes or route it through a decision's choice edge.`) + gated;
     }),
@@ -168,7 +178,7 @@ export function formatCycles(report: { cycles: readonly GraphCycle[]; truncated:
 }
 
 export function formatUpdate(job: JobSnapshot, previous?: Pick<BraidInput, "edges">): string {
-  const cycles = formatCycles(newCycles(job.execution!.graph, previous));
+  const cycles = formatCycles(newCycles(job.execution!.graph, previous), { handle: job.handle, revision: job.execution!.revision });
   return [`Braid job ${job.handle} updated to revision ${job.execution!.revision}.`, ...cycles ? [cycles] : [],
     `Paused executions: ${ids(job.execution!.pausedExecutionIds)}`,
     ...job.execution!.suspendedExecutionIds?.length ? [`Suspended executions: ${ids(job.execution!.suspendedExecutionIds)}`] : [],
