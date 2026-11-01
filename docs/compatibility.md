@@ -430,6 +430,9 @@ is resumed by the reminder within the same run.
   since generations count per node.
 - Pi and DSH: `WaitingItem` adds `inputsChanged`, and the waiting reminder suggests
   `braid_cancel` with `executionIds` only when it waits on suspended executions.
+- Pi and DSH: a whole-job `braid_status` shows only each node's latest output and
+  counts the earlier ones it leaves out (`2 earlier outputs not shown`). Read an
+  earlier output with `braid_status` and its `executionId`.
 
 ## Versioning
 

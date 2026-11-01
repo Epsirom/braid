@@ -27,7 +27,8 @@ It registers:
   `"nodeId": "..."` selects that node's latest invocation. Omit all IDs
   to list jobs in the current session. A job read names each execution's inputs
   and shows how long each running execution has run, its phase, and its model
-  requests and tool calls. Reading a
+  requests and tool calls. It shows only each node's latest output; read an
+  earlier one by its `executionId`. Reading a
   running job again when nothing changed returns only that progress and a reminder
   to wait.
 - `braid_update` / `braid_resume` — add, edit, rerun, or remove nodes, or release paused executions.

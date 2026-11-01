@@ -317,9 +317,14 @@ export function formatJobStatus(job: JobSnapshot, now: number, activityOf?: (exe
   if (executions.length) sections.push([`Executions (${executions.length}), oldest first; each node's latest is its current one:`, ...executions.map(execution => executionLine(execution, job.execution?.graph, now,
     execution.status === "running" && execution.executionId ? activityOf?.(execution.executionId) : undefined))].join("\n"));
   const terminal = new Set(job.result?.terminalExecutionIds ?? []);
-  const outputs = executions.filter(execution => execution.output !== undefined);
-  if (outputs.length) sections.push(["Outputs:", ...outputs.map(execution =>
-    `## ${execution.id} · ${execution.executionId}${terminal.has(execution.executionId) ? " · terminal" : ""}${execution.decision ? ` · decision ${execution.decision}` : ""}\n${execution.output}`)].join("\n\n"));
+  // Only each node's current output: earlier rounds and replaced executions would repeat on every read.
+  const current = new Map(executions.map(execution => [execution.id, execution]));
+  const produced = executions.filter(execution => execution.output !== undefined);
+  const outputs = produced.filter(execution => current.get(execution.id) === execution);
+  const earlier = produced.length - outputs.length;
+  if (produced.length) sections.push(["Outputs:", ...outputs.map(execution =>
+    `## ${execution.id} · ${execution.executionId}${terminal.has(execution.executionId) ? " · terminal" : ""}${execution.decision ? ` · decision ${execution.decision}` : ""}\n${execution.output}`),
+  ...earlier ? [`${earlier} earlier ${earlier === 1 ? "output" : "outputs"} not shown: read one with braid_status and its executionId.`] : []].join("\n\n"));
   const workspaces = executions.filter(execution => execution.workspace);
   if (workspaces.length) sections.push(["Workspaces:", ...workspaces.map(execution => `- ${execution.executionId}: ${workspaceLine(execution.workspace!)}`)].join("\n"));
   sections.push(`Current graph (revision ${job.execution.revision}):\n${formatGraph(job.execution.graph)}`);

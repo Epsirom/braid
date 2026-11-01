@@ -216,7 +216,14 @@ test("braid_status shows running progress, answers an unchanged job briefly, and
     /^Its inputs changed; releasing it reruns its node with the new inputs, and this result does not go downstream\.$/m);
   await assert.rejects(tools.cancelTool.execute("cancel", { jobId: job.handle, executionIds: ["test@1"] }, undefined, undefined, ctx),
     /test@1 is completed and held: .*\. braid_cancel with executionIds fails only running or paused executions: release a held result with braid_resume, or replace its node with braid_update\./);
+  // Releasing it reruns test; the old output stays out of job reads.
+  await tools.resumeTool.execute("release", { jobId: job.handle, expectedRevision: 1, executionIds: ["test@1"] }, undefined, undefined, ctx);
   gate.resolve();
+  await until(() => jobs.get(job.handle)!.execution!.pausedExecutionIds.includes("test@2"));
+  const rerun = await status();
+  assert.match(rerun, /^## test · test@2$/m);
+  assert.doesNotMatch(rerun, /^## test · test@1/m);
+  assert.match(rerun, /^1 earlier output not shown: read one with braid_status and its executionId\.$/m);
 });
 
 test("a waiting reminder says when a held result's inputs changed, and offers braid_cancel with executionIds only for suspended work", () => {
