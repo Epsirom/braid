@@ -35,7 +35,7 @@ function setup(t: test.TestContext) {
   const jobs = new BraidJobs(undefined, undefined, undefined, undefined, undefined, notice => { waiting.push(notice); });
   t.after(() => jobs.dispose());
   const executionOf = (handle: string, id: string) => Object.values(jobs.get(handle)!.execution!.executions).find(execution => execution.id === id)?.executionId ?? "";
-  return { jobs, tools: createBraidTools(jobs), waiting, executionOf };
+  return { jobs, tools: createBraidTools(jobs, { unchangedWaitMs: 100 }), waiting, executionOf };
 }
 
 test("the extension wakes the parent once when the last active execution leaves only held work", { timeout: 10_000 }, async () => {
@@ -206,6 +206,7 @@ test("braid_status shows running progress, answers an unchanged job briefly, and
   const unchanged = await status();
   assert.match(unchanged, /^Braid job job-\d+ · running · nothing changed since your full braid_status \d+ms ago \(revision 0\); that read still applies\.$/m);
   assert.match(unchanged, /^Running:\n- impl@1 · \d+ms so far · model for \d+ms · model requests 1, tool calls 0$/m);
+  assert.match(unchanged, /^This read waited \S+ for a change, and none came\.$/m);
   assert.match(unchanged, /end your turn \(reply without calling a tool\) instead of reading again, here or for one execution\.$/);
   assert.doesNotMatch(unchanged, /Executions/);
   // A repeated focused read of a running execution shows only new history.
@@ -231,6 +232,29 @@ test("braid_status shows running progress, answers an unchanged job briefly, and
   assert.match(rerun, /^## test · test@2$/m);
   assert.doesNotMatch(rerun, /^## test · test@1/m);
   assert.match(rerun, /^1 earlier output not shown: read one with braid_status and its executionId\.$/m);
+});
+
+test("a repeated unchanged braid_status waits for the next change, or until the call is aborted", { timeout: 10_000 }, async t => {
+  const gate = deferred<void>();
+  const { ctx, calls } = workers({ impl: gate.promise });
+  const { jobs } = setup(t);
+  const { statusTool } = createBraidTools(jobs, { unchangedWaitMs: 60_000 });
+  const text = (result: { content: unknown[] }) => (result.content[0] as { text: string }).text;
+  const status = async (signal?: AbortSignal) => text(await statusTool.execute("status", { jobId: job.handle }, signal, undefined, ctx));
+  const job = jobs.start({ goal: "Impl", nodes: [node("impl")], edges: [] }, {}, ctx);
+  await until(() => calls("impl") === 1);
+  await status();
+  // Aborting the call ends the wait with the short reply.
+  const abort = new AbortController();
+  setTimeout(() => abort.abort(), 50);
+  assert.match(await status(abort.signal), /nothing changed since your full braid_status/);
+  // A change ends the wait with the full read.
+  const started = Date.now();
+  setTimeout(() => gate.resolve(), 50);
+  const changed = await status();
+  assert.ok(Date.now() - started < 5_000, "the change ended the wait");
+  assert.doesNotMatch(changed, /nothing changed/);
+  assert.match(changed, /^- impl@1 · node impl · completed/m);
 });
 
 test("a repeated focused read lists only history after what the earlier read showed, and pages across a gap", () => {

@@ -350,11 +350,34 @@ export function statusFingerprint(job: JobSnapshot): string {
       execution.status, execution.held, execution.inputsChanged, execution.waitReason, execution.supersededBy, execution.suspension?.state, execution.decision])]);
 }
 
+/** How long a repeated full read of an unchanged running job waits for a change before it answers. */
+export const UNCHANGED_WAIT_MS = 30_000;
+
+/**
+ * Resolves once `fingerprint` differs from `seen`, after `ms`, or on abort, whichever comes first.
+ * Agents that keep reading instead of ending their turn then loop at most once per wait.
+ */
+export function untilChanged(subscribe: (listener: () => void) => () => void, fingerprint: () => string, seen: string, ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const done = () => {
+      clearTimeout(timer);
+      unsubscribe();
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    const unsubscribe = subscribe(() => { if (fingerprint() !== seen) done(); });
+    signal?.addEventListener("abort", done, { once: true });
+    if (signal?.aborted || fingerprint() !== seen) done();
+  });
+}
+
 /** A repeated full read of a running job that has not changed: progress only, and a reason to stop reading. */
-export function formatUnchanged(job: JobSnapshot, now: number, readAt: number, activityOf?: (executionId: string) => ExecutionActivity | undefined): string {
+export function formatUnchanged(job: JobSnapshot, now: number, readAt: number, activityOf?: (executionId: string) => ExecutionActivity | undefined, waitedMs?: number): string {
   const running = Object.values(job.execution?.executions ?? {}).filter(execution => execution.status === "running");
   return [
     `Braid job ${job.handle} · ${job.status} · nothing changed since your full braid_status ${duration(now - readAt)} ago (revision ${job.execution?.revision ?? 0}); that read still applies.`,
+    ...waitedMs ? [`This read waited ${duration(waitedMs)} for a change, and none came.`] : [],
     ...running.length ? ["Running:", ...running.map(execution =>
       `- ${[execution.executionId, ...progress(execution, now, activityOf?.(execution.executionId!)), ...execution.suspension ? [`${execution.suspension.state}, ${pausedBy(execution.suspension)}`] : []].join(" · ")}`)] : [],
     `A reminder wakes you when an execution finishes or the job needs you: ${END_TURN} instead of reading again, here or for one execution.`,

@@ -464,6 +464,13 @@ is resumed by the reminder within the same run.
   `activityBefore` is unchanged. `formatActivity` takes an optional `seen`
   argument, `formatNodeStatus` an optional `seen` field, and `focusedRead`
   records reads.
+- Pi and DSH: that repeated read of an unchanged running job now first waits up
+  to 30 seconds for the job to change. A change ends the wait with the full
+  status; otherwise the short reply follows and says how long it waited. An
+  aborted call stops waiting at once. Agents that keep reading instead of ending
+  their turn then loop at most once per wait. `createBraidTools` takes an
+  optional `unchangedWaitMs` option (Pi: second argument, DSH: third), and
+  `formatUnchanged` an optional `waitedMs` argument.
 - Pi: while a Braid job is outstanding, `braid_finish` says the call does not end
   the turn or the run, and how to end the turn.
 

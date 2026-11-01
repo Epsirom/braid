@@ -46,7 +46,7 @@ agent's model captured at submission.
 | --- | --- |
 | Submit a graph | `braid({ goal, nodes, edges, promptTemplates?, options? })` |
 | List this agent's jobs | `braid_status({})` |
-| Read a job | `braid_status({ jobId })`; executions name their inputs, running ones show elapsed time, phase, and model and tool counts, only each node's latest output is shown, and a repeated read of an unchanged running job returns only that progress |
+| Read a job | `braid_status({ jobId })`; executions name their inputs, running ones show elapsed time, phase, and model and tool counts, only each node's latest output is shown, and a repeated read of an unchanged running job waits up to 30 seconds for a change, then returns only that progress if none came |
 | Read a specific invocation | `braid_status({ jobId, executionId })`; reading the same running invocation again lists only its new history |
 | Read a node's latest invocation | `braid_status({ jobId, nodeId })` |
 | Page earlier activity of an invocation | `braid_status({ jobId, executionId, activityBefore })` |

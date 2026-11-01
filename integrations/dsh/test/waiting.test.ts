@@ -10,7 +10,7 @@ const node = (id: string, extra: { pauseAfter?: boolean } = {}) => ({ type: "exe
 const graph = (...nodes: ReturnType<typeof node>[]) => ({ goal: "Wait for the parent", nodes, edges: [] });
 
 /** Answers each node by the marker in its prompt. A gate holds a node's first answer; `tools` nodes ask for a tool first, so they reach a checkpoint. */
-function setup(gates: Record<string, Promise<void>> = {}, tools: string[] = []) {
+function setup(gates: Record<string, Promise<void>> = {}, tools: string[] = [], unchangedWaitMs = 100) {
   const counts = new Map<string, number>();
   const runtime = llm(async options => {
     const id = /task:(\w+)/.exec(JSON.stringify(options.messages))?.[1] ?? "?";
@@ -21,8 +21,9 @@ function setup(gates: Record<string, Promise<void>> = {}, tools: string[] = []) 
   });
   const waiting: WaitingNotice[] = [];
   const jobs = new BraidJobs(runtime, undefined, undefined, undefined, undefined, notice => { waiting.push(notice); });
-  const braidTools = createBraidTools(() => jobs, () => { throw new Error("unused"); });
-  const run = (name: string, args: object) => braidTools.find(tool => tool.name === name)!.execute(args as never, { signal: new AbortController().signal } as never) as unknown as Promise<ToolValue>;
+  const braidTools = createBraidTools(() => jobs, () => { throw new Error("unused"); }, { unchangedWaitMs });
+  const run = (name: string, args: object, signal = new AbortController().signal) =>
+    braidTools.find(tool => tool.name === name)!.execute(args as never, { signal } as never) as unknown as Promise<ToolValue>;
   const executionOf = (handle: string, id: string) => Object.values(jobs.get(handle).execution.executions).find(execution => execution.id === id)?.executionId ?? "";
   return { jobs, run, waiting, executionOf, calls: (id: string) => counts.get(id) ?? 0 };
 }
@@ -138,6 +139,7 @@ test("braid_status shows running progress, answers an unchanged job briefly, and
   const unchanged = await status();
   assert.match(unchanged, /^Braid job job-\d+ · running · nothing changed since your full braid_status \d+ms ago \(revision 0\); that read still applies\.$/m);
   assert.match(unchanged, /^Running:\n- impl@1 · \d+ms so far · model for \d+ms · model requests 1, tool calls 0$/m);
+  assert.match(unchanged, /^This read waited \S+ for a change, and none came\.$/m);
   assert.match(unchanged, /end your turn \(reply without calling a tool\) instead of reading again, here or for one execution\.$/);
   assert.doesNotMatch(unchanged, /Executions/);
   // A repeated focused read of a running execution shows only new history.
@@ -162,6 +164,27 @@ test("braid_status shows running progress, answers an unchanged job briefly, and
   assert.doesNotMatch(rerun, /^## test · test@1/m);
   assert.match(rerun, /^1 earlier output not shown: read one with braid_status and its executionId\.$/m);
   await run("braid_cancel", { jobId: job.handle });
+});
+
+test("a repeated unchanged braid_status waits for the next change, or until the call is aborted", async () => {
+  const impl = gate();
+  const { jobs, run, calls } = setup({ impl: impl.promise }, [], 60_000);
+  const job = jobs.start({ goal: "Impl", nodes: [node("impl")], edges: [] }, {}, context());
+  await until(() => calls("impl") === 1);
+  const status = async (signal?: AbortSignal) => (await run("braid_status", { jobId: job.handle }, signal)).text;
+  await status();
+  // Aborting the call ends the wait with the short reply.
+  const abort = new AbortController();
+  setTimeout(() => abort.abort(), 50);
+  assert.match(await status(abort.signal), /nothing changed since your full braid_status/);
+  // A change ends the wait with the full read.
+  const started = Date.now();
+  setTimeout(() => impl.release(), 50);
+  const changed = await status();
+  assert.ok(Date.now() - started < 5_000, "the change ended the wait");
+  assert.doesNotMatch(changed, /nothing changed/);
+  assert.match(changed, /^- impl@1 · node impl · completed/m);
+  await jobs.wait(job.handle);
 });
 
 test("resuming a running execution that will be held says when and what to do now; job reads name each execution's inputs", async () => {

@@ -16,7 +16,7 @@ import { registerBraidCommand, registerBraidWidget } from "./command.js";
 import { registerReviewCommand } from "./review.js";
 import { BRAID_DRAIN_GUIDANCE, BRAID_FINISH_GUIDANCE, BRAID_HOLD_GUIDANCE, holdsSettlement, isSingleShot, registerDrain } from "./drain.js";
 import { renderGraphCall, renderGraphResult, renderNodeResult } from "./display.js";
-import { type ActivitySeen, focusedRead, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatPausePending, formatReceipt, formatReplanRequest, formatResume, formatTimeoutPause, formatUnchanged, formatUpdate, formatWaiting, statusFingerprint } from "./status-text.js";
+import { type ActivitySeen, focusedRead, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatPausePending, formatReceipt, formatReplanRequest, formatResume, formatTimeoutPause, formatUnchanged, formatUpdate, formatWaiting, statusFingerprint, UNCHANGED_WAIT_MS, untilChanged } from "./status-text.js";
 
 const text = (description?: string) => Type.String({ minLength: 1, pattern: "\\S", ...(description ? { description } : {}) });
 const prompt = () => Type.Union([
@@ -190,7 +190,7 @@ function explained<T>(act: () => T): T {
   }
 }
 
-export function createBraidTools(jobs: BraidJobs) {
+export function createBraidTools(jobs: BraidJobs, { unchangedWaitMs = UNCHANGED_WAIT_MS }: { unchangedWaitMs?: number } = {}) {
   /** The last full braid_status read of each job, to answer an unchanged one briefly. */
   const lastRead = new Map<string, { fingerprint: string; at: number }>();
   /** The last focused read of each running execution, to show only its new activity. */
@@ -298,7 +298,7 @@ export function createBraidTools(jobs: BraidJobs) {
     name: "braid_status",
     label: "Braid status",
     description:
-      "Retrieve a Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Add executionId for an exact execution, or nodeId for the latest instance, including intermediate results while the job runs. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and recent history. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the current graph revision and paused execution IDs for live control. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. Usage is Pi's provider accounting, including rounds from failed nodes. Prefer the short handle from submission/reminders. Omit all IDs to list jobs in this session. Follow the current session's Braid execution policy for result retrieval; do not sleep, use a timer, or poll in a loop to wait for a job.",
+      "Retrieve a Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Add executionId for an exact execution, or nodeId for the latest instance, including intermediate results while the job runs. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and recent history. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the current graph revision and paused execution IDs for live control. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. Usage is Pi's provider accounting, including rounds from failed nodes. Prefer the short handle from submission/reminders. Omit all IDs to list jobs in this session. Follow the current session's Braid execution policy for result retrieval; do not sleep, use a timer, or poll in a loop to wait for a job. Reading an unchanged running job again waits up to 30s for a change before it answers.",
     parameters: statusParameters,
     renderResult(result, options, theme, ctx) {
       const job = result.details;
@@ -348,7 +348,7 @@ export function createBraidTools(jobs: BraidJobs) {
           content: [{ type: "text", text: formatJobList(jobs.list()) }],
           details: undefined,
         };
-      const job = jobs.get(params.jobId);
+      let job = jobs.get(params.jobId);
       if (!job) throw jobs.unknownJob(params.jobId);
       if (params.nodeId !== undefined || params.executionId !== undefined) {
         const node = jobs.getNode(params.jobId, params.nodeId, params.executionId);
@@ -363,14 +363,22 @@ export function createBraidTools(jobs: BraidJobs) {
           ...job, selectedNode: node, ...(activity ? { selectedActivity: activity } : {}), ...(result.path ? { nodeOutputPath: result.path } : {}),
         } };
       }
+      const jobId = job.jobId;
+      const activityOf = (executionId: string) => jobs.getActivity(jobId, executionId, { limit: 0 });
+      // A running job that has not changed since the last full read waits for a change, then gets a short reply if none came.
+      const previous = lastRead.get(jobId);
+      let waitedMs: number | undefined;
+      if (job.status === "running" && previous?.fingerprint === statusFingerprint(job)) {
+        const started = Date.now();
+        await untilChanged(listener => jobs.subscribe(listener), () => statusFingerprint(jobs.get(jobId) ?? job!), previous.fingerprint, unchangedWaitMs, signal);
+        job = jobs.get(jobId) ?? job;
+        waitedMs = Date.now() - started;
+      }
       const now = Date.now();
-      const activityOf = (executionId: string) => jobs.getActivity(job.jobId, executionId, { limit: 0 });
-      // A running job that has not changed since the last full read gets a short reply.
       const fingerprint = statusFingerprint(job);
-      const previous = lastRead.get(job.jobId);
       if (job.status === "running" && previous?.fingerprint === fingerprint)
-        return { content: [{ type: "text", text: formatUnchanged(job, now, previous.at, activityOf) }], details: job };
-      lastRead.set(job.jobId, { fingerprint, at: now });
+        return { content: [{ type: "text", text: formatUnchanged(job, now, previous.at, activityOf, waitedMs) }], details: job };
+      lastRead.set(jobId, { fingerprint, at: now });
       const result = await boundedText(formatJobStatus(job, now, activityOf), "status.txt");
       const details: BraidStatusDetails = result.path ? { ...job, fullOutputPath: result.path } : job;
       // Saving a running snapshot can race job completion; claim usage only
