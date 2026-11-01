@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { BraidJobs, type WaitingNotice } from "../jobs.js";
 import { createBraidTools, type ToolValue } from "../tools.js";
-import { formatWaiting } from "../status-text.js";
+import { formatReceipt, formatWaiting } from "../status-text.js";
 import { answer, calls, context, llm, until } from "./helpers.js";
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20));
@@ -126,4 +126,25 @@ test("status says which choice a node that runs only through a choice edge waits
     /^Execution impl@1 · node impl \(execute\) · pending · waiting: runs only after review chooses again$/m);
   join.release();
   await run("braid_cancel", { jobId: job.handle });
+});
+
+test("the call a cycle notice suggests, applied as written, starts each round at the node that waited for a choice", async () => {
+  const tests = gate();
+  const { jobs, run, calls } = setup({ tests: tests.promise });
+  const job = jobs.start({ goal: "Loop", nodes: [node("impl"), node("tests"), node("join"),
+    { type: "decision", id: "review", prompt: "task:review", choices: ["again", "done"] }], edges: [
+    { from: "impl", to: "join" }, { from: "tests", to: "join" }, { from: "join", to: "review" }, { from: "review", to: "impl", choice: "again" },
+  ] }, {}, context());
+  const call = /call braid_update\((.*?)\) now/.exec(formatReceipt(job, ""))?.[1];
+  assert.equal(call, `{"jobId":"${job.handle}","expectedRevision":0,"removeEdges":[{"from":"review","to":"impl","choice":"again"}],` +
+    `"addEdges":[{"from":"review","to":"impl","choice":"again","closesCycle":true}]}`);
+  assert.equal(calls("impl"), 0, "impl waits for review");
+  await run("braid_update", JSON.parse(call!));
+  await until(() => calls("impl") === 1);
+  assert.equal(calls("join"), 0, "join waits for impl in the first round");
+  tests.release();
+  await until(() => calls("join") === 1);
+  await run("braid_cancel", { jobId: job.handle });
+  await jobs.wait(job.handle);
+  await jobs.dispose();
 });

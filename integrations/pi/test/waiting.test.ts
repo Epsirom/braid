@@ -192,3 +192,26 @@ test("status says which choice a node that runs only through a choice edge waits
     /^Execution impl@1 · node impl \(execute\) · pending · waiting: runs only after review chooses again$/m);
   gate.resolve();
 });
+
+test("the call a cycle notice suggests, applied as written, starts each round at the node that waited for a choice", { timeout: 10_000 }, async t => {
+  const gate = deferred<void>();
+  const { ctx, calls } = workers({ tests: gate.promise });
+  const { jobs, tools } = setup(t);
+  const receipt = await tools.braidTool.execute("submit", { goal: "Loop", nodes: [node("impl"), node("tests"), node("join"),
+    { type: "decision", id: "review", prompt: "task:review", choices: ["again", "done"] }], edges: [
+    { from: "impl", to: "join" }, { from: "tests", to: "join" }, { from: "join", to: "review" }, { from: "review", to: "impl", choice: "again" },
+  ] }, undefined, undefined, ctx);
+  const handle = receipt.details!.handle;
+  const text = (receipt.content[0] as { text: string }).text;
+  const call = /call braid_update\((.*?)\) now/.exec(text)?.[1];
+  assert.equal(call, `{"jobId":"${handle}","expectedRevision":0,"removeEdges":[{"from":"review","to":"impl","choice":"again"}],` +
+    `"addEdges":[{"from":"review","to":"impl","choice":"again","closesCycle":true}]}`);
+  assert.equal(calls("impl"), 0, "impl waits for review");
+  await tools.updateTool.execute("fix", JSON.parse(call!), undefined, undefined, ctx);
+  await until(() => calls("impl") === 1);
+  assert.equal(calls("join"), 0, "join waits for impl in the first round");
+  gate.resolve();
+  await until(() => calls("join") === 1);
+  jobs.cancel(handle);
+  await jobs.wait(handle);
+});

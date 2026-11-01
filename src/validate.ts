@@ -99,7 +99,9 @@ function renderPrompt(value: unknown, nodeId: string, templates: Map<string, Pro
     variables.set(name, variable);
   }
   for (const name of template.variables) {
-    requireValid(variables.has(name), `${label} is missing variable '${name}'`);
+    // {{name}} never pulls in the template of that name.
+    requireValid(variables.has(name), `${label} is missing variable '${name}'` +
+      (templates.has(name) ? `; templates cannot include other templates, so pass the text as variable '${name}' or copy it into '${value.template}'` : ""));
   }
   // One pass over the parsed template: inserted values are never parsed or evaluated.
   const rendered = template.parts.map(part => typeof part === "string" ? part : variables.get(part.variable)!).join("");

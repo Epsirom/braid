@@ -117,6 +117,8 @@ const invalid: [string, BraidInput, RegExp][] = [
   ...[null, 3, true, {}].map(target => ["non-string variable", input({ template: "inspect", variables: { target } }), /Node 'review'.*template 'inspect'.*variable 'target'.*string/] as [string, BraidInput, RegExp]),
   ["missing variable", input({ template: "inspect", variables: {} }), /Node 'review'.*template 'inspect'.*missing variable 'target'/],
   ["inherited variable", input({ template: "inspect", variables: Object.create({ target: "inherited" }) }), /missing variable 'target'/],
+  ["template used as a variable", input({ template: "inspect", variables: {} }, { inspect: "Inspect {{target}}.", target: "the parser" }),
+    /template 'inspect' is missing variable 'target'; templates cannot include other templates, so pass the text as variable 'target' or copy it into 'inspect'$/],
   ["unused variable", input({ template: "inspect", variables: { target: "x", typo: "y" } }), /Node 'review'.*template 'inspect'.*unused variable 'typo'/],
   ["empty rendered prompt", input({ template: "inspect", variables: { target: "  " } }, { inspect: "{{target}}" }), /Node 'review'.*template 'inspect'.*empty prompt/],
 ];

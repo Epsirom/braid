@@ -2,7 +2,7 @@ import { Type, type TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { GraphUpdate } from "@chrok/braid";
-import { BRAID_ASYNC_GUIDANCE, braidParameters, edgeIdentityParameters, edgeParameters, limitFields, nodeParameters } from "./schema.js";
+import { BRAID_ASYNC_GUIDANCE, braidParameters, edgeIdentityParameters, edgeParameters, limitFields, nodeParameters, templateDescription } from "./schema.js";
 import type { BraidJobs, JobSnapshot } from "./jobs.js";
 import { boundedText, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUpdate } from "./status-text.js";
 
@@ -106,7 +106,7 @@ export function createBraidTools(
       jobId: id, expectedRevision: revision,
       upsertNodes: Type.Optional(Type.Array(nodeParameters)), removeNodeIds: Type.Optional(Type.Array(id)),
       addEdges: Type.Optional(Type.Array(edgeParameters)), removeEdges: Type.Optional(Type.Array(edgeIdentityParameters)),
-      promptTemplates: Type.Optional(Type.Record(Type.String(), id)),
+      promptTemplates: Type.Optional(Type.Record(Type.String(), id, { description: `${templateDescription} Replaces the entire template map; omit to preserve it. Include every template still referenced by nodes.` })),
       resume: Type.Optional(Type.Array(id, { uniqueItems: true })),
       resumeOptions: Type.Optional(Type.Object({ nodeTimeoutMs: Type.Optional(nodeTimeoutMs) }, { additionalProperties: false })),
     }, { additionalProperties: false }), (args, context) => {

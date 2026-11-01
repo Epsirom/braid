@@ -96,7 +96,7 @@ const edgeIdentityParameters = Type.Object({
   to: text("Target node ID."),
   choice: Type.Optional(text("The edge's choice, when it has one.")),
 }, { additionalProperties: false });
-const templateDescription = "Named prompt strings. Placeholders use {{name}} with names matching [A-Za-z_][A-Za-z0-9_]*. Node variables must match exactly; string values are inserted literally.";
+const templateDescription = "Named prompt strings. Placeholders use {{name}} with names matching [A-Za-z_][A-Za-z0-9_]*. Node variables must match exactly; string values are inserted literally. Templates never include each other: every {{name}} is filled only from the node's variables, even when name is another template's key, and every variable must be used in the template.";
 const templates = Type.Record(Type.String(), text(), { description: templateDescription });
 const braidParameters = Type.Object({
   goal: text("Shared goal included in every worker's context."),
