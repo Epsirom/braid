@@ -291,7 +291,6 @@ export function createPiRunner(
       }
       transcripts?.human(executionId!, inputs.map(input => input.text), true);
     };
-    const systemPrompt = context.systemPrompt!;
     const sessionId = crypto.randomUUID();
     const usage = { inputTokens: 0, outputTokens: 0 };
     const textParts: string[] = [];
@@ -300,6 +299,7 @@ export function createPiRunner(
     let decided = false;
     let actualModel = name;
     let reportedContextTokens: number | undefined;
+    let reminder: Context["messages"][number] | undefined;
 
     const prepareRequest = async (): Promise<void> => {
       request.signal.throwIfAborted();
@@ -322,8 +322,13 @@ export function createPiRunner(
           "When a tool budget reaches zero, make no further tool calls and return your final answer. Reserve budget for decide or finish_merge if required.",
         );
       }
-      // Rebuilt per attempt: a suspension moves the node deadline.
-      context.systemPrompt = systemPrompt + formatBudgetReminder(request, budgets);
+      // The reminder joins the conversation rather than the system prompt, so each request
+      // extends the previous one and the provider's cached prefix stays valid. It is rebuilt per
+      // attempt (a suspension moves the node deadline): a retry replaces the unanswered one.
+      if (reminder && context.messages.at(-1) === reminder) context.messages.pop();
+      const text = formatBudgetReminder(request, budgets).trim();
+      reminder = text ? { role: "user", content: text, timestamp: Date.now() } : undefined;
+      if (reminder) context.messages.push(reminder);
       reportProgress({
         nodeId: request.node.id,
         ...(request.execution.executionId ? { executionId: request.execution.executionId } : {}),

@@ -103,6 +103,7 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
       let toolRounds = 0, toolCalls = 0, decided = false;
       let contextTokens = 0;
       let contextSource: NodeProgress["contextSource"] = "estimate";
+      let reminder: RequestMessage | undefined;
       const reports: TokenUsage[] = [];
       const output: string[] = [];
       const progress = (phase: NodeProgress["phase"]) => {
@@ -116,11 +117,17 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
         const budgets = [
           ...(options.maxToolRounds === undefined ? [] : [`Tool round budget: ${toolRounds}/${options.maxToolRounds} used.`]),
           ...(options.maxToolCalls === undefined ? [] : [`Tool call budget: ${toolCalls}/${options.maxToolCalls} used; rejected requests count.`]),
-          "Reserve budget for decide or finish_merge. At zero remaining, return your final answer without further tools.",
         ];
+        // Without a finite budget there is no reminder, so the conversation gains no message.
+        if (budgets.length) budgets.push("Reserve budget for decide or finish_merge. At zero remaining, return your final answer without further tools.");
         const activeTools = tools.filter(tool => !decided || tool.name !== "decide");
-        const prompt = system + formatBudgetReminder(request, budgets);
-        contextTokens = Math.ceil(JSON.stringify({ messages, system: prompt, tools: activeTools }).length / 4);
+        // The reminder joins the conversation rather than the system prompt, so each request extends
+        // the previous one and the provider's cached prefix stays valid. A retry replaces the unanswered one.
+        if (reminder && messages.at(-1) === reminder) messages.pop();
+        const text = formatBudgetReminder(request, budgets).trim();
+        reminder = text ? { role: "user", content: [{ type: "text", text }] } : undefined;
+        if (reminder) messages.push(reminder);
+        contextTokens = Math.ceil(JSON.stringify({ messages, system, tools: activeTools }).length / 4);
         contextSource = "estimate";
         progress("model");
         const assembler = new BlockAssembler();
@@ -129,7 +136,7 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
         const step = request.stepSignal?.() ?? request.signal;
         activity?.modelRequest();
         try {
-          for await (const chunk of llm.stream({ provider, model, messages, system: prompt, tools: activeTools, signal: step })) {
+          for await (const chunk of llm.stream({ provider, model, messages, system, tools: activeTools, signal: step })) {
             step.throwIfAborted();
             assembler.push(chunk);
             if (chunk.type === "finish") finished = true;

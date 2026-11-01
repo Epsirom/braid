@@ -166,8 +166,8 @@ export function createOpenAICompatibleRunner(
           ]
         : undefined;
 
-    const systemPrompt = messages[0]!.content as string;
     let usage: TokenUsage | undefined;
+    let reminder: Record<string, unknown> | undefined;
     const complete = async (withTool: boolean): Promise<Completion> => {
       while (true) {
         // A pause takes effect here, between requests.
@@ -181,7 +181,12 @@ export function createOpenAICompatibleRunner(
       }
     };
     const attempt = async (withTool: boolean, signal: AbortSignal): Promise<Completion> => {
-      messages[0]!.content = systemPrompt + formatBudgetReminder(request);
+      // The reminder joins the conversation rather than the system prompt, so each request extends
+      // the previous one and the provider's cached prefix stays valid. A retry replaces the unanswered one.
+      if (reminder && messages.at(-1) === reminder) messages.pop();
+      const text = formatBudgetReminder(request).trim();
+      reminder = text ? { role: "user", content: text } : undefined;
+      if (reminder) messages.push(reminder);
       const response = await fetchImpl(url, {
         method: "POST",
         headers: {

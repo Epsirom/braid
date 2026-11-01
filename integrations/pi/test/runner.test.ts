@@ -8,7 +8,7 @@ import type { ModelRequest } from "@chrok/braid";
 import type { AssistantMessage, Context, Model, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { createAvailableReadTools } from "../read-tools.js";
-import { readOnlyCwd } from "./helpers.js";
+import { budgetReminder, readOnlyCwd } from "./helpers.js";
 
 const readToolNames = (await createAvailableReadTools(readOnlyCwd)).tools.map(tool => tool.name);
 
@@ -97,23 +97,28 @@ for (const options of [{}, { maxToolRounds: Infinity, maxToolCalls: Infinity }])
     assert.equal(fake.contexts.length, 14);
     for (const context of fake.contexts as Context[]) {
       assert.doesNotMatch(context.systemPrompt!, /system-reminder/);
+      assert.equal(budgetReminder(context), "");
     }
   });
 }
 
-test("finite tool budgets refresh the system reminder and allow a final answer at the cap", async () => {
+test("finite tool budgets add a reminder per request without changing earlier context, and allow a final answer at the cap", async () => {
   const fake = fakeRegistry([reads(2), message([{ type: "text", text: "Done" }])]);
   const output = await createPiRunner(fake.registry, { cwd: readOnlyCwd, maxToolRounds: 1, maxToolCalls: 2 })(
     request({ type: "execute", id: "work", prompt: "Work" }),
   );
   assert.equal(output.output, "Done");
   const [first, last] = fake.contexts as Context[];
-  assert.match(first!.systemPrompt!, /Tool round budget: 0\/1 used; 1 remaining/);
-  assert.match(first!.systemPrompt!, /Tool call budget: 0\/2 used; 2 remaining/);
-  assert.match(last!.systemPrompt!, /Tool round budget: 1\/1 used; 0 remaining/);
-  assert.match(last!.systemPrompt!, /Tool call budget: 2\/2 used; 0 remaining/);
-  assert.match(last!.systemPrompt!, /make no further tool calls/);
-  assert.equal(last!.systemPrompt!.match(/<system-reminder>/g)?.length, 1);
+  assert.match(budgetReminder(first!), /Tool round budget: 0\/1 used; 1 remaining/);
+  assert.match(budgetReminder(first!), /Tool call budget: 0\/2 used; 2 remaining/);
+  assert.match(budgetReminder(last!), /Tool round budget: 1\/1 used; 0 remaining/);
+  assert.match(budgetReminder(last!), /Tool call budget: 2\/2 used; 0 remaining/);
+  assert.match(budgetReminder(last!), /make no further tool calls/);
+  // The system prompt stays fixed and each request extends the previous one, so a provider
+  // can reuse the cached prefix.
+  assert.equal(last!.systemPrompt, first!.systemPrompt);
+  assert.doesNotMatch(last!.systemPrompt!, /system-reminder/);
+  assert.deepEqual(last!.messages.slice(0, first!.messages.length), first!.messages);
 });
 
 for (const scenario of [
@@ -150,7 +155,7 @@ test("decision calls count toward finite budgets and can finish at the cap", asy
   });
   assert.equal(output.output, "Go");
   assert.deepEqual(choices, ["go"]);
-  assert.match((fake.contexts[1] as Context).systemPrompt!, /Tool call budget: 1\/1 used; 0 remaining/);
+  assert.match(budgetReminder(fake.contexts[1] as Context), /Tool call budget: 1\/1 used; 0 remaining/);
 });
 
 test("time reminders refresh before each model call", async (t) => {
@@ -168,11 +173,12 @@ test("time reminders refresh before each model call", async (t) => {
     deadlines: { node: 1_000, graph: 2_000 },
   });
   const [first, last] = fake.contexts as Context[];
-  assert.match(first!.systemPrompt!, /Node time budget: 900 ms remaining/);
-  assert.match(first!.systemPrompt!, /Graph time budget: 1900 ms remaining/);
-  assert.match(last!.systemPrompt!, /Node time budget: 800 ms remaining/);
-  assert.match(last!.systemPrompt!, /Graph time budget: 1800 ms remaining/);
-  assert.doesNotMatch(last!.systemPrompt!, /Tool call budget/);
+  assert.match(budgetReminder(first!), /Node time budget: 900 ms remaining/);
+  assert.match(budgetReminder(first!), /Graph time budget: 1900 ms remaining/);
+  assert.match(budgetReminder(last!), /Node time budget: 800 ms remaining/);
+  assert.match(budgetReminder(last!), /Graph time budget: 1800 ms remaining/);
+  assert.doesNotMatch(budgetReminder(last!), /Tool call budget/);
+  assert.deepEqual(last!.messages.slice(0, first!.messages.length), first!.messages);
 });
 
 test("Pi runner uses exact model lookup, fresh context, decide, and one bounded tool continuation", async () => {

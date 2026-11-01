@@ -101,7 +101,7 @@ test("OpenAI base URLs preserve internal slashes and remove only trailing slashe
   }
 });
 
-test("OpenAI time reminders refresh on the decision continuation", async (t) => {
+test("OpenAI time reminders refresh on the decision continuation without changing earlier messages", async (t) => {
   const clock = mockClock(t);
   const fake = queuedFetch([completion(null, [toolCall()]), completion("Done")]);
   const runner = createOpenAICompatibleRunner({
@@ -116,9 +116,13 @@ test("OpenAI time reminders refresh on the decision continuation", async (t) => 
     runner, nodeTimeoutMs: 200, graphTimeoutMs: 300,
   });
   assert.equal(result.status, "completed");
-  assert.match(fake.calls[0]!.messages[0]!.content!, /Node time budget: 200 ms remaining/);
-  assert.match(fake.calls[1]!.messages[0]!.content!, /Node time budget: 150 ms remaining/);
-  assert.match(fake.calls[1]!.messages[0]!.content!, /Graph time budget: 250 ms remaining/);
+  const [first, second] = fake.calls.map(call => call.messages);
+  assert.match(first!.at(-1)!.content!, /Node time budget: 200 ms remaining/);
+  assert.match(second!.at(-1)!.content!, /Node time budget: 150 ms remaining/);
+  assert.match(second!.at(-1)!.content!, /Graph time budget: 250 ms remaining/);
+  // Each request extends the previous one, so a provider can reuse its cached prefix.
+  assert.deepEqual(second!.slice(0, first!.length), first);
+  assert.doesNotMatch(first![0]!.content!, /system-reminder/);
 });
 
 test("OpenAI-compatible adapter runs decision -> parallel branches -> join end to end", async () => {

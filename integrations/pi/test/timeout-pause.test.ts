@@ -6,7 +6,7 @@ import { BraidJobs, type ControlNotice, type TimeoutPause } from "../jobs.js";
 import braidExtension, { createBraidTools, formatControlNotice } from "../index.js";
 import type { BraidPanel } from "../command.js";
 import { formatTimeoutPause } from "../status-text.js";
-import { context, input, response } from "./helpers.js";
+import { budgetReminder, context, input, response } from "./helpers.js";
 
 const plainTheme = { fg: (_color: string, value: string) => value, bg: (_color: string, value: string) => value, bold: (value: string) => value } as never;
 const textOf = (result: { content: unknown[] }) => (result.content[0] as { text: string }).text;
@@ -69,8 +69,11 @@ test("a node timeout pauses the execution, reports what it was doing, and resume
   assert.equal(job.status, "completed", JSON.stringify(job.result?.nodes.a?.error));
   assert.equal(job.result!.nodes.a!.output, "finished after timeout");
   assert.equal(requests.length, 2);
-  assert.deepEqual(requests[1]!.messages, requests[0]!.messages, "the interrupted response never entered the context");
-  assert.match(requests[1]!.systemPrompt!, /Node time budget: (4\d{3}|5000) ms remaining/);
+  // The retry replaces the unanswered budget reminder; the system prompt stays the same.
+  assert.deepEqual(requests[1]!.messages.slice(0, -1), requests[0]!.messages.slice(0, -1), "the interrupted response never entered the context");
+  assert.equal(requests[1]!.messages.length, 2);
+  assert.match(budgetReminder(requests[1]!), /Node time budget: (4\d{3}|5000) ms remaining/);
+  assert.equal(requests[1]!.systemPrompt, requests[0]!.systemPrompt);
 });
 
 test("braid_cancel with executionIds fails a timeout pause; a user cancellation sends a notice", { timeout: 10_000 }, async t => {
