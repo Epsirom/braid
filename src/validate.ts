@@ -131,16 +131,18 @@ export function compileGraph(input: BraidInput): Graph {
     requireValid(text(node.id), "Node id must be a non-empty string");
     requireValid(!node.id.includes("@"), `Node id '${node.id}' must not contain '@', which separates a node ID from an instance's generation`);
     requireValid(
-      node.type === "execute" || node.type === "decision" || (node.type === "merge" || node.type === "integrate"),
-      `Node '${node.id}': unknown node type; expected execute, decision, merge, or integrate`,
+      (node.type as string) !== "decision",
+      `Node '${node.id}': the decision node type was removed; use type "execute" with the same choices`,
+    );
+    requireValid(
+      node.type === "execute" || node.type === "merge" || node.type === "integrate",
+      `Node '${node.id}': unknown node type; expected execute, merge, or integrate`,
     );
     fields(
       node,
-      node.type === "decision"
+      node.type === "execute"
         ? ["type", "id", "prompt", "model", "choices", "workspace", "notifyOnCompletion", "requireSuccess", "pauseAfter", "maxRuns"]
-        : node.type === "execute"
-          ? ["type", "id", "prompt", "model", "workspace", "notifyOnCompletion", "requireSuccess", "pauseAfter", "maxRuns"]
-          : ["type", "id", "prompt", "model", "notifyOnCompletion", "requireSuccess", "pauseAfter", "maxRuns"],
+        : ["type", "id", "prompt", "model", "notifyOnCompletion", "requireSuccess", "pauseAfter", "maxRuns"],
       `Node '${node.id}' (${node.type})`,
     );
     requireValid(!byId.has(node.id), `Duplicate node id '${node.id}'`);
@@ -176,10 +178,10 @@ export function compileGraph(input: BraidInput): Graph {
       ...(node.maxRuns !== undefined ? { maxRuns: node.maxRuns } : {}),
       ...(workspace !== undefined ? { workspace } as const : {}),
     };
-    if (node.type === "decision") {
+    if (node.type === "execute" && node.choices !== undefined) {
       requireValid(
         Array.isArray(node.choices) && node.choices.length > 0,
-        `Decision '${node.id}' needs at least one choice`,
+        `Node '${node.id}': choices needs at least one choice; omit it for a node that does not route`,
       );
       const choices: unknown[] = [...node.choices];
       requireValid(choices.every(text), `Invalid choice on '${node.id}'`);
@@ -187,7 +189,7 @@ export function compileGraph(input: BraidInput): Graph {
         new Set(choices).size === choices.length,
         `Duplicate choices on '${node.id}'`,
       );
-      byId.set(node.id, { type: "decision", ...common, choices });
+      byId.set(node.id, { type: "execute", ...common, choices: choices as string[] });
     } else {
       byId.set(node.id, { type: node.type, ...common });
     }
@@ -211,8 +213,9 @@ export function compileGraph(input: BraidInput): Graph {
       `Edge '${edge.from}' -> '${edge.to}': closesCycle must be a boolean`);
     if (edge.choice !== undefined) {
       const source = byId.get(edge.from)!;
-      requireValid(source.type === "decision", `Choice edge from non-decision '${edge.from}'`);
-      requireValid(source.choices.includes(edge.choice), `Undeclared edge choice '${edge.choice}' on '${edge.from}'`);
+      const choices = source.type === "execute" ? source.choices : undefined;
+      requireValid(choices !== undefined, `Choice edge from '${edge.from}', which declares no choices`);
+      requireValid(choices.includes(edge.choice), `Undeclared edge choice '${edge.choice}' on '${edge.from}'`);
     }
     const key = edgeIdentity(edge as unknown as Edge);
     requireValid(!seen.has(key), `Duplicate edge '${edge.from}' -> '${edge.to}'`);

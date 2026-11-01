@@ -116,7 +116,8 @@ export function createOpenAICompatibleRunner(
     const model = request.model ?? defaultModel;
     if (!model)
       throw new Error("A model must be set on the node, run, or adapter");
-    const isDecision = request.node.type === "decision";
+    const choices = request.node.type === "execute" ? request.node.choices : undefined;
+    const isDecision = choices !== undefined;
     const isMerge = (request.node.type === "merge" || request.node.type === "integrate");
     const messages: Record<string, unknown>[] = [
       {
@@ -127,7 +128,7 @@ export function createOpenAICompatibleRunner(
           (isMerge
             ? "You are a merge/integrate agent. Operate only in the assigned workingDirectory; merge uses an isolated worktree and integrate uses the source checkout; core has not merged anything. Inspect the sources and their errors/checkpoints, decide whether and how to integrate using available local Git operations, preserve unrelated user changes, resolve conflicts, and call finish_merge exactly once before returning a final answer. Outside Git there are no sources: call finish_merge with an empty dispositions array."
             : isDecision
-            ? "Call decide exactly once with a declared choice, then give your final natural-language answer."
+            ? "Do the work in your prompt, then call decide exactly once with the declared choice that fits your result, and give your result as a natural-language answer."
             : "Give your result as a natural-language answer.") + mergeInstructions(request),
       },
       {
@@ -144,7 +145,7 @@ export function createOpenAICompatibleRunner(
     ];
     const tools = isMerge
       ? [...(request.git ? [gitToolDefinition(true)] : []), finishMergeToolDefinition(request.merge?.sources.map(source => source.executionId!) ?? [])].map(definition => ({ type: "function", function: definition }))
-      : request.node.type === "decision"
+      : choices
         ? [
             {
               type: "function",
@@ -156,7 +157,7 @@ export function createOpenAICompatibleRunner(
                 parameters: {
                   type: "object",
                   properties: {
-                    choice: { type: "string", enum: [...request.node.choices] },
+                    choice: { type: "string", enum: [...choices] },
                   },
                   required: ["choice"],
                   additionalProperties: false,
@@ -267,7 +268,7 @@ export function createOpenAICompatibleRunner(
         call.function.name !== "decide"
       ) {
         throw new Error(
-          "Only a single decide tool call on a decision node is allowed",
+          "Only a single decide tool call on a node with choices is allowed",
         );
       }
       let args: unknown;

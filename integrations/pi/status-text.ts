@@ -105,7 +105,7 @@ type Control = Pick<BraidSnapshot, "status" | "revision" | "pausedExecutionIds">
 
 const waitReasons = {
   predecessors: "an input has not run yet", stale: "an input is being rerun", hold: "an input is held",
-  choice: "a decision to choose it", limit: "its node's maxRuns; raise it or release this rerun to end it", run_paused: "the job is paused", slot: "a free slot",
+  choice: "its source to choose it", limit: "its node's maxRuns; raise it or release this rerun to end it", run_paused: "the job is paused", slot: "a free slot",
 } as const;
 
 /** Why a pending execution waits. A choice wait names the choices it runs after. */
@@ -172,7 +172,7 @@ export function formatCycles(report: { cycles: readonly GraphCycle[]; truncated:
       const gated = cycle.choiceGated.map(edge => ` ${edge.to} runs only after ${edge.from} chooses ${edge.choice}, not before it in the first round; ` +
         `if each round should start at ${edge.to}, call ${closeCycleCall(edge, job)} now, which sets closesCycle: true on ${label(edge)}.`).join("");
       return (bounds.length ? `- ${path}: ${bounds.join("; ")}.`
-        : `- ${path}: NOTHING STOPS IT, so it repeats until you pause or cancel the job. If it is unintended, remove one of its edges with braid_update; to bound it, set maxRuns on one of its nodes or route it through a decision's choice edge.`) + gated;
+        : `- ${path}: NOTHING STOPS IT, so it repeats until you pause or cancel the job. If it is unintended, remove one of its edges with braid_update; to bound it, set maxRuns on one of its nodes or give one of its nodes choices with a choice edge that leaves the cycle.`) + gated;
     }),
     ...report.truncated ? ["- More cycles than these may exist."] : []].join("\n");
 }

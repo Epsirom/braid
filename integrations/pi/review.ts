@@ -33,7 +33,7 @@ Choose three distinct, concrete review angles for this change (usually correctne
             prompt: { template: "reviewer", variables: { slot: String(slot) } },
           })),
           {
-            type: "decision", id: "check", workspace: "read-only", requireSuccess: true, choices: ["retry", "done"],
+            type: "execute", id: "check", workspace: "read-only", requireSuccess: true, choices: ["retry", "done"],
             prompt: `Synthesize scope and all three reviews. Verify and deduplicate findings against actual files in YOUR workspace.snapshotCommit, which includes scope's completed fixes; separate valid P0/P1 fixes worth doing now, P2 report-only notes, and feedback to ignore/defer with reasons. Do not blindly apply suggestions or add optional polish.
 You are read-only and cannot edit files or run tests. If the target is unavailable, review-only was requested, nothing actionable remains, fixes are unavailable outside Git, or a fix requires an unapproved product/scope/architecture decision, call decide with done. Report the exact stop reason and unresolved findings.
 If the previous fix pass failed validation or made no material progress, stop with done and prohibit integration of unvalidated or unreviewed fixes; do not repeatedly retry the same findings.

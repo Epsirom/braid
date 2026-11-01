@@ -19,7 +19,7 @@ import { deferred } from "./helpers.js";
 const node = (id: string) => ({ type: "execute" as const, id, prompt: id });
 const loop = (maxRuns?: number): BraidInput => ({
   goal: "refine",
-  nodes: [{ ...node("work"), ...(maxRuns === undefined ? {} : { maxRuns }) }, { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }, node("end")],
+  nodes: [{ ...node("work"), ...(maxRuns === undefined ? {} : { maxRuns }) }, { type: "execute", id: "check", prompt: "review", choices: ["again", "done"] }, node("end")],
   edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }, { from: "check", to: "end", choice: "done" }],
 });
 const until = async (condition: () => boolean, timeoutMs = 5_000) => {
@@ -186,8 +186,8 @@ test("ending a limited rerun keeps inputs that are still rerunning, and an updat
 
 test("skipped reruns do not count toward maxRuns", async t => {
   const result = await braid({ goal: "branch", nodes: [
-    { type: "decision", id: "route", prompt: "route", choices: ["left", "right"] }, { ...node("left"), maxRuns: 1 }, node("right"),
-    { type: "decision", id: "check", prompt: "check", choices: ["again", "done"] },
+    { type: "execute", id: "route", prompt: "route", choices: ["left", "right"] }, { ...node("left"), maxRuns: 1 }, node("right"),
+    { type: "execute", id: "check", prompt: "check", choices: ["again", "done"] },
   ], edges: [{ from: "route", to: "left", choice: "left" }, { from: "route", to: "right", choice: "right" },
     { from: "left", to: "check" }, { from: "right", to: "check" }, { from: "check", to: "route", choice: "again" }] }, {
     runner: async request => {
@@ -205,8 +205,8 @@ test("skipped reruns do not count toward maxRuns", async t => {
 test("maxRuns is validated on every node type, and edges take no limit", () => {
   for (const maxRuns of [0, 1.5, -1, Number.NaN, "2"])
     assert.throws(() => validateGraph({ goal: "x", nodes: [{ ...node("a"), maxRuns } as never], edges: [] }), /Invalid maxRuns on 'a'/);
-  for (const type of ["execute", "decision", "merge", "integrate"] as const)
-    validateGraph({ goal: "x", nodes: [{ type, id: "a", prompt: "a", ...(type === "decision" ? { choices: ["x"] } : {}), maxRuns: Infinity } as never], edges: [] });
+  for (const [type, choices] of [["execute", undefined], ["execute", ["x"]], ["merge", undefined], ["integrate", undefined]] as const)
+    validateGraph({ goal: "x", nodes: [{ type, id: "a", prompt: "a", ...(choices ? { choices } : {}), maxRuns: Infinity } as never], edges: [] });
   assert.throws(() => validateGraph({ ...loop(), edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again", limit: 2 } as never] }),
     /unsupported field 'limit'/);
 });

@@ -293,7 +293,7 @@ test("Pi braid tool submits read-only review and decision nodes with Git inspect
   const submitted = await braidTool.execute("submit", {
     goal: "Review only", nodes: [
       { type: "execute", id: "review", prompt: "Review", workspace: "read-only" },
-      { type: "decision", id: "route", prompt: "Decide", choices: ["done"], workspace: "read-only" },
+      { type: "execute", id: "route", prompt: "Decide", choices: ["done"], workspace: "read-only" },
     ], edges: [{ from: "review", to: "route" }],
   }, undefined, undefined, ctx);
   await jobs.wait(submitted.details!.jobId);

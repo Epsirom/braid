@@ -85,7 +85,7 @@ test("Pi loop reminders and status use a distinct execution ID for each round", 
   const { braidTool, statusTool } = createBraidTools(jobs);
   const job = await braidTool.execute("loop", { goal: "repeat", nodes: [
     { type: "execute", id: "work", prompt: "work", notifyOnCompletion: true, maxRuns: 2 },
-    { type: "decision", id: "review", prompt: "review", choices: ["again", "done"] },
+    { type: "execute", id: "review", prompt: "review", choices: ["again", "done"] },
   ], edges: [{ from: "work", to: "review" }, { from: "review", to: "work", choice: "again" }],
   }, undefined, undefined, ctx);
   await jobs.wait(job.details!.handle);
@@ -146,7 +146,7 @@ test("Pi tool results report new cycles and whether anything stops them", { time
   const tools = createBraidTools(jobs);
   const submitted = await tools.braidTool.execute("submit", {
     goal: "fix", nodes: [{ type: "execute", id: "gate", prompt: "gate", pauseAfter: true }, { type: "execute", id: "fix", prompt: "fix" },
-      { type: "decision", id: "review", prompt: "review", choices: ["again", "done"] }],
+      { type: "execute", id: "review", prompt: "review", choices: ["again", "done"] }],
     edges: [{ from: "gate", to: "fix" }, { from: "fix", to: "review" }, { from: "review", to: "fix", choice: "again" }],
   }, undefined, undefined, ctx);
   assert.match((submitted.content[0] as { text: string }).text,

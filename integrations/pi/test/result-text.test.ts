@@ -15,14 +15,14 @@ test("graphs list node settings and labelled edges, including the edge that clos
   assert.equal(formatGraph({
     nodes: [
       { type: "execute", id: "work", prompt: { template: "task", variables: {} }, workspace: "read-only", model: "p/m", requireSuccess: true, maxRuns: 3 },
-      { type: "decision", id: "check", prompt: "secret prompt", choices: ["retry", "done"], pauseAfter: true },
+      { type: "execute", id: "check", prompt: "secret prompt", choices: ["retry", "done"], pauseAfter: true },
       { type: "merge", id: "join" },
     ],
     edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "retry" }, { from: "check", to: "join", choice: "done" }],
   }), [
     "Nodes:",
     "- work: execute, workspace=read-only, model=p/m, template=task, requireSuccess, maxRuns=3",
-    "- check: decision, choices=retry|done, pauseAfter",
+    "- check: execute, choices=retry|done, pauseAfter",
     "- join: merge",
     "Edges:",
     "- work -> check",
@@ -34,7 +34,7 @@ test("graphs list node settings and labelled edges, including the edge that clos
 test("cycle notices name a node that runs only after a choice and how to start rounds there", () => {
   const node = (id: string) => ({ id, type: "execute" as const, prompt: id });
   const graph = (closesCycle?: boolean) => ({ nodes: [{ ...node("impl"), maxRuns: 3 }, node("tests"), { id: "merge", type: "merge" as const },
-    { id: "review", type: "decision" as const, prompt: "review", choices: ["again", "done"] }], edges: [
+    { id: "review", type: "execute" as const, prompt: "review", choices: ["again", "done"] }], edges: [
     { from: "impl", to: "merge" }, { from: "tests", to: "merge" }, { from: "merge", to: "review" },
     { from: "review", to: "impl", choice: "again", ...(closesCycle ? { closesCycle } : {}) },
   ] });

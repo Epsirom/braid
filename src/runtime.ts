@@ -297,7 +297,7 @@ async function runNode(
   let decisionError: RunError | undefined;
   // Capture choices separately: the runner cannot change the declared tool enum.
   const choices =
-    request.node.type === "decision" ? [...request.node.choices] : undefined;
+    request.node.type === "execute" && request.node.choices ? [...request.node.choices] : undefined;
   const invocation: ModelRequest = { ...request, signal };
   invocation.withWorkspaceWrite = async operation => {
     signal.throwIfAborted();
@@ -468,7 +468,7 @@ async function runNode(
     if (choices && decision === undefined) {
       throw new RunError(
         "DECISION_REQUIRED",
-        `Decision node '${result.id}' did not call decide`,
+        `Node '${result.id}' declares choices but did not call decide`,
       );
     }
     result.status = "completed";
@@ -1011,7 +1011,8 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     let lineage = lineages.get(id);
     if (!lineage) lineages.set(id, lineage = { instances: [], queued: [] });
     lineage.instances.push(record);
-    emit({ type: "execution_created", nodeId: id, nodeType: node.type, generation, cause, ...(model ? { model } : {}),
+    emit({ type: "execution_created", nodeId: id, nodeType: node.type,
+      ...(node.type === "execute" && node.choices ? { choices: [...node.choices] } : {}), generation, cause, ...(model ? { model } : {}),
       ...links, ...context(record) });
     return record;
   }
@@ -1327,7 +1328,7 @@ export function startBraid(input: BraidInput, options: BraidOptions): BraidRun {
     const task = Promise.resolve().then(async () => {
       await runNode(request, record, runner, nodeTimeoutMs, controller.signal, () => graphDeadline, onLimit === "fail", scopedLog, workspaces,
         failure, suspensionControl(record), onNodeTimeout,
-        record.node.type === "execute" || record.node.type === "decision" ? request => requestReplan(record, request) : undefined);
+        record.node.type === "execute" ? request => requestReplan(record, request) : undefined);
       // A replaced or removed instance is history: it is never held.
       if (record.holdAfter && !controller.signal.aborted && lineages.get(record.id)?.instances.at(-1) === record) {
         paused.add(record.executionId);

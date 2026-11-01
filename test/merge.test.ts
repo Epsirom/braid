@@ -94,7 +94,7 @@ for (const baseline of ["clean", "dirty", "unborn"] as const) {
       [{ from: "correctness", to: "review" }, { from: "tests", to: "review" }],
     ), { cwd, runner: async request => {
       calls.push(request.node.id);
-      if (request.node.type === "decision") request.decide!("reviewed");
+      if (request.decide) request.decide("reviewed");
       if (request.merge) await applySources(request, "discarded");
       if (request.node.id === "review") {
         for (const predecessor of request.predecessors)

@@ -132,7 +132,7 @@ test("Braid call renderer summarizes topology instead of dumping JSON", () => {
         goal: "A goal that should be visible",
         nodes: [
           {
-            type: "decision",
+            type: "execute",
             id: "route",
             prompt: "route",
             choices: ["go", "stop"],
@@ -146,7 +146,7 @@ test("Braid call renderer summarizes topology instead of dumping JSON", () => {
     ),
   );
   assert.match(rendered, /◆ Braid/);
-  assert.match(rendered, /2 nodes \(1 decision\)/);
+  assert.match(rendered, /2 nodes \(1 routing\)/);
   assert.match(rendered, /◇ route {2}○ left/);
   assert.match(rendered, /route -go-> left/);
   assert.match(rendered, /A goal that should be visible/);
@@ -304,9 +304,9 @@ test("cycle charts draw forward handoffs dotted and the closing edge solid witho
   const graph: BraidInput = {
     goal: "loop",
     nodes: [
-      { type: "decision", id: "start", prompt: "start", choices: ["inspect", "direct"] },
+      { type: "execute", id: "start", prompt: "start", choices: ["inspect", "direct"] },
       { type: "execute", id: "inspect", prompt: "inspect" },
-      { type: "decision", id: "route", prompt: "route", choices: ["again", "done"] },
+      { type: "execute", id: "route", prompt: "route", choices: ["again", "done"] },
       { type: "execute", id: "end", prompt: "end" },
     ],
     edges: [
@@ -317,7 +317,8 @@ test("cycle charts draw forward handoffs dotted and the closing edge solid witho
     ],
   };
   const events: ExecutionEvent[] = [
-    ...graph.nodes.map((node, index) => ({ type: "execution_created" as const, nodeId: node.id, nodeType: node.type, generation: 1, cause: "submitted" as const,
+    ...graph.nodes.map((node, index) => ({ type: "execution_created" as const, nodeId: node.id, nodeType: node.type,
+      ...(node.type === "execute" && node.choices ? { choices: node.choices } : {}), generation: 1, cause: "submitted" as const,
       executionId: `${node.id}@1`, sequence: index, timestamp: 0 })),
     ...graph.edges.map((edge, index) => ({ type: "edge_created" as const, ...edge, sequence: graph.nodes.length + index, timestamp: 0 })),
   ];

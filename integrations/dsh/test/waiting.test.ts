@@ -118,7 +118,7 @@ test("status says which choice a node that runs only through a choice edge waits
   const join = gate();
   const { jobs, run, calls } = setup({ join: join.promise });
   const job = jobs.start({ goal: "Loop", nodes: [node("impl"), node("tests"), node("join"),
-    { type: "decision", id: "review", prompt: "task:review", choices: ["again", "done"] }], edges: [
+    { type: "execute", id: "review", prompt: "task:review", choices: ["again", "done"] }], edges: [
     { from: "impl", to: "join" }, { from: "tests", to: "join" }, { from: "join", to: "review" }, { from: "review", to: "impl", choice: "again" },
   ] }, {}, context());
   await until(() => calls("join") === 1);
@@ -206,7 +206,7 @@ test("the call a cycle notice suggests, applied as written, starts each round at
   const tests = gate();
   const { jobs, run, calls } = setup({ tests: tests.promise });
   const job = jobs.start({ goal: "Loop", nodes: [node("impl"), node("tests"), node("join"),
-    { type: "decision", id: "review", prompt: "task:review", choices: ["again", "done"] }], edges: [
+    { type: "execute", id: "review", prompt: "task:review", choices: ["again", "done"] }], edges: [
     { from: "impl", to: "join" }, { from: "tests", to: "join" }, { from: "join", to: "review" }, { from: "review", to: "impl", choice: "again" },
   ] }, {}, context());
   const call = /call braid_update\((.*?)\) now/.exec(formatReceipt(job, ""))?.[1];

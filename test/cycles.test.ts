@@ -7,7 +7,7 @@ import { deferred } from "./helpers.js";
 import { braid, closingEdges, newCycles, startBraid, validateGraph, type BraidInput, type BraidRun, type ExecutionEvent } from "../src/index.js";
 
 const node = (id: string) => ({ type: "execute" as const, id, prompt: id });
-const decision = (id: string, choices: string[]) => ({ type: "decision" as const, id, prompt: id, choices });
+const decision = (id: string, choices: string[]) => ({ type: "execute" as const, id, prompt: id, choices });
 async function outsideGit(t: TestContext) {
   const cwd = await mkdtemp(join(tmpdir(), "braid-cycles-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));

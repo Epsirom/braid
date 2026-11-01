@@ -20,7 +20,7 @@ const node = (id: string) => ({ type: "execute" as const, id, prompt: `task:${id
 test("Pi schemas accept maxRuns on nodes, job limits, and limits on job resume, but no edge limit", () => {
   const tools = createBraidTools(new BraidJobs());
   const graph = {
-    goal: "refine", nodes: [{ ...node("work"), maxRuns: 3 }, { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }],
+    goal: "refine", nodes: [{ ...node("work"), maxRuns: 3 }, { type: "execute", id: "check", prompt: "review", choices: ["again", "done"] }],
     edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }],
     options: { maxExecutions: 10, maxTokens: 1_000, onLimit: "pause" },
   };
@@ -81,7 +81,7 @@ test("a rerun at its node's maxRuns wakes the parent with how to continue or sto
   t.after(() => jobs.dispose());
   const { braidTool, updateTool } = createBraidTools(jobs);
   const handle = (await braidTool.execute("loop", {
-    goal: "refine", nodes: [{ ...node("work"), maxRuns: 1 }, { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }],
+    goal: "refine", nodes: [{ ...node("work"), maxRuns: 1 }, { type: "execute", id: "check", prompt: "review", choices: ["again", "done"] }],
     edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }],
   }, undefined, undefined, ctx)).details!.handle;
   await until(() => waiting.length === 1);

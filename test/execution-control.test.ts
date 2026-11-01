@@ -7,7 +7,7 @@ import { braid, closingEdges, startBraid, validateGraph, type BraidInput, type B
 import { deferred } from "./helpers.js";
 
 const node = (id: string) => ({ type: "execute" as const, id, prompt: id });
-const loop = (maxRuns = 3): BraidInput => ({ goal: "refine", nodes: [{ ...node("work"), maxRuns }, { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }, node("end")],
+const loop = (maxRuns = 3): BraidInput => ({ goal: "refine", nodes: [{ ...node("work"), maxRuns }, { type: "execute", id: "check", prompt: "review", choices: ["again", "done"] }, node("end")],
   edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }, { from: "check", to: "end", choice: "done" }] });
 async function outsideGit(t: TestContext) {
   const cwd = await mkdtemp(join(tmpdir(), "braid-control-"));
@@ -301,7 +301,7 @@ test("rerunning a decision records skipped instances for branches it no longer t
   let run!: BraidRun;
   let choice = "left";
   const inputs: string[][] = [];
-  run = startBraid({ goal: "branches", nodes: [{ type: "decision", id: "route", prompt: "pick", choices: ["left", "right"] }, node("left"), node("right"), { ...node("join"), pauseAfter: true }],
+  run = startBraid({ goal: "branches", nodes: [{ type: "execute", id: "route", prompt: "pick", choices: ["left", "right"] }, node("left"), node("right"), { ...node("join"), pauseAfter: true }],
     edges: [{ from: "route", to: "left", choice: "left" }, { from: "route", to: "right", choice: "right" }, { from: "left", to: "join" }, { from: "right", to: "join" }] }, {
     cwd: await outsideGit(t), runner: async request => {
       request.decide?.(choice);
@@ -312,7 +312,7 @@ test("rerunning a decision records skipped instances for branches it no longer t
       if (event.type !== "execution_paused") return;
       if (event.executionId === "join@1") {
         choice = "right";
-        run.update({ expectedRevision: 0, upsertNodes: [{ type: "decision", id: "route", prompt: "pick again", choices: ["left", "right"] }], resume: ["join@1"] });
+        run.update({ expectedRevision: 0, upsertNodes: [{ type: "execute", id: "route", prompt: "pick again", choices: ["left", "right"] }], resume: ["join@1"] });
       } else run.resume([event.executionId!], 1);
     },
   });
@@ -325,7 +325,7 @@ test("rerunning a decision records skipped instances for branches it no longer t
 
 test("an observer may remove a node from inside its skipped event", async t => {
   let run!: BraidRun;
-  run = startBraid({ goal: "skip", nodes: [{ type: "decision", id: "route", prompt: "pick", choices: ["left", "right"] }, node("left"), node("right")],
+  run = startBraid({ goal: "skip", nodes: [{ type: "execute", id: "route", prompt: "pick", choices: ["left", "right"] }, node("left"), node("right")],
     edges: [{ from: "route", to: "left", choice: "left" }, { from: "route", to: "right", choice: "right" }] }, {
     cwd: await outsideGit(t), runner: async request => { request.decide?.("left"); return { output: request.node.id }; },
     onEvent(event) {
@@ -386,16 +386,16 @@ test("a cycle can be changed mid-round; later rounds follow the current edges", 
 test("any edge may close a cycle", () => {
   validateGraph({ goal: "self", nodes: [node("a")], edges: [{ from: "a", to: "a" }] });
   // A decision without an exit choice, and two cycles sharing check.
-  validateGraph({ goal: "loops", nodes: [{ type: "decision", id: "check", prompt: "p", choices: ["again"] }, node("work")],
+  validateGraph({ goal: "loops", nodes: [{ type: "execute", id: "check", prompt: "p", choices: ["again"] }, node("work")],
     edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }] });
-  validateGraph({ goal: "overlap", nodes: [node("a"), node("b"), { type: "decision", id: "check", prompt: "p", choices: ["a", "b", "done"] }],
+  validateGraph({ goal: "overlap", nodes: [node("a"), node("b"), { type: "execute", id: "check", prompt: "p", choices: ["a", "b", "done"] }],
     edges: [{ from: "a", to: "check" }, { from: "b", to: "check" }, { from: "check", to: "a", choice: "a" }, { from: "check", to: "b", choice: "b" }] });
 });
 
 test("closingEdges finds the edges that close cycles for displays", () => {
   assert.deepEqual(closingEdges(loop()), [{ from: "check", to: "work", choice: "again" }]);
   // Without an external input, the entry listed first wins between two choice edges.
-  const decisions = ["a", "b"].map(id => ({ type: "decision" as const, id, prompt: id, choices: ["next", "stop"] }));
+  const decisions = ["a", "b"].map(id => ({ type: "execute" as const, id, prompt: id, choices: ["next", "stop"] }));
   assert.deepEqual(closingEdges({ nodes: decisions, edges: [{ from: "a", to: "b", choice: "next" }, { from: "b", to: "a", choice: "next" }] }),
     [{ from: "b", to: "a", choice: "next" }]);
   // A choice edge closes before an unconditional one.
@@ -411,7 +411,7 @@ test("closingEdges finds the edges that close cycles for displays", () => {
 test("a cycle's rounds start at its entry, whichever edge returns there", () => {
   // Reduced from a Pi session: accept reviews merge1 first, and the edge back to accept closes the cycle.
   const input: BraidInput = { goal: "review", nodes: [node("merge1"), node("fix"),
-    { type: "decision", id: "accept", prompt: "review", choices: ["pass", "fail"] }, node("integrate")],
+    { type: "execute", id: "accept", prompt: "review", choices: ["pass", "fail"] }, node("integrate")],
     edges: [{ from: "merge1", to: "accept" }, { from: "fix", to: "accept" },
       { from: "accept", to: "fix", choice: "fail" },
       { from: "accept", to: "integrate", choice: "pass" }] };
@@ -422,7 +422,7 @@ test("a cycle's rounds start at its entry, whichever edge returns there", () => 
 
 test("an unconditional cycle closed through the entry runs until the decision passes", async t => {
   const input: BraidInput = { goal: "review", nodes: [node("merge1"), node("fix"),
-    { type: "decision", id: "accept", prompt: "review", choices: ["pass", "fail"] }, node("integrate")],
+    { type: "execute", id: "accept", prompt: "review", choices: ["pass", "fail"] }, node("integrate")],
     edges: [{ from: "merge1", to: "accept" }, { from: "fix", to: "accept" },
       { from: "accept", to: "fix", choice: "fail" }, { from: "accept", to: "integrate", choice: "pass" }] };
   const result = await braid(input, { cwd: await outsideGit(t), runner: async request => {
@@ -550,8 +550,8 @@ test("node IDs such as __proto__ stay ordinary snapshot properties", async t => 
 test("decision branches are resolved anew in each round", async t => {
   const inputs: string[][] = [];
   const result = await braid({ goal: "alternate branches", nodes: [
-    { type: "decision", id: "route", prompt: "pick", choices: ["left", "right"], maxRuns: 2 }, node("left"), node("right"),
-    { type: "decision", id: "check", prompt: "continue", choices: ["again", "done"] },
+    { type: "execute", id: "route", prompt: "pick", choices: ["left", "right"], maxRuns: 2 }, node("left"), node("right"),
+    { type: "execute", id: "check", prompt: "continue", choices: ["again", "done"] },
   ], edges: [
     { from: "route", to: "left", choice: "left" }, { from: "route", to: "right", choice: "right" },
     { from: "left", to: "check" }, { from: "right", to: "check" },
@@ -572,7 +572,7 @@ test("decision branches are resolved anew in each round", async t => {
 
 test("a replaced held instance is released, and only the replacement routes", async t => {
   const runner: ModelRunner = async request => { request.decide?.("again"); return { output: request.execution.executionId! }; };
-  const check = { type: "decision" as const, id: "check", prompt: "review", choices: ["again", "done"], pauseAfter: true };
+  const check = { type: "execute" as const, id: "check", prompt: "review", choices: ["again", "done"], pauseAfter: true };
   let run!: BraidRun;
   run = startBraid(loop(6), { cwd: await outsideGit(t), runner, onEvent(event) {
     if (event.type === "execution_paused" && event.executionId === "check@1")

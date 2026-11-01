@@ -27,7 +27,7 @@ const prompt = () => Type.Union([
       description: "Exactly the template's placeholder names with string values; use {} if there are no placeholders. No missing or extra keys.",
     }),
   }, { additionalProperties: false }),
-], { description: "Required for execute/decision; optional for merge/integrate. A non-blank instruction string or a reference to a declared prompt template." });
+], { description: "Required for execute; optional for merge/integrate. A non-blank instruction string or a reference to a declared prompt template." });
 const timeout = (scope: "node" | "graph") =>
   Type.Optional(
     Type.Number({
@@ -66,30 +66,30 @@ const commonNodeParameters = {
   maxRuns: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "How many times this node may run, counting reruns from cycle rounds and from upstream changes; maxRuns 3 on a node in a cycle allows 3 rounds. Usually omit: by default there is no limit. A rerun beyond it waits, and once nothing else runs you get a reminder to raise maxRuns or end the rerun. You can raise or lower it at any time by upserting the node with only maxRuns changed, which does not rerun it. Your own replacement of the node always runs." })),
 };
 const workspace = Type.Optional(StringEnum(["read-only", "worktree"], {
-  description: "Only for execute/decision; omit for merge/integrate. Defaults to worktree in Git. Both modes use fresh predecessor snapshots; read-only disables writes and shell tools. Outside Git, all workers are read-only.",
+  description: "Only for execute; omit for merge/integrate. Defaults to worktree in Git. Both modes use fresh predecessor snapshots; read-only disables writes and shell tools. Outside Git, all workers are read-only.",
 }));
 // Keep all fields visible in one object. Kimi sessions using object-variant
 // unions repeatedly emitted bare merge nodes instead of intended executions.
 // Core validates the conditional requirements before starting or changing a job.
 const nodeParameters = Type.Object({
   id: commonNodeParameters.id,
-  type: StringEnum(["execute", "decision", "merge", "integrate"], {
-    description: "execute: analyze/implement; decision: choose a route; merge: combine predecessor checkpoints in an isolated worktree; integrate: apply predecessor changes to the invoking checkout.",
+  type: StringEnum(["execute", "merge", "integrate"], {
+    description: "execute: analyze/implement, and route with choices; merge: combine predecessor checkpoints in an isolated worktree; integrate: apply predecessor changes to the invoking checkout.",
   }),
   prompt: Type.Optional(prompt()),
-  choices: Type.Optional(Type.Array(text(), { minItems: 1, uniqueItems: true, description: "Required only for decision; omit for every other type. Distinct routing labels used by decide and outgoing choice edges." })),
+  choices: Type.Optional(Type.Array(text(), { minItems: 1, uniqueItems: true, description: "Only for execute, and only when it routes: distinct labels for its outgoing choice edges. The node must call decide exactly once with one of them before finishing. Omit it on a node with no outgoing choice edges, such as a final report." })),
   workspace,
   model: commonNodeParameters.model,
   notifyOnCompletion: commonNodeParameters.notifyOnCompletion,
   pauseAfter: commonNodeParameters.pauseAfter,
   requireSuccess: commonNodeParameters.requireSuccess,
   maxRuns: commonNodeParameters.maxRuns,
-}, { additionalProperties: false, description: "execute/decision REQUIRE prompt; decision also REQUIRES choices. merge/integrate may omit prompt but MUST omit choices and workspace. Omit unused optional fields. All types accept model, notifyOnCompletion, pauseAfter, requireSuccess, and maxRuns." });
+}, { additionalProperties: false, description: "execute REQUIRES prompt and may declare choices. merge/integrate may omit prompt but MUST omit choices and workspace. Omit unused optional fields. All types accept model, notifyOnCompletion, pauseAfter, requireSuccess, and maxRuns." });
 const edgeParameters = Type.Object({
   from: text("Source node ID."),
   to: text("Target node ID."),
-  choice: Type.Optional(text("Only for a decision source: one exact declared choice. Omit for an unconditional dependency, including error recovery.")),
-  closesCycle: Type.Optional(Type.Boolean({ description: "Only for an edge on a cycle: true makes this edge close the cycle, so each round starts at its target. Set it on a decision's choice edge back to a node that should also run in the first round, such as review -> impl [choice=again] when impl feeds a merge with other branches; otherwise omit it and let Braid choose." })),
+  choice: Type.Optional(text("Only for a source with choices: one exact declared choice. Omit for an unconditional dependency, including error recovery.")),
+  closesCycle: Type.Optional(Type.Boolean({ description: "Only for an edge on a cycle: true makes this edge close the cycle, so each round starts at its target. Set it on a choice edge back to a node that should also run in the first round, such as review -> impl [choice=again] when impl feeds a merge with other branches; otherwise omit it and let Braid choose." })),
 }, { additionalProperties: false });
 const edgeIdentityParameters = Type.Object({
   from: text("Source node ID."),
@@ -114,7 +114,7 @@ const braidParameters = Type.Object({
 }, { additionalProperties: false });
 
 const BRAID_FILESYSTEM_GUIDANCE =
-  "Every execute/decision activation gets a fresh worktree in Git, based on its predecessor execution checkpoint (roots use the initial job snapshot). Set workspace=read-only to disable writes. Multiple independent code snapshots require an explicit merge node. " +
+  "Every execute activation gets a fresh worktree in Git, based on its predecessor execution checkpoint (roots use the initial job snapshot). Set workspace=read-only to disable writes. Multiple independent code snapshots require an explicit merge node. " +
   "merge combines selected predecessor checkpoints into a new isolated worktree; integrate writes selected changes to the invoking checkout while preserving user edits. Workers apply changes with Git/file tools, then call finish_merge using executionId for each source; finish_merge only records dispositions and does not apply changes. There is no automatic final integration. " +
   "Do not set workspace on merge/integrate nodes. Checkpoints remain recoverable after cleanup. Optional failed predecessors pass errors and partial work along unconditional edges; requireSuccess=true makes failure abort the job. " +
   "Nodes have local read/ls and Git inspection; writable nodes have write/edit and Pi shell tools for dependencies, builds, and tests, while merge/integrate also have local Git integration tools. Search tools require local rg/fd. Outside Git all filesystem access is read-only; read-only nodes have no shell. Worktrees are not an OS sandbox: prompts constrain shell writes and shared resources. Checkpoints omit ignored new files. Parent extension/MCP tools and recursive Braid calls are not provided. Nodes should verify their changes; the parent reviews results and performs any remaining validation after integration.";
@@ -133,7 +133,7 @@ export const BRAID_ASYNC_GUIDANCE =
   "If the last running execution finishes while work you paused or held remains, you get a reminder that the job waits for you: resume, update, or cancel it. The user can also pause and resume from /braid; you get a notice with your next turn. Do not resume work the user paused unless the user asks. " +
   "When an execution exceeds its nodeTimeoutMs it is paused, not failed, and you get a reminder: resume it with braid_resume (optionally a new nodeTimeoutMs), or fail only that execution with braid_cancel and executionIds. " +
   "Reaching maxExecutions, graphTimeoutMs, or maxTokens pauses the job instead of failing it: raise the limit and resume the job with braid_resume({jobId, limits}). A running execution pauses only before its next model request; if one is still inside a long tool call 30 seconds later, you get a reminder naming it, and braid_cancel with executionIds stops it and its tool. A rerun beyond a node's maxRuns waits instead of starting: raise maxRuns by upserting that node in braid_update (the waiting execution is edited in place and starts), or release it with braid_resume to end the rerun (the node keeps its last result, and a cycle ends there). " +
-  "Execute and decision nodes can call request_replan to report a finding that contradicts their prompt's assumptions, makes their task unnecessary, or affects more than their task. You get a reminder at once; the node keeps working and its result is held when it finishes. " +
+  "Execute nodes can call request_replan to report a finding that contradicts their prompt's assumptions, makes their task unnecessary, or affects more than their task. You get a reminder at once; the node keeps working and its result is held when it finishes. " +
   "Nodes see only the goal, their own prompt, and direct predecessors, so their reason and suggestion are evidence, not instructions: decide yourself which planned work a finding affects, and check it against the user's request. When a node's findings could affect other branches, say in its prompt what related work other nodes handle, so its request can name what is affected. Change the graph and release it with braid_update and resume, keep the plan with braid_resume, or cancel; until then the job waits.";
 
 /** Short reminder repeated in every submission receipt. */
@@ -148,6 +148,7 @@ const BRAID_USAGE_GUIDANCE = [
   "For repeated instructions, define promptTemplates once and use prompt={template: name, variables: {name: value}} on nodes. Values are strings inserted literally into {{name}} placeholders; plain-string prompts remain supported.",
   "When Braid fits, submit a graph: use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. Read terminal outputs before relying on them.",
   "Each node starts with a fresh context and re-reads the project, while one execution keeps its context and prompt cache across steps. Give work its own node only when it runs in parallel with other nodes, needs a context of its own (an independent review or verification, or a fresh start once a context grows too long), needs a different workspace or model, or must hold its result for review (pauseAfter) or feed a merge. Otherwise keep consecutive steps in one node: one writable node can investigate, fix, and test, where a chain such as investigate -> fix -> test makes each node rediscover what its predecessor knew.",
+  "To route or loop, give an execute node choices; it calls decide once and only the matching choice edges activate. Put choices on the node whose result decides the route, so it routes as it finishes; give the choice its own node only when it must judge work independently, such as whether a review passes, so the author does not grade its own work.",
   "Make the delegation choice once per user request. Reminders and definition errors are not new tasks. If the same definition problem recurs, stop resubmitting and report the concrete mismatch; do not launch repeated probe/replacement jobs. In braid_update, add new nodes together with their dependencies: a node added without incoming edges can start immediately, even while another execution is paused.",
   "Do not use braid for a simple one-step answer, a trivial direct edit, a single shell command, or work whose steps only run one after another with no step needing its own context. Writable nodes can implement and test their work. The parent reviews results and performs any remaining validation after Braid completes.",
 ].join("\n");
@@ -203,11 +204,11 @@ export function createBraidTools(jobs: BraidJobs, { unchangedWaitMs = UNCHANGED_
       description:
         "Use this tool when work has parts that can run in parallel or a step that needs its own context, such as an independent review; code reviews, bug investigations, design comparisons, test planning, and changes spanning multiple files often do. " +
         "Run a mutable graph of isolated LLM invocations with parallel branches and joins; the user does not need to mention Braid. " +
-        "Use execute, decision, merge, or integrate nodes. Execute/decision nodes require prompt. Only decision nodes declare choices and call decide; matching choice edges activate together. Merge/integrate nodes accept multiple predecessors and an optional prompt, with no workspace or choices field. " +
-        "A cycle is a loop, and any edge may close one; cycles may nest and overlap. Each round runs new executions with fresh worktrees. It starts at the target of an edge with closesCycle: true, else where an edge from outside enters the cycle, else at the node listed first. A decision's choice edge back ends the cycle when the decision chooses otherwise, and maxRuns on a node in the cycle bounds how often it runs, counted across all rounds (unlimited by default); with neither, the cycle repeats until you stop the job, and edges that leave it run in every round. The tool result lists each new cycle and what can stop it: check it for cycles you did not intend. " +
-        'Example retry loop: nodes work (execute with prompt) and check (decision with prompt and choices ["retry","done"]); edges [{"from":"work","to":"check"},{"from":"check","to":"work","choice":"retry"}]. An optional done edge leaves check to a downstream node. ' +
-        "When an outside edge enters the cycle at another node, rounds start there, and a node whose only input is a choice edge runs only after the decision chooses it, never in the first round. That fits a fix step, but not a node that should also run in the first round: " +
-        'for impl, tests, and docs feeding merge, then review (decision, choices ["again","done"]) with review -> impl on again, write that edge as {"from":"review","to":"impl","choice":"again","closesCycle":true}, so impl runs in the first round with tests and docs. Without it, rounds start at merge and impl waits for again. Set it at submission: the result warns when a node runs only after a choice. ' +
+        "Use execute, merge, or integrate nodes. Execute nodes require prompt. An execute node that routes declares choices and calls decide once; matching choice edges activate together. Put choices on the node whose result decides the route, so it routes as it finishes; give the choice its own node only when it must judge work independently, such as whether a review passes, so the author does not grade its own work. Merge/integrate nodes accept multiple predecessors and an optional prompt, with no workspace or choices field. " +
+        "A cycle is a loop, and any edge may close one; cycles may nest and overlap. Each round runs new executions with fresh worktrees. It starts at the target of an edge with closesCycle: true, else where an edge from outside enters the cycle, else at the node listed first. A choice edge back ends the cycle when its source chooses otherwise, and maxRuns on a node in the cycle bounds how often it runs, counted across all rounds (unlimited by default); with neither, the cycle repeats until you stop the job, and edges that leave it run in every round. The tool result lists each new cycle and what can stop it: check it for cycles you did not intend. " +
+        'Example retry loop: one node work (execute with prompt and choices ["retry","done"]) that retries until its result is good; edges [{"from":"work","to":"work","choice":"retry"}]. An optional done edge leaves work to a downstream node. ' +
+        "When an outside edge enters the cycle at another node, rounds start there, and a node whose only input is a choice edge runs only after its source chooses it, never in the first round. That fits a fix step, but not a node that should also run in the first round: " +
+        'for impl, tests, and docs feeding merge, then review (execute, choices ["again","done"]) with review -> impl on again, write that edge as {"from":"review","to":"impl","choice":"again","closesCycle":true}, so impl runs in the first round with tests and docs. Without it, rounds start at merge and impl waits for again. Set it at submission: the result warns when a node runs only after a choice. ' +
         "For repeated prompts, define promptTemplates and set node prompt to {template: name, variables: {name: value}}; core renders {{name}} placeholders using explicit string variables before execution. " +
         "Unlabelled edges are unconditional. Joins wait for all possible predecessor paths to resolve. " +
         "Nodes see only the goal, their prompt, labelled direct-predecessor outputs, and their filesystem capabilities: " +
@@ -225,7 +226,7 @@ export function createBraidTools(jobs: BraidJobs, { unchangedWaitMs = UNCHANGED_
         "Use parallel execute nodes for independent analysis or implementation, execute nodes to synthesize findings, merge nodes to combine code snapshots, and integrate nodes to apply changes to the working branch. The user does not need to mention Braid or design the graph.",
         "Do not use braid for simple one-step answers or trivial direct edits. Give work its own node only when it runs in parallel, needs its own context, needs a different workspace or model, or must hold its result for review; keep other consecutive steps in one node, since each node starts cold and re-reads the project. Let writable nodes run shell commands and tests for their work; use merge nodes to combine and validate snapshots before explicit integration.",
         BRAID_FILESYSTEM_GUIDANCE,
-        "Decision nodes additionally receive decide. Execute and decision nodes can call request_replan to ask you to change the plan; they cannot change the graph themselves. Nodes cannot call recursive Braid.",
+        "Execute nodes with choices additionally receive decide. Put choices on the node whose result decides the route, so it routes as it finishes; give the choice its own node only when it must judge work independently, such as whether a review passes, so the author does not grade its own work. Execute nodes can call request_replan to ask you to change the plan; they cannot change the graph themselves. Nodes cannot call recursive Braid.",
         "Leave maxToolRounds, maxToolCalls, nodeTimeoutMs, graphTimeoutMs, maxExecutions, maxTokens, maxRuns, onNodeTimeout, and onLimit unset unless the user asks for limits: tool, time, execution, token, and run budgets are unlimited by default, which suits background work. When limits are set, nodes receive system reminders of their remaining tool and time budgets before each model call, a node timeout pauses the execution, maxRuns keeps a rerun waiting, and the other limits pause the job; each sends you a reminder to raise the limit or stop.",
       ],
       parameters: braidParameters,

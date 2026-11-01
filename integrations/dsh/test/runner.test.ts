@@ -30,7 +30,7 @@ test("uses exact routes, fresh contexts, native tools, cache usage and direct pr
 test("decision routes through decide, preserves tool messages and provider replay metadata", async () => {
   const cwd = directory(); let routeCalls = 0;
   const result = await braid({ goal: "route", nodes: [
-    { type: "decision", id: "route", prompt: "choose", choices: ["yes", "no"] },
+    { type: "execute", id: "route", prompt: "choose", choices: ["yes", "no"] },
     { type: "execute", id: "yes", prompt: "yes" }, { type: "execute", id: "no", prompt: "no" },
   ], edges: [{ from: "route", to: "yes", choice: "yes" }, { from: "route", to: "no", choice: "no" }] }, {
     cwd, defaultModel: "fake/model", runner: createDshRunner(llm(options => {
@@ -53,7 +53,7 @@ test("cycles use fresh invocations and prompt templates", async () => {
   const rounds = new Map<string, number>();
   const graph: BraidInput = { goal: "loop", promptTemplates: { task: "Work on {{target}}" }, nodes: [
     { type: "execute", id: "work", prompt: { template: "task", variables: { target: "loop" } }, maxRuns: 2 },
-    { type: "decision", id: "check", prompt: "check", choices: ["retry", "done"] },
+    { type: "execute", id: "check", prompt: "check", choices: ["retry", "done"] },
   ], edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "retry" }] };
   const result = await braid(graph, { cwd, defaultModel: "fake/model", runner: createDshRunner(llm(options => {
     const p = payload(options);
@@ -180,7 +180,7 @@ test("rejects incomplete streams, empty output, max tokens and duplicate decisio
     const result = await braid(input, { cwd, defaultModel: "fake/model", runner: createDshRunner(llm(() => chunks), { cwd }) });
     assert.equal(result.nodes.a!.status, "failed");
   }
-  const result = await braid({ goal: "duplicate", nodes: [{ type: "decision", id: "a", prompt: "choose", choices: ["yes"] }], edges: [] }, {
+  const result = await braid({ goal: "duplicate", nodes: [{ type: "execute", id: "a", prompt: "choose", choices: ["yes"] }], edges: [] }, {
     cwd, defaultModel: "fake/model", runner: createDshRunner(llm(() => calls({ name: "decide", args: { choice: "yes" } }, { name: "decide", args: { choice: "yes" } })), { cwd }),
   });
   assert.equal(result.nodes.a!.status, "failed");

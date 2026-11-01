@@ -49,7 +49,7 @@ derived, not stored.
 | `predecessors` | An input has not run yet |
 | `stale` | An input has a newer instance that has not settled, or will get one because something upstream of it is rerunning |
 | `hold` | An input, or something upstream of it, is held |
-| `choice` | Every input is a choice edge, and its inputs still wait for one of the reasons above: it runs only once a decision chooses it |
+| `choice` | Every input is a choice edge, and its inputs still wait for one of the reasons above: it runs only once its source chooses it |
 | `limit` | It is a rerun beyond its node's `maxRuns` (see [limits](#limits)) |
 | `run_paused` | The run is paused, by `pauseRun` or at a run limit |
 | `slot` | No concurrency slot is free, or the instance it replaces is still stopping |
@@ -60,7 +60,7 @@ Edges connect lineages. When an instance starts, each incoming edge resolves to
 its source's head. An instance starts when all of its inputs have settled, no
 input is stale, no input is held, the run is not paused, a slot is free, and no
 other instance of its lineage is running: each lineage runs at most one instance
-at a time. If an input is blocked (a failed decision, or a skipped instance that
+at a time. If an input is blocked (a failed node with choices, or a skipped instance that
 is not merely inactive), the instance is skipped with `upstream_failed`; if no
 edge into it is active, it is skipped with `inactive`.
 
@@ -76,7 +76,7 @@ A clone copies the head's definition, with any prompt template rendered from the
 current `promptTemplates`. When several edges reach a settled head, the first
 clones it and the others feed that clone. A clone of a failed head is a retry. A
 clone whose inputs are now all inactive is recorded as a skipped instance, which
-also ends any wait on it: if a decision reruns and no longer chooses a branch,
+also ends any wait on it: if a node with choices reruns and no longer chooses a branch,
 the branch gets a skipped instance instead of keeping its old result.
 
 Inputs wait for stale upstream work, so fan-in stays consistent when paths have
@@ -95,7 +95,7 @@ const graph = {
   goal: "Refine until the review passes",
   nodes: [
     { type: "execute", id: "edit", prompt: "Implement the feedback.", maxRuns: 3 },
-    { type: "decision", id: "review", prompt: "Review the result.",
+    { type: "execute", id: "review", prompt: "Review the result.",
       choices: ["again", "done"], workspace: "read-only" },
     { type: "integrate", id: "apply" },
   ],
@@ -118,7 +118,7 @@ and an edge that would complete a cycle with them closes it instead. Edges close
 cycles in this order of preference:
 
 1. edges into an **entry**, a cycle node that an edge from outside the cycle enters;
-2. a decision's choice edges;
+2. choice edges, from nodes with choices;
 3. edges back to a node listed earlier in `nodes`.
 
 So each round starts at the entry, or, without one, where a choice edge returns,
@@ -158,11 +158,11 @@ depends on the edge that closed the cycle:
 
 | Closing edge | Edges that leave the cycle |
 | --- | --- |
-| A decision's choice edge | Wait for the final round: the decision chose to continue, so the round is not a result |
+| A choice edge | Wait for the final round: its source chose to continue, so the round is not a result |
 | Unconditional | Fire in **every** round: each time the cycle ends a round, downstream nodes outside it run with that round. An inactive one waits for a later round |
 
 An unconditional cycle therefore runs until its owner stops it, or until
-`maxRuns` or a decision ends it, and keeps its downstream work current. A
+`maxRuns` or a choice ends it, and keeps its downstream work current. A
 downstream node that is still running when the next round ends runs once more
 with the latest round, not once per round.
 
@@ -173,7 +173,7 @@ shared node together, the first closing edge clones it and the second attaches
 to that clone as another input, so their rounds merge; a closing edge that
 reaches the clone after it started clones it again.
 
-Without a decision that chooses another edge, a cycle repeats until its owner
+Without a node that chooses another edge, a cycle repeats until its owner
 stops it. To bound the rounds, set `maxRuns` on a node in the cycle: `maxRuns: 3`
 on `edit` allows three rounds. It counts every run of that node and never resets,
 including for a nested cycle in each round of the enclosing one. The round that
@@ -191,17 +191,17 @@ unnoticed. Each submission and update that creates cycles emits
 { type: "cycles_created", revision: 1, truncated: false, cycles: [{
   nodeIds: ["fix", "test"],            // starts where each round starts
   edges: [{ from: "fix", to: "test" }, { from: "test", to: "fix" }], // the last one closes it
-  stops: [],                           // no decision's choice edge
+  stops: [],                           // no choice edge
   limitedNodeIds: [],                  // no node with a finite maxRuns
   choiceGated: [],                     // no node that waits for a choice
 }] }
 ```
 
-`stops` lists the cycle's choice edges, which end it when their decision chooses
+`stops` lists the cycle's choice edges, which end it when their source chooses
 otherwise, and `limitedNodeIds` the nodes on it with a finite `maxRuns`. When
 both are empty, the cycle repeats until its owner stops it. `choiceGated` lists
 the choice edges on the cycle, other than the closing edge, that are the only way
-their target runs: that node does not run until the decision chooses the edge,
+their target runs: that node does not run until the edge's source chooses it,
 not even in the first round. Check it for a node meant to start each round, and
 set `closesCycle` on that edge if so. A cycle is new when
 it uses an edge that the previous graph did not have. At most 20 cycles are
@@ -301,8 +301,8 @@ held result still needs a second resume once it settles.
 
 A running node may find that its task rests on a wrong premise: the timeout it
 was asked to fix in the parser comes from a cache setting, the bug is already
-fixed, or the cause it found also explains other problems. Execute and decision
-nodes can report such a finding and ask the graph owner to replan. A node sees
+fixed, or the cause it found also explains other problems. Execute nodes can
+report such a finding and ask the graph owner to replan. A node sees
 only the goal, its own prompt, and its direct predecessors, not the rest of the
 graph, so it reports what it found rather than a new plan. The owner, which sees
 the whole graph and the user's intent, decides which planned work the finding
@@ -371,7 +371,7 @@ A pausable runner sets `pausable: true` on the runner function and awaits
 OpenAI-compatible adapters do this. The checkpoint resolves at once unless a pause
 was requested; then the execution suspends there and the call resolves after
 resume, so the worker continues the same conversation with its tool budgets,
-workspace, and decision or merge state. A running tool is never interrupted, and
+workspace, and chosen route or merge state. A running tool is never interrupted, and
 an execution whose final model request is already in flight completes normally.
 `pause` rejects unknown, settled, or not-yet-admitted executions, and throws for a
 runner without checkpoints. Pausing a `pausing` or `suspended` execution changes
@@ -418,7 +418,7 @@ handle to resume with; passing `"pause"` to it throws a `TypeError`.
 
 When the timeout fires, core interrupts the current step and the execution
 suspends with `source: "node_timeout"`, keeping its conversation, workspace,
-tool budgets, and decision or merge state:
+tool budgets, and chosen route or merge state:
 
 1. The execution enters `pausing`, emits `execution_suspending`, and its current
    model request or tool call is interrupted.
@@ -555,8 +555,8 @@ raised or lowered ahead of time: changing only `maxRuns` never replaces a starte
 head (see [live updates](#live-updates-and-gates)). To end it instead,
 release it with `resume` (or `resume` in an update) without raising the limit: the
 rerun is removed (`execution_removed`), the node keeps its last result, and nothing
-downstream reruns for it. In a cycle this ends the cycle there; if a decision
-chose the closing edge, its other edges stay inactive.
+downstream reruns for it. In a cycle this ends the cycle there; if its node
+chose the closing edge, its other choice edges stay inactive.
 
 ```ts
 const state = run.snapshot();
@@ -593,7 +593,7 @@ running tool, raise the limit and `resumeRun()`, or cancel the run.
 ## Failure and budgets
 
 `requireSuccess` defaults to false. Optional failures keep their errors and partial
-artifacts; unconditional successors can recover. A failed decision never activates
+artifacts; unconditional successors can recover. A failed node with choices never activates
 a choice edge. A job can complete with failed optional executions.
 
 A `requireSuccess: true` failure immediately stops admission, aborts running

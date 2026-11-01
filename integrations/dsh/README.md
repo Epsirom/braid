@@ -162,15 +162,18 @@ result's presentation meta.
 }
 ```
 
-`execute` and `decision` require `prompt`; only decisions declare nonempty,
-distinct `choices` and call `decide`. `merge` and `integrate` allow an optional
-prompt and forbid `workspace`/`choices`. All four types accept `model`,
+`execute` requires `prompt`. An execute node that routes declares nonempty,
+distinct `choices`, does its work, and calls `decide` exactly once; give the
+choice its own node only when it must judge work independently, such as whether
+a review passes. The former `decision` type is rejected with a hint to use
+`execute` with the same choices. `merge` and `integrate` allow an optional
+prompt and forbid `workspace`/`choices`. All three types accept `model`,
 `notifyOnCompletion`, `pauseAfter`, and `requireSuccess`. Core validates every
 submission and update before it takes effect.
 
 Inside Git, each execution gets a fresh snapshot of its predecessor checkpoints;
-roots include tracked and non-ignored untracked caller changes. Execute/decision
-nodes default to writable worktrees. `workspace: "read-only"` keeps snapshot
+roots include tracked and non-ignored untracked caller changes. Execute nodes
+default to writable worktrees. `workspace: "read-only"` keeps snapshot
 isolation while removing write/edit/shell tools. Outside Git all workers are
 read-only. Independent changed snapshots need an explicit merge node before
 another ordinary worker can consume their combined code.
@@ -192,7 +195,7 @@ results match what the parent agent sees:
 - `write`, `edit`, and `bash` (`dsh-tool-fs`, `dsh-tool-bash`) for writable Git
   workspaces; also `pwsh` (`dsh-tool-pwsh`) on Windows.
 - `git` when core provides Git access; `finish_merge` for merge/integrate nodes.
-- `decide` only for decision nodes, with exactly one declared choice.
+- `decide` only for execute nodes with choices, with exactly one declared choice.
 
 Each execution runs these tools in its own Cordis context with local
 providers rooted at its workspace (`dsh-fs-local`, `dsh-bash-local`,
@@ -242,13 +245,14 @@ revisions/patches change nothing. Supplied templates replace the whole map.
 reopened.
 
 Any edge may close a cycle, and cycles may be unconditional, nested, or
-overlapping. A retry cycle is usually closed by a decision's choice edge back to
-the node where each round starts, such as
-`{ "from": "check", "to": "work", "choice": "retry" }`; an unconditional cycle
+overlapping. A retry cycle is usually closed by a choice edge back to the node
+where each round starts, such as
+`{ "from": "work", "to": "work", "choice": "retry" }` on a `work` node with
+choices `["retry", "done"]`; an unconditional cycle
 repeats until the parent stops the job, and edges that leave it run in every
 round. The `braid` and `braid_update` results list each new cycle and what can
 stop it, so an accidental cycle is noticed. They also name a node that runs only
-after a decision in the cycle chooses it: when each round should start there
+after a node in the cycle chooses it: when each round should start there
 instead, set `"closesCycle": true` on that choice edge. To bound the rounds, set `maxRuns` on
 a node in the cycle, so `maxRuns: 3` on `work` allows three rounds; omit it unless
 the user asks for a limit. `maxRuns` counts every run of that node, including
@@ -295,7 +299,7 @@ only what the user paused or held from the panel, when the user paused the whole
 job, or when the parent's own `braid_pause`, a held result's pause reminder, or
 a timeout pause reminder already accounts for it.
 
-Execute and decision nodes have a `request_replan` tool. A node calls it to
+Execute nodes have a `request_replan` tool. A node calls it to
 report a finding that contradicts its prompt's assumptions, makes its task
 unnecessary, or affects more than its task, with a reason and optionally a
 suggested graph edit (`upsertNodes`, `removeNodeIds`, `addEdges`, `removeEdges`)

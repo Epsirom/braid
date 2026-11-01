@@ -210,13 +210,14 @@ export function createPiRunner(
       const definition = replanToolDefinition();
       allToolDefinitions.push({ ...definition, parameters: Type.Unsafe(definition.parameters) });
     }
-    if (request.node.type === "decision") {
+    const choices = request.node.type === "execute" ? request.node.choices : undefined;
+    if (choices) {
       allToolDefinitions.push({
         name: "decide",
         description:
           "Select exactly one declared choice. Required before this node can finish.",
         parameters: Type.Object(
-          { choice: StringEnum([...request.node.choices]) },
+          { choice: StringEnum([...choices]) },
           { additionalProperties: false },
         ),
         constrainedSampling: { type: "json_schema", strict: "prefer" },
@@ -250,8 +251,8 @@ export function createPiRunner(
         "Parent extension/MCP tools, skills, and session history are not inherited; use only the tools provided here. " +
         ((request.node.type === "merge" || request.node.type === "integrate") && workspace.mode === "read-only"
           ? "This merge has no Git sources; call finish_merge with an empty dispositions array before answering."
-          : request.node.type === "decision"
-          ? "You MUST call decide exactly once with a declared choice, then provide a concise natural-language answer."
+          : choices
+          ? "Do the work in your prompt, then call decide exactly once with the declared choice that fits your result, and give your result as a natural-language answer."
           : "Return your result as a natural-language answer."),
       messages: [
         {
@@ -540,8 +541,8 @@ export function createPiRunner(
         }
       }
       if (call.name !== "decide") return executeFileTool(call, signal);
-      if (request.node.type !== "decision") {
-        return toolResult(call, "decide is available only on decision nodes", true);
+      if (!choices) {
+        return toolResult(call, "decide is available only on nodes with choices", true);
       }
       const args = call.arguments;
       if (

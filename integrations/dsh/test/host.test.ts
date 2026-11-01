@@ -59,6 +59,7 @@ test("loads in actual Cordis/DSH services, produces valid canonical results, nat
     assert.match(JSON.stringify(assembly), /Braid is a proactive/);
     assert.match(JSON.stringify(assembly), /two or more parts that can run in parallel, or a step that needs its own context/);
     assert.match(JSON.stringify(assembly), /Otherwise keep consecutive steps in one node/);
+    assert.match(JSON.stringify(assembly), /give the choice its own node only when it must judge work independently/);
     assert.match(JSON.stringify(assembly), /Do not call sleep, run a shell sleep, use a timer, or enter a sleep\/poll loop/);
     const braidSchema = ctx.tools.schemas().find(tool => tool.name === "braid")!;
     assert.match(braidSchema.description, /ending your turn does not cancel it/);

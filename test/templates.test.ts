@@ -19,7 +19,7 @@ test("templates render for execute, decision, and merge nodes while plain and om
     promptTemplates: { task: "Inspect {{ target }}; then report on {{target}}. {{suffix}}" },
     nodes: [
       { type: "execute", id: "a", workspace: "read-only", model: "reviewer", prompt: { template: "task", variables: { target: "runtime", suffix: "" } } },
-      { type: "decision", id: "route", choices: ["accept"], prompt: { template: "task", variables: { target: "validation", suffix: "Choose accept." } } },
+      { type: "execute", id: "route", choices: ["accept"], prompt: { template: "task", variables: { target: "validation", suffix: "Choose accept." } } },
       { type: "merge", id: "merge", prompt: { template: "task", variables: { target: "changes", suffix: "Integrate." } } },
       { type: "execute", id: "plain", prompt: "Leave {{target}} unchanged in plain prompts." },
       { type: "merge", id: "default" },

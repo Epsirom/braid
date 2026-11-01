@@ -6,7 +6,7 @@
 | Pi package | Node.js 22.19+, Pi 1.2.0 is the pinned validation target |
 | DSH package | Node.js 22.19+, DeepSeek Harness 0.2.0-rc.2 is the pinned developer-preview host target; native Web panel |
 | CI | Core minimum Node 22.0; all three packages on Node 22.19 and 24 on Linux, macOS, Windows |
-| OpenAI-compatible runner | Chat Completions text and function-tool calls; decisions and merge/integrate nodes require tool calling |
+| OpenAI-compatible runner | Chat Completions text and function-tool calls; nodes with choices and merge/integrate nodes require tool calling |
 | Browsers / CommonJS | No standalone core browser build or CommonJS entry point in 0.6; the DSH `./client` export is loaded by DSH's Web host |
 
 The CI matrix describes configured checks; see actual workflow results for each
@@ -485,6 +485,33 @@ jobs, not the whole CI run. Its behavior is unchanged.
   `formatUnchanged` an optional `waitedMs` argument.
 - Pi: while a Braid job is outstanding, `braid_finish` says the call does not end
   the turn or the run, and how to end the turn.
+
+## Migrating from 0.6 to 0.7
+
+### Execute nodes route with `choices`; the `decision` type is removed
+
+Any execute node can now declare `choices`. It does its work, calls `decide`
+exactly once with one of them, and only its outgoing edges labelled with that
+choice activate. This replaces the `decision` node type, which needed a separate
+node, with a fresh context, whenever a graph branched or ended a loop.
+
+- Change `type: "decision"` to `type: "execute"` and keep `choices`, `prompt`,
+  and the other fields. Edges, `decide`, `result.decision`, and the
+  `DECISION_REQUIRED` and `INVALID_DECISION` error codes are unchanged.
+- A graph or update that still uses `type: "decision"` fails validation with
+  `Node '<id>': the decision node type was removed; use type "execute" with the
+  same choices`. There is no alias.
+- TypeScript: `DecisionNode` is removed; `ExecuteNode` has an optional
+  `choices`. Custom runners that checked `request.node.type === "decision"`
+  should check `request.decide` (or `request.node.choices`) instead.
+- `execution_created` events carry `choices` for a node that routes, so
+  displays can tell routing nodes apart without the graph definition.
+- A choice edge from a node without `choices` is rejected with `Choice edge from
+  '<id>', which declares no choices`.
+- Consider merging a decision node into the node before it: when the choice only
+  routes on that node's result, the node can choose as it finishes. Keep a
+  separate node when the choice judges work independently, such as whether a
+  review passes.
 
 ## Versioning
 
