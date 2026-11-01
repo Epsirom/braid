@@ -882,8 +882,9 @@ timeout remains unlimited:
 }
 ```
 
-The adapter sets `cacheRetention: "none"` and gives each node a fresh provider
-context. Tool budgets are unlimited unless `maxToolRounds` or
+Each node gets a fresh provider context. Within a node, the adapter leaves
+prompt caching to pi-ai (`"short"` retention unless `PI_CACHE_RETENTION` says
+otherwise), so each tool round reuses the cached prefix of the conversation. Tool budgets are unlimited unless `maxToolRounds` or
 `maxToolCalls` is set. Missing paths, invalid arguments, disallowed writes, and
 unavailable tools are returned as tool errors so the node can recover. Provider
 authentication and calls may still incur normal provider costs. Braid cannot
