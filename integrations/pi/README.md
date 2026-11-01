@@ -5,18 +5,21 @@
 This optional Pi extension runs Braid agent graphs as background jobs, with
 cycles, live updates and reruns, pause/resume, and a live flow panel.
 
-**0.5 API:** The npm badge shows the published version; see
+**0.6 API:** The npm badge shows the published version; see
 [GitHub releases](https://github.com/Epsirom/braid/releases) for release notes.
-Review the [0.4 → 0.5 migration guide](https://github.com/Epsirom/braid/blob/v0.5.2/docs/compatibility.md#migrating-from-04-to-05)
-before upgrading: running executions can pause and resume, configured node
-timeouts pause by default, and blocking mode is removed. Users coming from
-0.3 also need the [0.3 → 0.4 guide](https://github.com/Epsirom/braid/blob/v0.5.2/docs/compatibility.md#migrating-from-03-to-04)
+Review the [0.5 → 0.6 migration guide](https://github.com/Epsirom/braid/blob/v0.6.0/docs/compatibility.md#migrating-from-05-to-06)
+before upgrading: limits are unlimited by default and pause instead of failing,
+loops become `maxRuns` on a node of an execution-only graph, RPC runs wait for
+running jobs, and `--braid-ci-timeout` is renamed `--braid-timeout`. Users coming
+from 0.4 also need the [0.4 → 0.5 guide](https://github.com/Epsirom/braid/blob/v0.6.0/docs/compatibility.md#migrating-from-04-to-05)
+for pause/resume, node timeouts, and the removal of blocking mode. Users coming from
+0.3 also need the [0.3 → 0.4 guide](https://github.com/Epsirom/braid/blob/v0.6.0/docs/compatibility.md#migrating-from-03-to-04)
 for print/JSON job draining and Pi SDK behavior. Users coming from 0.2 also need the
-[0.2 → 0.3 guide](https://github.com/Epsirom/braid/blob/v0.5.2/docs/compatibility.md#migrating-from-02-to-03),
+[0.2 → 0.3 guide](https://github.com/Epsirom/braid/blob/v0.6.0/docs/compatibility.md#migrating-from-02-to-03),
 and users coming from 0.1 the
-[0.1 → 0.2 guide](https://github.com/Epsirom/braid/blob/v0.5.2/docs/compatibility.md#migrating-from-01-to-02).
+[0.1 → 0.2 guide](https://github.com/Epsirom/braid/blob/v0.6.0/docs/compatibility.md#migrating-from-01-to-02).
 For the previous release, use the
-[0.5.1 guide](https://github.com/Epsirom/braid/blob/v0.5.1/integrations/pi/README.md).
+[0.5.2 guide](https://github.com/Epsirom/braid/blob/v0.5.2/integrations/pi/README.md).
 
 It registers:
 

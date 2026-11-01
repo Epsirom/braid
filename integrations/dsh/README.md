@@ -8,10 +8,12 @@ It uses DSH's provider routing and credentials through `ctx.llm`; it has no Pi
 runtime dependency. Tested against **DSH 0.2.0-rc.2** and Node.js **22.19+**.
 DSH is in developer preview, so host peer versions are pinned to this baseline.
 
-For Braid 0.5, read the [0.4 → 0.5 migration guide](https://github.com/Epsirom/braid/blob/v0.5.2/docs/compatibility.md#migrating-from-04-to-05).
-Running executions can pause and resume, results can be held after completion,
-and a configured node timeout pauses by default. Set `options.onNodeTimeout`
-to `"fail"` to preserve the previous timeout behavior.
+For Braid 0.6, read the [0.5 → 0.6 migration guide](https://github.com/Epsirom/braid/blob/v0.6.0/docs/compatibility.md#migrating-from-05-to-06).
+Limits are unlimited by default and pause a job instead of failing it, and loops
+become `maxRuns` on a node of an execution-only graph. Coming from 0.4, also read
+the [0.4 → 0.5 migration guide](https://github.com/Epsirom/braid/blob/v0.6.0/docs/compatibility.md#migrating-from-04-to-05):
+running executions can pause and resume, results can be held after completion,
+and a configured node timeout pauses by default.
 
 ## Install
 
