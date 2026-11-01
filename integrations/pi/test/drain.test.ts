@@ -126,7 +126,7 @@ const scenarios: Record<string, Scenario> = {
     parent: [
       `return launch();`,
       `return call("braid_finish", { status: "success", summary: "Submitted the review." });`,
-      `assert.match(last(), /Recorded success\\. 1 Braid job\\(s\\) are still outstanding/); return say("Waiting.");`,
+      `assert.match(last(), /Recorded success\\. 1 Braid job\\(s\\) are still outstanding, and this call does not end your turn or the run\\. To wait for them, end your turn \\(reply without calling a tool\\)/); return say("Waiting.");`,
       `assert.match(last(), /Braid job job-1 finished with status completed/); return say("REPORTED SUCCESS");`,
     ],
   },

@@ -433,6 +433,13 @@ is resumed by the reminder within the same run.
 - Pi and DSH: a whole-job `braid_status` shows only each node's latest output and
   counts the earlier ones it leaves out (`2 earlier outputs not shown`). Read an
   earlier output with `braid_status` and its `executionId`.
+- Pi and DSH: reading the same running execution again lists only the history
+  entries added since the previous read, then says to end the turn. Paging with
+  `activityBefore` is unchanged. `formatActivity` takes an optional `seen`
+  argument, `formatNodeStatus` an optional `seen` field, and `focusedRead`
+  records reads.
+- Pi: while a Braid job is outstanding, `braid_finish` says the call does not end
+  the turn or the run, and how to end the turn.
 
 ## Versioning
 

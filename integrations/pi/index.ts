@@ -16,7 +16,7 @@ import { registerBraidCommand, registerBraidWidget } from "./command.js";
 import { registerReviewCommand } from "./review.js";
 import { BRAID_DRAIN_GUIDANCE, BRAID_FINISH_GUIDANCE, BRAID_HOLD_GUIDANCE, holdsSettlement, isSingleShot, registerDrain } from "./drain.js";
 import { renderGraphCall, renderGraphResult, renderNodeResult } from "./display.js";
-import { formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatReceipt, formatReplanRequest, formatResume, formatTimeoutPause, formatUnchanged, formatUpdate, formatWaiting, statusFingerprint } from "./status-text.js";
+import { type ActivitySeen, focusedRead, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatReceipt, formatReplanRequest, formatResume, formatTimeoutPause, formatUnchanged, formatUpdate, formatWaiting, statusFingerprint } from "./status-text.js";
 
 const text = (description?: string) => Type.String({ minLength: 1, pattern: "\\S", ...(description ? { description } : {}) });
 const prompt = () => Type.Union([
@@ -193,6 +193,8 @@ function explained<T>(act: () => T): T {
 export function createBraidTools(jobs: BraidJobs) {
   /** The last full braid_status read of each job, to answer an unchanged one briefly. */
   const lastRead = new Map<string, { fingerprint: string; at: number }>();
+  /** The last focused read of each running execution, to show only its new activity. */
+  const lastFocused = new Map<string, ActivitySeen>();
   const braidTool = defineTool<typeof braidParameters, BraidStatusDetails | undefined>(
     {
       name: "braid",
@@ -353,7 +355,9 @@ export function createBraidTools(jobs: BraidJobs) {
         const activity = node.executionId ? jobs.getActivity(params.jobId, node.executionId, {
           limit: STATUS_ACTIVITY_ENTRIES, ...(params.activityBefore === undefined ? {} : { before: params.activityBefore }),
         }) : undefined;
-        const result = await boundedText(formatNodeStatus({ job, node, ...(activity ? { activity } : {}), now: Date.now() }), "node.txt");
+        const now = Date.now();
+        const seen = activity && params.activityBefore === undefined ? focusedRead(lastFocused, job.jobId, activity, now) : undefined;
+        const result = await boundedText(formatNodeStatus({ job, node, ...(activity ? { activity } : {}), ...(seen ? { seen } : {}), now }), "node.txt");
         // Focused reads do not claim the whole job's usage; final job retrieval does.
         return { content: [{ type: "text", text: result.text }], details: {
           ...job, selectedNode: node, ...(activity ? { selectedActivity: activity } : {}), ...(result.path ? { nodeOutputPath: result.path } : {}),

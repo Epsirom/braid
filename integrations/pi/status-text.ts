@@ -208,7 +208,28 @@ export function formatPause(job: JobSnapshot, executionIds?: readonly string[]):
   ].join("\n");
 }
 
-export function formatActivity(activity: ExecutionActivity, now: number, jobId: string): string {
+/** The last history entry an earlier focused read showed, and when. */
+export interface ActivitySeen {
+  through: number;
+  at: number;
+}
+
+/** Ending the turn is the only way to wait; agents that cannot tell how keep calling tools. */
+export const END_TURN = "end your turn (reply without calling a tool)";
+
+/** Record a focused read of a running execution; returns what the previous read showed, if any. */
+export function focusedRead(reads: Map<string, ActivitySeen>, jobId: string, activity: ExecutionActivity, now: number): ActivitySeen | undefined {
+  const key = `${jobId}/${activity.executionId}`;
+  const seen = reads.get(key);
+  if (activity.finishedAt !== undefined) {
+    reads.delete(key);
+    return undefined;
+  }
+  reads.set(key, { through: Math.max(seen?.through ?? 0, activity.entries.at(-1)?.sequence ?? 0), at: now });
+  return seen;
+}
+
+export function formatActivity(activity: ExecutionActivity, now: number, jobId: string, seen?: ActivitySeen): string {
   const lines = [`Activity: ${activity.phase} for ${duration(now - activity.phaseStartedAt)}; last observed signal ${duration(now - activity.lastActivityAt)} ago (${activity.lastActivity}). Model requests ${activity.modelRequests}, tool calls ${activity.toolCalls}.`];
   const model = activity.model;
   if (model && model.completedAt === undefined) {
@@ -221,14 +242,20 @@ export function formatActivity(activity: ExecutionActivity, now: number, jobId: 
     if (tool.outputTail) lines.push(indent(`Output tail:\n${tool.outputTail}`));
   }
   for (const limitation of activity.limitations) lines.push(`Not observable: ${limitation}`);
-  if (activity.entries.length) {
-    lines.push("History:");
-    for (const entry of activity.entries) {
+  // A repeated read of a running execution shows only what that read did not.
+  const entries = seen ? activity.entries.filter(entry => entry.sequence > seen.through) : activity.entries;
+  if (seen) lines.push(entries.length
+    ? `History since your read ${duration(now - seen.at)} ago, which showed entries through #${seen.through}:`
+    : `No new history since your read ${duration(now - seen.at)} ago, which showed entries through #${seen.through}.`);
+  if (entries.length) {
+    if (!seen) lines.push("History:");
+    for (const entry of entries) {
       lines.push(`- #${entry.sequence} ${iso(entry.timestamp)} ${entry.kind}${entry.toolName ? ` ${entry.toolName}` : ""}${entry.isError ? " (error)" : ""}${entry.durationMs !== undefined ? ` ${duration(entry.durationMs)}` : ""}: ${entry.summary}`);
       if (entry.detail) lines.push(indent(entry.detail + (entry.detailLength ? `\n[preview of ${entry.detailLength} chars]` : "")));
     }
-    const first = activity.entries[0]!.sequence;
-    if (first > 1) lines.push(first - 1 > activity.droppedEntries
+    const first = entries[0]!.sequence;
+    // Entries between the earlier read and this page are left to paging.
+    if (first > (seen ? seen.through + 1 : 1)) lines.push(first - 1 > activity.droppedEntries
       ? `Earlier entries: braid_status({"jobId":"${jobId}","executionId":"${activity.executionId}","activityBefore":${first}})`
       : `${activity.droppedEntries} earlier entries are no longer retained.`);
   }
@@ -239,11 +266,13 @@ export interface NodeStatus {
   job: JobSnapshot;
   node: NodeResult & Partial<Pick<NodeExecution, "node">>;
   activity?: ExecutionActivity;
+  /** Set on a repeated read of the same running execution. */
+  seen?: ActivitySeen;
   now: number;
 }
 
 /** A focused read: the current control state, then one execution in full. */
-export function formatNodeStatus({ job, node, activity, now }: NodeStatus): string {
+export function formatNodeStatus({ job, node, activity, seen, now }: NodeStatus): string {
   const lines = [`Braid job ${job.handle} · ${job.status} · ${control(job.execution)}`,
     ...node.suspension ? [`Execution is ${node.suspension.state}, ${pausedBy(node.suspension)}${node.suspension.suspendedAt !== undefined ? ` since ${iso(node.suspension.suspendedAt)}` : ""}.${node.suspension.source === "user" ? ` ${USER_PAUSE_NOTE}` : node.suspension.source === "node_timeout" ? ` ${TIMEOUT_PAUSE_NOTE}` : ""}`] : [],
     ...pendingHold(node) ? [`Its result will be held when it finishes (set by ${holdSource(node.holdAfter!)}).${node.holdAfter!.source === "user" ? ` ${USER_HOLD_NOTE}` : ""}`] : [],
@@ -266,7 +295,8 @@ export function formatNodeStatus({ job, node, activity, now }: NodeStatus): stri
   const output = `Output:\n${node.output ?? "(none)"}`;
   // While running, activity is the useful part; afterwards the output is.
   const running = activity && activity.finishedAt === undefined;
-  const sections = [lines.join("\n"), ...running ? [formatActivity(activity, now, job.handle), output] : [output, ...activity ? [formatActivity(activity, now, job.handle)] : []]];
+  const sections = [lines.join("\n"), ...running ? [formatActivity(activity, now, job.handle, seen), output] : [output, ...activity ? [formatActivity(activity, now, job.handle)] : []]];
+  if (running && seen) sections.push(`A reminder follows when ${node.executionId} finishes: ${END_TURN} instead of reading it again.`);
   return sections.join("\n\n");
 }
 
@@ -317,7 +347,7 @@ export function formatUnchanged(job: JobSnapshot, now: number, readAt: number, a
     `Braid job ${job.handle} · ${job.status} · nothing changed since your full braid_status ${duration(now - readAt)} ago (revision ${job.execution?.revision ?? 0}); that read still applies.`,
     ...running.length ? ["Running:", ...running.map(execution =>
       `- ${[execution.executionId, ...progress(execution, now, activityOf?.(execution.executionId!)), ...execution.suspension ? [`${execution.suspension.state}, ${pausedBy(execution.suspension)}`] : []].join(" · ")}`)] : [],
-    "A reminder wakes you when an execution finishes or the job needs you: end your turn instead of reading again. To check on one execution, read it with braid_status and its executionId.",
+    `A reminder wakes you when an execution finishes or the job needs you: ${END_TURN} instead of reading again, here or for one execution.`,
   ].join("\n");
 }
 

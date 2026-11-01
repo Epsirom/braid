@@ -138,7 +138,15 @@ test("braid_status shows running progress, answers an unchanged job briefly, and
   const unchanged = await status();
   assert.match(unchanged, /^Braid job job-\d+ · running · nothing changed since your full braid_status \d+ms ago \(revision 0\); that read still applies\.$/m);
   assert.match(unchanged, /^Running:\n- impl@1 · \d+ms so far · model for \d+ms · model requests 1, tool calls 0$/m);
+  assert.match(unchanged, /end your turn \(reply without calling a tool\) instead of reading again, here or for one execution\.$/);
   assert.doesNotMatch(unchanged, /Executions/);
+  // A repeated focused read of a running execution shows only new history.
+  const focused = async () => (await run("braid_status", { jobId: job.handle, executionId: "impl@1" })).text;
+  assert.match(await focused(), /^History:$/m);
+  const again = await focused();
+  assert.match(again, /^No new history since your read \d+ms ago, which showed entries through #\d+\.$/m);
+  assert.doesNotMatch(again, /^History:$|^- #1 /m);
+  assert.match(again, /^A reminder follows when impl@1 finishes: end your turn \(reply without calling a tool\) instead of reading it again\.$/m);
   await run("braid_update", { jobId: job.handle, expectedRevision: 0, addEdges: [{ from: "impl", to: "test" }] });
   assert.match(await status(), /^- test@1 · node test · completed · held, inputs changed; releasing it reruns its node with the new inputs, and this result does not go downstream/m);
   assert.match((await run("braid_status", { jobId: job.handle, executionId: "test@1" })).text,

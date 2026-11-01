@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BraidJobs, type WaitingNotice } from "../jobs.js";
 import braidExtension, { createBraidTools } from "../index.js";
-import { formatWaiting } from "../status-text.js";
+import { formatActivity, formatWaiting } from "../status-text.js";
 import { context, deferred, response } from "./helpers.js";
 
 const until = async (condition: () => boolean, timeoutMs = 5_000) => {
@@ -206,8 +206,15 @@ test("braid_status shows running progress, answers an unchanged job briefly, and
   const unchanged = await status();
   assert.match(unchanged, /^Braid job job-\d+ · running · nothing changed since your full braid_status \d+ms ago \(revision 0\); that read still applies\.$/m);
   assert.match(unchanged, /^Running:\n- impl@1 · \d+ms so far · model for \d+ms · model requests 1, tool calls 0$/m);
-  assert.match(unchanged, /end your turn instead of reading again/);
+  assert.match(unchanged, /end your turn \(reply without calling a tool\) instead of reading again, here or for one execution\.$/);
   assert.doesNotMatch(unchanged, /Executions/);
+  // A repeated focused read of a running execution shows only new history.
+  const focused = async () => text(await tools.statusTool.execute("focused", { jobId: job.handle, executionId: "impl@1" }, undefined, undefined, ctx));
+  assert.match(await focused(), /^History:$/m);
+  const again = await focused();
+  assert.match(again, /^No new history since your read \d+ms ago, which showed entries through #\d+\.$/m);
+  assert.doesNotMatch(again, /^History:$|^- #1 /m);
+  assert.match(again, /^A reminder follows when impl@1 finishes: end your turn \(reply without calling a tool\) instead of reading it again\.$/m);
   // A new edge into the held test changes its inputs.
   await tools.updateTool.execute("edge", { jobId: job.handle, expectedRevision: 0, addEdges: [{ from: "impl", to: "test" }] }, undefined, undefined, ctx);
   const changed = await status();
@@ -224,6 +231,17 @@ test("braid_status shows running progress, answers an unchanged job briefly, and
   assert.match(rerun, /^## test · test@2$/m);
   assert.doesNotMatch(rerun, /^## test · test@1/m);
   assert.match(rerun, /^1 earlier output not shown: read one with braid_status and its executionId\.$/m);
+});
+
+test("a repeated focused read lists only history after what the earlier read showed, and pages across a gap", () => {
+  const entry = (sequence: number) => ({ sequence, timestamp: sequence * 1000, kind: "tool_call" as const, summary: `call ${sequence}` });
+  const activity = { executionId: "impl@1", nodeId: "impl", startedAt: 0, phase: "model" as const, phaseStartedAt: 0, lastActivityAt: 0, lastActivity: "x",
+    modelRequests: 1, toolCalls: 3, tools: [], limitations: [], entries: [entry(4), entry(5), entry(6)], sequence: 6, droppedEntries: 0 };
+  const next = formatActivity(activity, 10_000, "job-1", { through: 4, at: 7000 });
+  assert.match(next, /^History since your read 3\.0s ago, which showed entries through #4:\n- #5 [^\n]*call 5\n- #6 /m);
+  assert.doesNotMatch(next, /call 4|Earlier entries/);
+  assert.match(formatActivity(activity, 10_000, "job-1", { through: 2, at: 7000 }),
+    /^Earlier entries: braid_status\(\{"jobId":"job-1","executionId":"impl@1","activityBefore":4\}\)$/m);
 });
 
 test("a waiting reminder says when a held result's inputs changed, and offers braid_cancel with executionIds only for suspended work", () => {

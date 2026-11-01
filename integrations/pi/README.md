@@ -30,7 +30,7 @@ It registers:
   requests and tool calls. It shows only each node's latest output; read an
   earlier one by its `executionId`. Reading a
   running job again when nothing changed returns only that progress and a reminder
-  to wait.
+  to wait; reading the same running execution again lists only its new history.
 - `braid_update` / `braid_resume` — add, edit, rerun, or remove nodes, or release paused executions.
 - `braid_pause` — pause running executions, or the whole job, without losing their
   work; with `after: true`, hold a running execution's result once it finishes.

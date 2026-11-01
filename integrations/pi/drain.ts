@@ -7,6 +7,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { BraidJobs, OutstandingJob } from "./jobs.js";
+import { END_TURN } from "./status-text.js";
 
 /** Pi exits once print and JSON runs settle, so Braid drains jobs before that. */
 export const isSingleShot = (ctx: Pick<ExtensionContext, "mode">) => ctx.mode === "print" || ctx.mode === "json";
@@ -115,7 +116,7 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
     label: "Finish Braid run",
     description:
       "Single-shot (print/JSON) runs only: record the run outcome for CI. status failure makes the process exit 1. " +
-      "It does not end the run; call it once the task is done and no Braid job is outstanding, then end your turn. A later call replaces the outcome.",
+      "It does not end the run or your turn; call it once the task is done and no Braid job is outstanding, then end your turn. A later call replaces the outcome.",
     parameters: finishParameters,
     // Activated in single-shot sessions only, so interactive runs never see it.
     defaultActive: false,
@@ -127,7 +128,7 @@ export function registerDrain(pi: ExtensionAPI, jobs: BraidJobs, hasPendingRemin
         content: [{
           type: "text",
           text: `Recorded ${params.status}.` + (outstanding
-            ? ` ${outstanding} Braid job(s) are still outstanding; the run stays open until they finish, so continue from their reminders and call braid_finish again if the outcome changes.`
+            ? ` ${outstanding} Braid job(s) are still outstanding, and this call does not end your turn or the run. To wait for them, ${END_TURN}; their reminders resume you. Call braid_finish again once they finish.`
             : " End your turn with your final response."),
         }],
         details: outcome,

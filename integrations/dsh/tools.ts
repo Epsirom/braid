@@ -4,7 +4,7 @@ import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { GraphUpdate } from "@chrok/braid";
 import { BRAID_ASYNC_GUIDANCE, braidParameters, edgeIdentityParameters, edgeParameters, limitFields, nodeParameters } from "./schema.js";
 import type { BraidJobs, JobSnapshot } from "./jobs.js";
-import { boundedText, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUnchanged, formatUpdate, statusFingerprint } from "./status-text.js";
+import { type ActivitySeen, boundedText, focusedRead, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUnchanged, formatUpdate, statusFingerprint } from "./status-text.js";
 
 const id = Type.String({ minLength: 1, pattern: "\\S" });
 const revision = Type.Integer({ minimum: 0 });
@@ -65,6 +65,8 @@ export function createBraidTools(
 ): ToolDefinition[] {
   /** The last full braid_status read of each job, to answer an unchanged one briefly. */
   const lastRead = new Map<string, { fingerprint: string; at: number }>();
+  /** The last focused read of each running execution, to show only its new activity. */
+  const lastFocused = new Map<string, ActivitySeen>();
   function tool<S extends TSchema>(name: string, description: string, parameters: S,
     execute: (args: import("@sinclair/typebox").Static<S>, context: ToolRunContext) => ToolValue | Promise<ToolValue>): ToolDefinition {
     // TypeBox's symbol metadata is local validation state, not lossless wire JSON.
@@ -113,8 +115,10 @@ export function createBraidTools(
       const activity = node.executionId ? jobs.getActivity(args.jobId, node.executionId, {
         limit: STATUS_ACTIVITY_ENTRIES, ...(args.activityBefore === undefined ? {} : { before: args.activityBefore }),
       }) : undefined;
+      const now = Date.now();
+      const seen = activity && args.activityBefore === undefined ? focusedRead(lastFocused, job.jobId, activity, now) : undefined;
       return { ...control(job), node: { id: node.id, executionId: node.executionId, status: node.status },
-        ...await bounded(formatNodeStatus({ job, node, ...(activity ? { activity } : {}), now: Date.now() }), "node.txt") };
+        ...await bounded(formatNodeStatus({ job, node, ...(activity ? { activity } : {}), ...(seen ? { seen } : {}), now }), "node.txt") };
     }),
     tool("braid_cancel", "Cancel a background job. Foreground cancellation does not stop Braid jobs. With executionIds, fail only those running or paused executions and keep the job running: their successors follow the usual failure rules (unconditional edges receive the error; requireSuccess aborts the job). A node timeout pause fails with NODE_TIMEOUT, anything else with CANCELLED.", Type.Object({
       jobId: id, executionIds: Type.Optional(Type.Array(id, { minItems: 1, uniqueItems: true })),
