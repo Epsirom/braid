@@ -70,7 +70,7 @@ test("braid_resume after=true removes a pauseAfter hold from a running execution
   await until(() => calls() === 1);
   const executionId = Object.keys(jobs.get(handle)!.execution!.executions)[0]!;
   const status = textOf(await tools.statusTool.execute("status", { jobId: handle }, undefined, undefined, ctx));
-  assert.match(status, new RegExp(`${executionId} · node a · running · holds when finished, set by pauseAfter`));
+  assert.match(status, new RegExp(`${executionId} · node a · running · [^\n]*holds when finished, set by pauseAfter`));
   const removed = await tools.resumeTool.execute("unhold", { jobId: handle, executionIds: [executionId], after: true }, undefined, undefined, ctx);
   assert.match(textOf(removed), /hold removed for .*; their results go downstream when they finish\./);
   assert.equal(jobs.get(handle)!.execution!.graph.nodes[0]!.pauseAfter, true, "the definition keeps pauseAfter");

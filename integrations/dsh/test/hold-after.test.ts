@@ -62,7 +62,7 @@ test("braid_resume after=true removes a pauseAfter hold from a running execution
   await until(() => requests() === 1);
   const executionId = Object.keys(jobs.get(job.handle).execution.executions)[0]!;
   const status = await run("braid_status", { jobId: job.handle });
-  assert.match(status.text, new RegExp(`${executionId} · node a · running · holds when finished, set by pauseAfter`));
+  assert.match(status.text, new RegExp(`${executionId} · node a · running · [^\n]*holds when finished, set by pauseAfter`));
   const removed = await run("braid_resume", { jobId: job.handle, executionIds: [executionId], after: true });
   assert.match(removed.text, /hold removed for .*; their results go downstream when they finish\./);
   assert.deepEqual(removed.pausedExecutionIds, []);

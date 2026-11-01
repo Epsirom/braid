@@ -16,7 +16,7 @@ import { registerBraidCommand, registerBraidWidget } from "./command.js";
 import { registerReviewCommand } from "./review.js";
 import { BRAID_DRAIN_GUIDANCE, BRAID_FINISH_GUIDANCE, BRAID_HOLD_GUIDANCE, holdsSettlement, isSingleShot, registerDrain } from "./drain.js";
 import { renderGraphCall, renderGraphResult, renderNodeResult } from "./display.js";
-import { formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatPausePending, formatReceipt, formatReplanRequest, formatResume, formatTimeoutPause, formatUpdate, formatWaiting } from "./status-text.js";
+import { type ActivitySeen, focusedRead, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatPausePending, formatReceipt, formatReplanRequest, formatResume, formatTimeoutPause, formatUnchanged, formatUpdate, formatWaiting, statusFingerprint, UNCHANGED_WAIT_MS, untilChanged } from "./status-text.js";
 
 const text = (description?: string) => Type.String({ minLength: 1, pattern: "\\S", ...(description ? { description } : {}) });
 const prompt = () => Type.Union([
@@ -110,7 +110,7 @@ const braidParameters = Type.Object({
     onNodeTimeout: Type.Optional(StringEnum(["pause", "fail"], { description: "What a node timeout does. Usually omit to keep the default, pause: interrupt the current step and suspend the execution with its work, and send you a reminder to resume it with a new time budget or cancel it. fail: the execution fails with NODE_TIMEOUT and cannot continue its conversation; use it only when the user asks for it." })),
     onLimit: Type.Optional(StringEnum(["pause", "fail"], { description: "What reaching a node's maxRuns, maxExecutions, graphTimeoutMs, or maxTokens does. Usually omit to keep the default, pause: the rerun waits or the job pauses, and you get a reminder to raise the limit or stop. fail: the job fails; use it only when the user asks for it." })),
     maxModelRetries: Type.Optional(Type.Integer({ minimum: 0, maximum: 10, description: "Retries per model request for transient provider errors such as rate limits, overload, and network failures. The node continues where it was; completed tool calls are not repeated. Default 3; 0 disables." })),
-  }, { additionalProperties: false })),
+  }, { additionalProperties: false, description: "Job-wide options. There is no model option: omit model to run every node on the current model, and set model on a node only to override it." })),
 }, { additionalProperties: false });
 
 const BRAID_FILESYSTEM_GUIDANCE =
@@ -127,7 +127,7 @@ export const BRAID_ASYNC_GUIDANCE =
   "Do not call sleep, run a shell sleep, use a timer, or enter a sleep/poll loop solely to wait for a Braid job; delays required by the user's actual task remain allowed. " +
   "On the reminder, retrieve terminal outputs with braid_status before relying on them and continue the original task. Between reminders, use braid_status only for deliberate progress checks or diagnosis. " +
   "Set notifyOnCompletion=true on selected nodes to receive intermediate success/failure reminders. Each node runs as a series of executions named <nodeId>@<generation>, such as review@2; braid_status({jobId, executionId}) retrieves one, and nodeId selects the node's latest. Use pauseAfter=true to hold outgoing scheduling. " +
-  "Change the graph with braid_update using expectedRevision. Upserting a node that has not started edits it in place. Upserting a node that has started, running or finished, replaces it: a new execution runs with the new definition, a running one is cancelled, and once the replacement finishes, the nodes downstream of it rerun; an unchanged definition simply reruns the node. An edge added into a finished node reruns it once its new input finishes. To review a replacement before its downstream reruns, give it pauseAfter=true. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes. " +
+  "Change the graph with braid_update using expectedRevision. Upserting a node that has not started edits it in place. Upserting a node that has started, running or finished, replaces it: a new execution runs with the new definition, a running one is cancelled, and once the replacement finishes, the nodes downstream of it rerun; an unchanged definition simply reruns the node. An edge added into a finished node reruns it once its new input finishes. To review a replacement before its downstream reruns, give it pauseAfter=true. Use resume in the same update to apply changes and release held executions atomically, or braid_resume for no graph changes. Releasing a held result is safe when its inputs change in that update or upstream reruns: braid_status marks it \"inputs changed\", and releasing it reruns its node with the new inputs instead of passing the old result downstream; nodes downstream wait for the rerun. Only running or paused executions can be failed with braid_cancel and executionIds. " +
   "Use braid_pause to stop running executions temporarily (each stops before its next model request and keeps its conversation and workspace), or the whole job; send them a message or adjust the graph, then resume. " +
   "pauseAfter is captured when an execution starts; to review a running execution's result before downstream work starts, use braid_pause({jobId, executionIds, after: true}) instead, and braid_resume({jobId, executionIds, after: true}) removes that hold. " +
   "If the last running execution finishes while work you paused or held remains, you get a reminder that the job waits for you: resume, update, or cancel it. The user can also pause and resume from /braid; you get a notice with your next turn. Do not resume work the user paused unless the user asks. " +
@@ -175,7 +175,26 @@ async function boundedText(text: string, name: string): Promise<{ text: string; 
   return { text: `${preview.content}\n[Truncated. Full text: ${path}]`, path };
 }
 
-export function createBraidTools(jobs: BraidJobs) {
+/** Core names an execution it cannot act on; add which tool can. */
+function explained<T>(act: () => T): T {
+  try { return act(); }
+  catch (error) {
+    if (!(error instanceof Error)) throw error;
+    if (error.message.includes(" is completed and held")) {
+      throw new Error(`${error.message}. braid_cancel with executionIds fails only running or paused executions: release a held result with braid_resume, or replace its node with braid_update.`);
+    }
+    if (error.message.includes(" is running and is held when it finishes")) {
+      throw new Error(`${error.message}; its completion reminder says when. To change it now, upsert its node in braid_update without resuming it: that replaces the running execution`);
+    }
+    throw error;
+  }
+}
+
+export function createBraidTools(jobs: BraidJobs, { unchangedWaitMs = UNCHANGED_WAIT_MS }: { unchangedWaitMs?: number } = {}) {
+  /** The last full braid_status read of each job, to answer an unchanged one briefly. */
+  const lastRead = new Map<string, { fingerprint: string; at: number }>();
+  /** The last focused read of each running execution, to show only its new activity. */
+  const lastFocused = new Map<string, ActivitySeen>();
   const braidTool = defineTool<typeof braidParameters, BraidStatusDetails | undefined>(
     {
       name: "braid",
@@ -279,7 +298,7 @@ export function createBraidTools(jobs: BraidJobs) {
     name: "braid_status",
     label: "Braid status",
     description:
-      "Retrieve a Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Add executionId for an exact execution, or nodeId for the latest instance, including intermediate results while the job runs. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and recent history. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the current graph revision and paused execution IDs for live control. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. Usage is Pi's provider accounting, including rounds from failed nodes. Prefer the short handle from submission/reminders. Omit all IDs to list jobs in this session. Follow the current session's Braid execution policy for result retrieval; do not sleep, use a timer, or poll in a loop to wait for a job.",
+      "Retrieve a Braid job's status, node progress, and final results by exact session handle (e.g. job-1) or UUID in jobId. Add executionId for an exact execution, or nodeId for the latest instance, including intermediate results while the job runs. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and recent history. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the current graph revision and paused execution IDs for live control. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. Usage is Pi's provider accounting, including rounds from failed nodes. Prefer the short handle from submission/reminders. Omit all IDs to list jobs in this session. Follow the current session's Braid execution policy for result retrieval; do not sleep, use a timer, or poll in a loop to wait for a job. Reading an unchanged running job again waits up to 30s for a change before it answers.",
     parameters: statusParameters,
     renderResult(result, options, theme, ctx) {
       const job = result.details;
@@ -329,20 +348,38 @@ export function createBraidTools(jobs: BraidJobs) {
           content: [{ type: "text", text: formatJobList(jobs.list()) }],
           details: undefined,
         };
-      const job = jobs.get(params.jobId);
+      let job = jobs.get(params.jobId);
       if (!job) throw jobs.unknownJob(params.jobId);
       if (params.nodeId !== undefined || params.executionId !== undefined) {
         const node = jobs.getNode(params.jobId, params.nodeId, params.executionId);
         const activity = node.executionId ? jobs.getActivity(params.jobId, node.executionId, {
           limit: STATUS_ACTIVITY_ENTRIES, ...(params.activityBefore === undefined ? {} : { before: params.activityBefore }),
         }) : undefined;
-        const result = await boundedText(formatNodeStatus({ job, node, ...(activity ? { activity } : {}), now: Date.now() }), "node.txt");
+        const now = Date.now();
+        const seen = activity && params.activityBefore === undefined ? focusedRead(lastFocused, job.jobId, activity, now) : undefined;
+        const result = await boundedText(formatNodeStatus({ job, node, ...(activity ? { activity } : {}), ...(seen ? { seen } : {}), now }), "node.txt");
         // Focused reads do not claim the whole job's usage; final job retrieval does.
         return { content: [{ type: "text", text: result.text }], details: {
           ...job, selectedNode: node, ...(activity ? { selectedActivity: activity } : {}), ...(result.path ? { nodeOutputPath: result.path } : {}),
         } };
       }
-      const result = await boundedText(formatJobStatus(job, Date.now()), "status.txt");
+      const jobId = job.jobId;
+      const activityOf = (executionId: string) => jobs.getActivity(jobId, executionId, { limit: 0 });
+      // A running job that has not changed since the last full read waits for a change, then gets a short reply if none came.
+      const previous = lastRead.get(jobId);
+      let waitedMs: number | undefined;
+      if (job.status === "running" && previous?.fingerprint === statusFingerprint(job)) {
+        const started = Date.now();
+        await untilChanged(listener => jobs.subscribe(listener), () => statusFingerprint(jobs.get(jobId) ?? job!), previous.fingerprint, unchangedWaitMs, signal);
+        job = jobs.get(jobId) ?? job;
+        waitedMs = Date.now() - started;
+      }
+      const now = Date.now();
+      const fingerprint = statusFingerprint(job);
+      if (job.status === "running" && previous?.fingerprint === fingerprint)
+        return { content: [{ type: "text", text: formatUnchanged(job, now, previous.at, activityOf, waitedMs) }], details: job };
+      lastRead.set(jobId, { fingerprint, at: now });
+      const result = await boundedText(formatJobStatus(job, now, activityOf), "status.txt");
       const details: BraidStatusDetails = result.path ? { ...job, fullOutputPath: result.path } : job;
       // Saving a running snapshot can race job completion; claim usage only
       // when this response actually contains a terminal snapshot.
@@ -367,7 +404,7 @@ export function createBraidTools(jobs: BraidJobs) {
     parameters: cancelParameters,
     async execute(_id, params) {
       if (params.executionIds) {
-        const job = jobs.cancelExecutions(params.jobId, params.executionIds, "agent");
+        const job = explained(() => jobs.cancelExecutions(params.jobId, params.executionIds!, "agent"));
         return { content: [{ type: "text", text: formatCancelExecutions(job, params.executionIds) }], details: job };
       }
       const cancelled = jobs.cancel(params.jobId);
@@ -404,7 +441,7 @@ export function createBraidTools(jobs: BraidJobs) {
       let job: JobSnapshot;
       const previous = jobs.get(jobId)?.execution?.graph;
       try {
-        job = jobs.update(jobId, patch as GraphUpdate);
+        job = explained(() => jobs.update(jobId, patch as GraphUpdate));
       } catch (error) {
         throw new Error(`Braid update rejected; no changes or resumes were applied. ${error instanceof Error ? error.message : String(error)}. Retry the complete corrected patch, including its edges/resume; adding disconnected nodes separately can start them immediately.`);
       }
@@ -438,8 +475,8 @@ export function createBraidTools(jobs: BraidJobs) {
         return { content: [{ type: "text", text: formatResume(jobs.resumeJob(params.jobId, "agent", params.limits)) }], details: jobs.get(params.jobId)! };
       }
       if (params.expectedRevision === undefined) throw new Error("expectedRevision is required with executionIds; read it from braid_status");
-      const job = jobs.resume(params.jobId, params.executionIds, params.expectedRevision, "agent",
-        params.nodeTimeoutMs === undefined ? undefined : { nodeTimeoutMs: params.nodeTimeoutMs });
+      const job = explained(() => jobs.resume(params.jobId, params.executionIds!, params.expectedRevision!, "agent",
+        params.nodeTimeoutMs === undefined ? undefined : { nodeTimeoutMs: params.nodeTimeoutMs }));
       return { content: [{ type: "text", text: formatResume(job) }], details: job };
     },
   });

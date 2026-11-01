@@ -67,11 +67,21 @@ export function pausedBy(suspension: ExecutionSuspension): string {
 /** A node timeout pause waits for the parent's decision. */
 const TIMEOUT_PAUSE_NOTE = "Its node timeout ran out. Resume it with braid_resume (optionally with nodeTimeoutMs; the default is the job's nodeTimeoutMs again), or fail only this execution with braid_cancel and executionIds. Its successors wait until then.";
 
-function executionLine(execution: NodeResult, graph?: Pick<BraidInput, "nodes" | "edges">): string {
+/** How long a running execution has run and what it is doing, so progress shows without a focused read. */
+function progress(execution: NodeResult, now: number, activity: ExecutionActivity | undefined): string[] {
+  if (execution.status !== "running" || execution.startedAt === undefined) return [];
+  const parts = [`${duration(now - execution.startedAt)} so far`];
+  // A suspended execution says so itself; its phase would repeat it.
+  if (activity && !activity.finishedAt && !execution.suspension) parts.push(`${activity.phase} for ${duration(now - activity.phaseStartedAt)}`);
+  if (activity) parts.push(`model requests ${activity.modelRequests}, tool calls ${activity.toolCalls}`);
+  return parts;
+}
+
+function executionLine(execution: NodeResult & Partial<Pick<NodeExecution, "predecessorExecutionIds">>, graph?: Pick<BraidInput, "nodes" | "edges">, now = 0, activity?: ExecutionActivity): string {
   const parts = [execution.executionId ?? "(no execution)", `node ${execution.id}`];
-  parts.push(execution.skipReason ? `${execution.status} (${execution.skipReason})` : execution.status);
+  parts.push(execution.skipReason ? `${execution.status} (${execution.skipReason})` : execution.status, ...progress(execution, now, activity));
   if (execution.waitReason) parts.push(`waiting: ${waitText(execution, graph)}`);
-  if (execution.held) parts.push("held");
+  if (execution.held) parts.push(execution.inputsChanged ? `held, ${INPUTS_CHANGED}` : "held");
   if (execution.supersedes) parts.push(`replaces ${execution.supersedes}`);
   if (execution.supersededBy) parts.push(`superseded by ${execution.supersededBy}`);
   if (execution.suspension) parts.push(`${execution.suspension.state}, ${pausedBy(execution.suspension)}`);
@@ -79,6 +89,8 @@ function executionLine(execution: NodeResult, graph?: Pick<BraidInput, "nodes" |
   if (execution.replan) parts.push("requested a replan");
   if (execution.latencyMs !== undefined) parts.push(duration(execution.latencyMs));
   if (execution.decision) parts.push(`decision ${execution.decision}`);
+  // Generations count per node, so name the inputs: review@1 may have run with merge@2.
+  if (execution.status !== "pending" && execution.predecessorExecutionIds?.length) parts.push(`inputs ${execution.predecessorExecutionIds.join(", ")}`);
   if (execution.error) parts.push(failure(execution.error));
   return `- ${parts.join(" · ")}`;
 }
@@ -115,6 +127,9 @@ function control(execution: Control | undefined): string {
   if (limits.length) parts.push(`limits: ${limits.map(([key, value]) => `${key} ${value}`).join(", ")}`);
   return parts.join(" · ");
 }
+
+/** What releasing a held result whose inputs changed does. */
+const INPUTS_CHANGED = "inputs changed; releasing it reruns its node with the new inputs, and this result does not go downstream";
 
 /** Paused-by-user work is the user's call: say so wherever the parent sees it. */
 const USER_PAUSE_NOTE = "The user paused this; do not resume it unless the user asks.";
@@ -203,7 +218,28 @@ export function formatPause(job: JobSnapshot, executionIds?: readonly string[]):
   ].join("\n");
 }
 
-export function formatActivity(activity: ExecutionActivity, now: number, jobId: string): string {
+/** The last history entry an earlier focused read showed, and when. */
+export interface ActivitySeen {
+  through: number;
+  at: number;
+}
+
+/** Ending the turn is the only way to wait; agents that cannot tell how keep calling tools. */
+export const END_TURN = "end your turn (reply without calling a tool)";
+
+/** Record a focused read of a running execution; returns what the previous read showed, if any. */
+export function focusedRead(reads: Map<string, ActivitySeen>, jobId: string, activity: ExecutionActivity, now: number): ActivitySeen | undefined {
+  const key = `${jobId}/${activity.executionId}`;
+  const seen = reads.get(key);
+  if (activity.finishedAt !== undefined) {
+    reads.delete(key);
+    return undefined;
+  }
+  reads.set(key, { through: Math.max(seen?.through ?? 0, activity.entries.at(-1)?.sequence ?? 0), at: now });
+  return seen;
+}
+
+export function formatActivity(activity: ExecutionActivity, now: number, jobId: string, seen?: ActivitySeen): string {
   const lines = [`Activity: ${activity.phase} for ${duration(now - activity.phaseStartedAt)}; last observed signal ${duration(now - activity.lastActivityAt)} ago (${activity.lastActivity}). Model requests ${activity.modelRequests}, tool calls ${activity.toolCalls}.`];
   const model = activity.model;
   if (model && model.completedAt === undefined) {
@@ -216,14 +252,20 @@ export function formatActivity(activity: ExecutionActivity, now: number, jobId: 
     if (tool.outputTail) lines.push(indent(`Output tail:\n${tool.outputTail}`));
   }
   for (const limitation of activity.limitations) lines.push(`Not observable: ${limitation}`);
-  if (activity.entries.length) {
-    lines.push("History:");
-    for (const entry of activity.entries) {
+  // A repeated read of a running execution shows only what that read did not.
+  const entries = seen ? activity.entries.filter(entry => entry.sequence > seen.through) : activity.entries;
+  if (seen) lines.push(entries.length
+    ? `History since your read ${duration(now - seen.at)} ago, which showed entries through #${seen.through}:`
+    : `No new history since your read ${duration(now - seen.at)} ago, which showed entries through #${seen.through}.`);
+  if (entries.length) {
+    if (!seen) lines.push("History:");
+    for (const entry of entries) {
       lines.push(`- #${entry.sequence} ${iso(entry.timestamp)} ${entry.kind}${entry.toolName ? ` ${entry.toolName}` : ""}${entry.isError ? " (error)" : ""}${entry.durationMs !== undefined ? ` ${duration(entry.durationMs)}` : ""}: ${entry.summary}`);
       if (entry.detail) lines.push(indent(entry.detail + (entry.detailLength ? `\n[preview of ${entry.detailLength} chars]` : "")));
     }
-    const first = activity.entries[0]!.sequence;
-    if (first > 1) lines.push(first - 1 > activity.droppedEntries
+    const first = entries[0]!.sequence;
+    // Entries between the earlier read and this page are left to paging.
+    if (first > (seen ? seen.through + 1 : 1)) lines.push(first - 1 > activity.droppedEntries
       ? `Earlier entries: braid_status({"jobId":"${jobId}","executionId":"${activity.executionId}","activityBefore":${first}})`
       : `${activity.droppedEntries} earlier entries are no longer retained.`);
   }
@@ -234,16 +276,19 @@ export interface NodeStatus {
   job: JobSnapshot;
   node: NodeResult & Partial<Pick<NodeExecution, "node">>;
   activity?: ExecutionActivity;
+  /** Set on a repeated read of the same running execution. */
+  seen?: ActivitySeen;
   now: number;
 }
 
 /** A focused read: the current control state, then one execution in full. */
-export function formatNodeStatus({ job, node, activity, now }: NodeStatus): string {
+export function formatNodeStatus({ job, node, activity, seen, now }: NodeStatus): string {
   const lines = [`Braid job ${job.handle} · ${job.status} · ${control(job.execution)}`,
     ...node.suspension ? [`Execution is ${node.suspension.state}, ${pausedBy(node.suspension)}${node.suspension.suspendedAt !== undefined ? ` since ${iso(node.suspension.suspendedAt)}` : ""}.${node.suspension.source === "user" ? ` ${USER_PAUSE_NOTE}` : node.suspension.source === "node_timeout" ? ` ${TIMEOUT_PAUSE_NOTE}` : ""}`] : [],
     ...pendingHold(node) ? [`Its result will be held when it finishes (set by ${holdSource(node.holdAfter!)}).${node.holdAfter!.source === "user" ? ` ${USER_HOLD_NOTE}` : ""}`] : [],
     `Execution ${node.executionId ?? "(none yet)"} · node ${node.id}${node.node ? ` (${node.node.type})` : ""} · ${node.skipReason ? `${node.status} (${node.skipReason})` : node.status}` +
       `${node.waitReason ? ` · waiting: ${waitText(node, job.execution?.graph)}` : ""}${node.held ? " · held" : ""}`,
+    ...node.inputsChanged ? [`Its ${INPUTS_CHANGED}.`] : [],
     ...node.supersedes ? [`It replaces ${node.supersedes}.`] : [],
     ...node.supersededBy ? [`Superseded by ${node.supersededBy}; it no longer feeds successors.`] : []];
   const timing = [node.startedAt !== undefined && `started ${iso(node.startedAt)}`, node.latencyMs !== undefined && `took ${duration(node.latencyMs)}`,
@@ -260,12 +305,13 @@ export function formatNodeStatus({ job, node, activity, now }: NodeStatus): stri
   const output = `Output:\n${node.output ?? "(none)"}`;
   // While running, activity is the useful part; afterwards the output is.
   const running = activity && activity.finishedAt === undefined;
-  const sections = [lines.join("\n"), ...running ? [formatActivity(activity, now, job.handle), output] : [output, ...activity ? [formatActivity(activity, now, job.handle)] : []]];
+  const sections = [lines.join("\n"), ...running ? [formatActivity(activity, now, job.handle, seen), output] : [output, ...activity ? [formatActivity(activity, now, job.handle)] : []]];
+  if (running && seen) sections.push(`A reminder follows when ${node.executionId} finishes: ${END_TURN} instead of reading it again.`);
   return sections.join("\n\n");
 }
 
 /** The whole job: control state, every execution, then their outputs and the current definition. */
-export function formatJobStatus(job: JobSnapshot, now: number): string {
+export function formatJobStatus(job: JobSnapshot, now: number, activityOf?: (executionId: string) => ExecutionActivity | undefined): string {
   const state = job.result ?? job.execution;
   // Control fields lead: a long goal or output must not push them out of a truncated preview.
   const header = [`Braid job ${job.handle} · ${job.status}`, `ID: ${job.jobId}`, control(job.execution)];
@@ -279,15 +325,63 @@ export function formatJobStatus(job: JobSnapshot, now: number): string {
   header.push(`Goal: ${clip(job.goal, GOAL_CHARS)}`);
   const sections = [header.join("\n")];
   const executions = Object.values(state?.executions ?? {});
-  if (executions.length) sections.push([`Executions (${executions.length}), oldest first; each node's latest is its current one:`, ...executions.map(execution => executionLine(execution, job.execution?.graph))].join("\n"));
+  if (executions.length) sections.push([`Executions (${executions.length}), oldest first; each node's latest is its current one:`, ...executions.map(execution => executionLine(execution, job.execution?.graph, now,
+    execution.status === "running" && execution.executionId ? activityOf?.(execution.executionId) : undefined))].join("\n"));
   const terminal = new Set(job.result?.terminalExecutionIds ?? []);
-  const outputs = executions.filter(execution => execution.output !== undefined);
-  if (outputs.length) sections.push(["Outputs:", ...outputs.map(execution =>
-    `## ${execution.id} · ${execution.executionId}${terminal.has(execution.executionId) ? " · terminal" : ""}${execution.decision ? ` · decision ${execution.decision}` : ""}\n${execution.output}`)].join("\n\n"));
+  // Only each node's current output: earlier rounds and replaced executions would repeat on every read.
+  const current = new Map(executions.map(execution => [execution.id, execution]));
+  const produced = executions.filter(execution => execution.output !== undefined);
+  const outputs = produced.filter(execution => current.get(execution.id) === execution);
+  const earlier = produced.length - outputs.length;
+  if (produced.length) sections.push(["Outputs:", ...outputs.map(execution =>
+    `## ${execution.id} · ${execution.executionId}${terminal.has(execution.executionId) ? " · terminal" : ""}${execution.decision ? ` · decision ${execution.decision}` : ""}\n${execution.output}`),
+  ...earlier ? [`${earlier} earlier ${earlier === 1 ? "output" : "outputs"} not shown: read one with braid_status and its executionId.`] : []].join("\n\n"));
   const workspaces = executions.filter(execution => execution.workspace);
   if (workspaces.length) sections.push(["Workspaces:", ...workspaces.map(execution => `- ${execution.executionId}: ${workspaceLine(execution.workspace!)}`)].join("\n"));
   if (job.execution) sections.push(`Current graph (revision ${job.execution.revision}):\n${formatGraph(job.execution.graph)}`);
   return sections.join("\n\n");
+}
+
+/** What a full read shows that changes only through job events, not while executions just keep running. */
+export function statusFingerprint(job: JobSnapshot): string {
+  const state = job.execution;
+  return JSON.stringify([job.status, state?.revision, state?.status, state?.pausedExecutionIds, state?.suspendedExecutionIds,
+    state?.limitedExecutionIds, state?.pause, state?.limits, Object.values(state?.executions ?? {}).map(execution => [execution.executionId,
+      execution.status, execution.held, execution.inputsChanged, execution.waitReason, execution.supersededBy, execution.suspension?.state, execution.decision])]);
+}
+
+/** How long a repeated full read of an unchanged running job waits for a change before it answers. */
+export const UNCHANGED_WAIT_MS = 30_000;
+
+/**
+ * Resolves once `fingerprint` differs from `seen`, after `ms`, or on abort, whichever comes first.
+ * Agents that keep reading instead of ending their turn then loop at most once per wait.
+ */
+export function untilChanged(subscribe: (listener: () => void) => () => void, fingerprint: () => string, seen: string, ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const done = () => {
+      clearTimeout(timer);
+      unsubscribe();
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    const unsubscribe = subscribe(() => { if (fingerprint() !== seen) done(); });
+    signal?.addEventListener("abort", done, { once: true });
+    if (signal?.aborted || fingerprint() !== seen) done();
+  });
+}
+
+/** A repeated full read of a running job that has not changed: progress only, and a reason to stop reading. */
+export function formatUnchanged(job: JobSnapshot, now: number, readAt: number, activityOf?: (executionId: string) => ExecutionActivity | undefined, waitedMs?: number): string {
+  const running = Object.values(job.execution?.executions ?? {}).filter(execution => execution.status === "running");
+  return [
+    `Braid job ${job.handle} · ${job.status} · nothing changed since your full braid_status ${duration(now - readAt)} ago (revision ${job.execution?.revision ?? 0}); that read still applies.`,
+    ...waitedMs ? [`This read waited ${duration(waitedMs)} for a change, and none came.`] : [],
+    ...running.length ? ["Running:", ...running.map(execution =>
+      `- ${[execution.executionId, ...progress(execution, now, activityOf?.(execution.executionId!)), ...execution.suspension ? [`${execution.suspension.state}, ${pausedBy(execution.suspension)}`] : []].join(" · ")}`)] : [],
+    `A reminder wakes you when an execution finishes or the job needs you: ${END_TURN} instead of reading again, here or for one execution.`,
+  ].join("\n");
 }
 
 /** The waking reminder for an execution its node timeout paused. */
@@ -315,7 +409,7 @@ const waitingSource = (source: string) =>
 const executionItem = (item: Pick<WaitingItem, "nodeId" | "executionId">) => `node ${JSON.stringify(item.nodeId)} execution ${item.executionId}`;
 /** A job pause names the executions it suspended, so the cause is stated once. */
 const waitingItem = (item: WaitingItem, items: readonly WaitingItem[]) => {
-  if (item.kind !== "job") return `${item.kind === "held" ? "the held result of" : item.kind === "limited" ? "the rerun of" : "suspended"} ${executionItem(item)} (${waitingSource(item.source)})`;
+  if (item.kind !== "job") return `${item.kind === "held" ? "the held result of" : item.kind === "limited" ? "the rerun of" : "suspended"} ${executionItem(item)} (${waitingSource(item.source)}${item.inputsChanged ? `; ${INPUTS_CHANGED}` : ""})`;
   const suspended = items.filter(other => other.kind === "suspended" && other.source === item.source);
   return `the job pause (by ${waitingSource(item.source)})${suspended.length ? `, which suspended ${suspended.map(executionItem).join(", ")}` : ""}`;
 };
@@ -339,7 +433,7 @@ export function formatWaiting(notice: WaitingNotice): string {
       : "",
     limit ? `raise its ${limit} and resume the job with braid_resume({"jobId":"${notice.handle}","limits":{"${limit}":<higher>}}) (the job does not resume while the limit is still reached),`
       : job ? `resume the job with braid_resume({"jobId":"${notice.handle}"}),` : "",
-    "fail single executions with braid_cancel and executionIds, or cancel the job with braid_cancel.",
+    notice.waitingOn.some(item => item.kind === "suspended") ? "fail suspended executions with braid_cancel and executionIds, or cancel the job with braid_cancel." : "or cancel the job with braid_cancel.",
     // The deadline has passed once the graph timeout paused the job.
     notice.graphTimeoutMs !== undefined && job?.source !== "graph_timeout" ? "The graph timeout keeps running while it waits." : "",
   ].filter(Boolean).join(" ");

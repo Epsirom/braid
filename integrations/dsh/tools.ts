@@ -4,7 +4,7 @@ import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { GraphUpdate } from "@chrok/braid";
 import { BRAID_ASYNC_GUIDANCE, braidParameters, edgeIdentityParameters, edgeParameters, limitFields, nodeParameters, templateDescription } from "./schema.js";
 import type { BraidJobs, JobSnapshot } from "./jobs.js";
-import { boundedText, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUpdate } from "./status-text.js";
+import { type ActivitySeen, boundedText, focusedRead, formatCancelExecutions, formatHold, formatJobList, formatJobStatus, formatNodeStatus, formatPause, formatResume, formatUnchanged, formatUpdate, statusFingerprint, UNCHANGED_WAIT_MS, untilChanged } from "./status-text.js";
 
 const id = Type.String({ minLength: 1, pattern: "\\S" });
 const revision = Type.Integer({ minimum: 0 });
@@ -44,10 +44,30 @@ async function bounded(text: string, name: string) {
   return { text: result.text, ...(result.path ? { fullOutputPath: result.path, truncated: true } : {}) };
 }
 
+/** Core names an execution it cannot act on; add which tool can. */
+function explained<T>(act: () => T): T {
+  try { return act(); }
+  catch (error) {
+    if (!(error instanceof Error)) throw error;
+    if (error.message.includes(" is completed and held")) {
+      throw new Error(`${error.message}. braid_cancel with executionIds fails only running or paused executions: release a held result with braid_resume, or replace its node with braid_update.`);
+    }
+    if (error.message.includes(" is running and is held when it finishes")) {
+      throw new Error(`${error.message}; its completion reminder says when. To change it now, upsert its node in braid_update without resuming it: that replaces the running execution`);
+    }
+    throw error;
+  }
+}
+
 export function createBraidTools(
   getJobs: (context: ToolRunContext) => BraidJobs,
   submit: (args: { goal: string; nodes: unknown[]; edges: unknown[]; options?: object }, context: ToolRunContext) => ToolValue,
+  { unchangedWaitMs = UNCHANGED_WAIT_MS }: { unchangedWaitMs?: number } = {},
 ): ToolDefinition[] {
+  /** The last full braid_status read of each job, to answer an unchanged one briefly. */
+  const lastRead = new Map<string, { fingerprint: string; at: number }>();
+  /** The last focused read of each running execution, to show only its new activity. */
+  const lastFocused = new Map<string, ActivitySeen>();
   function tool<S extends TSchema>(name: string, description: string, parameters: S,
     execute: (args: import("@sinclair/typebox").Static<S>, context: ToolRunContext) => ToolValue | Promise<ToolValue>): ToolDefinition {
     // TypeBox's symbol metadata is local validation state, not lossless wire JSON.
@@ -70,7 +90,7 @@ export function createBraidTools(
   }
   return [
     tool("braid", "Start a background Braid graph before nontrivial engineering work with independent concerns. Returns jobId immediately. Supports execute/decision/merge/integrate, promptTemplates, cycles (any edge may close one; the result reports new cycles), worktree isolation, pauseAfter and notifyOnCompletion. Omit workspace on merge/integrate. No automatic integration. " + BRAID_ASYNC_GUIDANCE, braidParameters, submit),
-    tool("braid_status", "Retrieve progress and results by exact jobId handle or UUID. Omit all IDs to list this agent's jobs. executionId (<nodeId>@<generation>, such as review@2) selects an exact execution; nodeId selects the node's latest. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and the latest " + STATUS_ACTIVITY_ENTRIES + " history entries; activityBefore pages earlier entries. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the CURRENT graph revision and paused execution IDs. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. usage includes completed provider rounds from failed workers and cache tokens; reads do not add charges. Read results after the completion reminder, or deliberately for a progress check or diagnosis; do not sleep, use a timer, or poll in a loop to wait for a job.", Type.Object({
+    tool("braid_status", "Retrieve progress and results by exact jobId handle or UUID. Omit all IDs to list this agent's jobs. executionId (<nodeId>@<generation>, such as review@2) selects an exact execution; nodeId selects the node's latest. Focused reads include live activity: phase, time in phase and since the last observed signal, model request/stream state, running tools, and the latest " + STATUS_ACTIVITY_ENTRIES + " history entries; activityBefore pages earlier entries. Lack of observed activity is a diagnostic signal, not proof of a stall. Every job read starts with the CURRENT graph revision and paused execution IDs. Results are text; long ones are truncated and the full text is saved to a file whose path is shown. usage includes completed provider rounds from failed workers and cache tokens; reads do not add charges. Read results after the completion reminder, or deliberately for a progress check or diagnosis; do not sleep, use a timer, or poll in a loop to wait for a job. Reading an unchanged running job again waits up to 30s for a change before it answers.", Type.Object({
       jobId: Type.Optional(id), nodeId: Type.Optional(id), executionId: Type.Optional(id),
       activityBefore: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
     }, { additionalProperties: false }), async (args, context) => {
@@ -80,22 +100,40 @@ export function createBraidTools(
         const list = jobs.list();
         return { text: formatJobList(list), jobs: list.map(({ jobId, handle, status }) => ({ jobId, handle, status })) };
       }
-      const job = jobs.get(args.jobId);
+      let job = jobs.get(args.jobId);
       if (args.activityBefore !== undefined && !args.nodeId && !args.executionId) throw new Error("activityBefore requires nodeId or executionId");
-      if (!args.nodeId && !args.executionId) return { ...control(job), ...await bounded(formatJobStatus(job, Date.now()), "status.txt") };
+      if (!args.nodeId && !args.executionId) {
+        const activityOf = (executionId: string) => jobs.getActivity(args.jobId!, executionId, { limit: 0 });
+        // A running job that has not changed since the last full read waits for a change, then gets a short reply if none came.
+        const previous = lastRead.get(job.jobId);
+        let waitedMs: number | undefined;
+        if (job.status === "running" && previous?.fingerprint === statusFingerprint(job)) {
+          const started = Date.now();
+          await untilChanged(listener => jobs.subscribe(listener), () => statusFingerprint(jobs.get(args.jobId!)), previous.fingerprint, unchangedWaitMs, context.signal);
+          job = jobs.get(args.jobId);
+          waitedMs = Date.now() - started;
+        }
+        const now = Date.now();
+        const fingerprint = statusFingerprint(job);
+        if (job.status === "running" && previous?.fingerprint === fingerprint) return { ...control(job), text: formatUnchanged(job, now, previous.at, activityOf, waitedMs) };
+        lastRead.set(job.jobId, { fingerprint, at: now });
+        return { ...control(job), ...await bounded(formatJobStatus(job, now, activityOf), "status.txt") };
+      }
       const node = jobs.getNode(args.jobId, args.nodeId, args.executionId);
       const activity = node.executionId ? jobs.getActivity(args.jobId, node.executionId, {
         limit: STATUS_ACTIVITY_ENTRIES, ...(args.activityBefore === undefined ? {} : { before: args.activityBefore }),
       }) : undefined;
+      const now = Date.now();
+      const seen = activity && args.activityBefore === undefined ? focusedRead(lastFocused, job.jobId, activity, now) : undefined;
       return { ...control(job), node: { id: node.id, executionId: node.executionId, status: node.status },
-        ...await bounded(formatNodeStatus({ job, node, ...(activity ? { activity } : {}), now: Date.now() }), "node.txt") };
+        ...await bounded(formatNodeStatus({ job, node, ...(activity ? { activity } : {}), ...(seen ? { seen } : {}), now }), "node.txt") };
     }),
     tool("braid_cancel", "Cancel a background job. Foreground cancellation does not stop Braid jobs. With executionIds, fail only those running or paused executions and keep the job running: their successors follow the usual failure rules (unconditional edges receive the error; requireSuccess aborts the job). A node timeout pause fails with NODE_TIMEOUT, anything else with CANCELLED.", Type.Object({
       jobId: id, executionIds: Type.Optional(Type.Array(id, { minItems: 1, uniqueItems: true })),
     }, { additionalProperties: false }), (args, context) => {
       const jobs = getJobs(context);
       if (args.executionIds) {
-        const job = jobs.cancelExecutions(args.jobId, args.executionIds, "agent");
+        const job = explained(() => jobs.cancelExecutions(args.jobId, args.executionIds!, "agent"));
         return { text: formatCancelExecutions(job, args.executionIds), ...control(job) };
       }
       const job = jobs.get(args.jobId);
@@ -114,7 +152,7 @@ export function createBraidTools(
       let job: JobSnapshot;
       let previous: JobSnapshot["execution"]["graph"] | undefined;
       try { previous = getJobs(context).get(jobId).execution.graph; } catch { /* update reports the unknown job */ }
-      try { job = getJobs(context).update(jobId, patch as GraphUpdate); }
+      try { job = explained(() => getJobs(context).update(jobId, patch as GraphUpdate)); }
       catch (error) { throw new Error(`Braid update rejected; no changes or resumes applied. ${error instanceof Error ? error.message : String(error)}. Retry the complete corrected patch with dependencies and resume IDs.`); }
       return { text: formatUpdate(job, previous), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision, pausedExecutionIds: job.execution.pausedExecutionIds };
     }),
@@ -138,7 +176,7 @@ export function createBraidTools(
       if (args.executionIds && args.expectedRevision === undefined) throw new Error("expectedRevision is required with executionIds; read it from braid_status");
       if (!args.executionIds && args.nodeTimeoutMs !== undefined) throw new Error("nodeTimeoutMs requires executionIds");
       const job = args.executionIds
-        ? jobs.resume(args.jobId, args.executionIds, args.expectedRevision!, "agent", args.nodeTimeoutMs === undefined ? undefined : { nodeTimeoutMs: args.nodeTimeoutMs })
+        ? explained(() => jobs.resume(args.jobId, args.executionIds!, args.expectedRevision!, "agent", args.nodeTimeoutMs === undefined ? undefined : { nodeTimeoutMs: args.nodeTimeoutMs }))
         : jobs.resumeJob(args.jobId, "agent", args.limits);
       return { text: formatResume(job), jobId: job.handle, canonicalJobId: job.jobId, revision: job.execution.revision,
         pausedExecutionIds: job.execution.pausedExecutionIds, suspendedExecutionIds: job.execution.suspendedExecutionIds };

@@ -439,6 +439,41 @@ is resumed by the reminder within the same run.
   `session.prompt()` returns once the jobs finish. Only interactive Pi
   (`mode: "tui"`) still settles while jobs run.
 
+### Status reads for agents that poll
+
+- New: `NodeResult.inputsChanged` on a held instance whose inputs changed since
+  it ran. Releasing it reruns its node, as before; the marker only says so.
+- `cancelExecutions` still rejects executions that are not running, and its error
+  now names the first one and its state, for example `test@2 is completed and held`.
+  Likewise, `resume` names the first execution it cannot resume, and says when an
+  execution is still running and is held when it finishes.
+- Pi and DSH: a whole-job `braid_status` shows each running execution's elapsed
+  time, phase, and model request and tool call counts. Reading a running job
+  again when nothing changed (the same statuses, holds, wait reasons, and
+  revision) returns a short reply with that progress instead of the whole status.
+  `formatJobStatus` takes an optional activity lookup as its third argument.
+  Each started execution in the list also names its inputs (`inputs merge@2`),
+  since generations count per node.
+- Pi and DSH: `WaitingItem` adds `inputsChanged`, and the waiting reminder suggests
+  `braid_cancel` with `executionIds` only when it waits on suspended executions.
+- Pi and DSH: a whole-job `braid_status` shows only each node's latest output and
+  counts the earlier ones it leaves out (`2 earlier outputs not shown`). Read an
+  earlier output with `braid_status` and its `executionId`.
+- Pi and DSH: reading the same running execution again lists only the history
+  entries added since the previous read, then says to end the turn. Paging with
+  `activityBefore` is unchanged. `formatActivity` takes an optional `seen`
+  argument, `formatNodeStatus` an optional `seen` field, and `focusedRead`
+  records reads.
+- Pi and DSH: that repeated read of an unchanged running job now first waits up
+  to 30 seconds for the job to change. A change ends the wait with the full
+  status; otherwise the short reply follows and says how long it waited. An
+  aborted call stops waiting at once. Agents that keep reading instead of ending
+  their turn then loop at most once per wait. `createBraidTools` takes an
+  optional `unchangedWaitMs` option (Pi: second argument, DSH: third), and
+  `formatUnchanged` an optional `waitedMs` argument.
+- Pi: while a Braid job is outstanding, `braid_finish` says the call does not end
+  the turn or the run, and how to end the turn.
+
 ## Versioning
 
 Core, Pi, and DSH release together with matching versions. During 0.x, patch releases
