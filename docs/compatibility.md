@@ -445,13 +445,11 @@ Pi's `--braid-ci-timeout` is renamed `--braid-timeout`, since it bounds Braid
 jobs, not the whole CI run. Its behavior is unchanged.
 
 - Replace `--braid-ci-timeout <duration>` with `--braid-timeout <duration>`.
-- `--braid-ci-timeout` keeps working as a deprecated alias until 0.7.0. Using it
-  prints `Braid: --braid-ci-timeout is deprecated and will be removed in 0.7.0;
-  use --braid-timeout instead.` on stderr (a warning notice in the terminal UI).
-  When both flags are given, `--braid-timeout` wins.
+  The old name is removed without an alias: Pi now rejects it with
+  `Error: Unknown option: --braid-ci-timeout` and does not start the run.
 - The expiry line on stderr and its `forcedFailures` entry in JSON output now
-  read `--braid-timeout expired; cancelled outstanding Braid jobs`, whichever
-  flag set the budget. Update scripts that match the old text.
+  read `--braid-timeout expired; cancelled outstanding Braid jobs`. Update
+  scripts that match the old text.
 
 ### Status reads for agents that poll
 

@@ -136,7 +136,7 @@ try {
     });
     assert.equal(flags.has('braid-blocking'), false);
     assert.ok(flags.has('braid-timeout'));
-    assert.ok(flags.has('braid-ci-timeout'));
+    assert.equal(flags.has('braid-ci-timeout'), false);
     assert.equal(commands.has('braid:blocking'), false);
     assert.deepEqual([...tools.keys()].sort(), ['braid', 'braid_cancel', 'braid_finish', 'braid_pause', 'braid_resume', 'braid_status', 'braid_update']);
     const result = await braid({ goal: 'smoke', nodes: [{ type: 'execute', id: 'a', prompt: 'PASS' }], edges: [] }, { runner: async () => ({ output: 'PASS' }) });

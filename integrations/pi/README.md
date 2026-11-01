@@ -89,9 +89,7 @@ the run's first prompt. It accepts milliseconds or an `s`, `m`, or `h` suffix
 cancelled, the parent gets a final turn on the cancellation reminders, and the
 exit code is set to 1. It times out Braid jobs only: work the parent does
 itself, such as a long tool call, is not bounded by it. Either forced
-cancellation prints a `Braid:` line on stderr. `--braid-ci-timeout` is a
-deprecated alias, removed in 0.7.0; it prints a deprecation notice, and
-`--braid-timeout` wins when both are given.
+cancellation prints a `Braid:` line on stderr.
 
 A failed graph does not by itself fail the run. Instead, the parent is told to
 call `braid_finish` with `status` `success` or `failure` and a short `summary`
