@@ -65,10 +65,7 @@ test("extension registers background tools, a panel command, and guidance to wai
     { systemPrompt: "base" } as never,
     {} as never,
   ) as { systemPrompt: string };
-  assert.match(
-    prompt.systemPrompt,
-    /two or more concerns can be handled independently/,
-  );
+  assert.match(prompt.systemPrompt, /two or more parts that can run in parallel, or a step that needs its own context/);
   const status = fake.tools.get("braid_status") as ReturnType<typeof createBraidTools>["statusTool"];
   assert.match(prompt.systemPrompt, /returns a jobId immediately/);
   assert.match(prompt.systemPrompt, /ending your turn does not cancel it/);
@@ -84,6 +81,11 @@ test("extension registers background tools, a panel command, and guidance to wai
   assert.deepEqual(tool.parameters.properties.nodes.items.properties.workspace.enum, ["read-only", "worktree"]);
   assert.equal(tool.parameters.properties.nodes.items.properties.notifyOnCompletion.type, "boolean");
   assert.match(prompt.systemPrompt, /notifyOnCompletion=true/);
+  // Sequential steps belong in one node, which keeps its context and prompt cache.
+  for (const guidance of [prompt.systemPrompt, tool.description, tool.promptSnippet!, tool.promptGuidelines!.join("\n")]) {
+    assert.match(guidance, /keep (other )?consecutive steps .*in one node/);
+    assert.doesNotMatch(guidance, /\bFIRST\b|nontrivial/);
+  }
   for (const guidance of [prompt.systemPrompt, tool.description, tool.promptGuidelines!.join("\n")]) {
     assert.match(guidance, /workspace=read-only/);
     assert.match(guidance, /predecessor execution checkpoint/);
