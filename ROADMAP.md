@@ -22,7 +22,10 @@ pause/resume, result holds, timeout recovery, Pi model retries, and clearer loop
 handoffs, and removes deprecated Pi blocking mode. The 0.5.1 release lets running
 nodes ask the parent agent to replan, and makes Pi and DSH fail fast on a
 mismatched core version. The 0.5.2 release wakes the parent agent when a graph
-has no active work left but paused work remains. Source availability
+has no active work left but paused work remains. The 0.6.0 release starts RSI
+Mode: limits default to unlimited and pause instead of failing, an execution-only
+graph reruns downstream work, any edge may close a cycle, and Pi RPC runs wait for
+running Braid jobs. Source availability
 and npm availability are separate milestones. Check
 [GitHub releases](https://github.com/Epsirom/braid/releases),
 [@chrok/braid](https://www.npmjs.com/package/@chrok/braid),
@@ -81,6 +84,22 @@ up its asynchronous execution model.
   outcome with `braid_finish` ([#80](https://github.com/Epsirom/braid/issues/80)).
 - [ ] Find out whether DSH single-shot runs exit before Braid jobs finish, and
   match Pi's behavior if they do ([#85](https://github.com/Epsirom/braid/issues/85)).
+
+## 0.6 implemented changes
+
+- [x] Default every limit to unlimited, and pause instead of failing at a limit.
+- [x] Replace node definitions with an execution-only graph of lineages that
+  rerun downstream work; bound reruns with a node's `maxRuns`.
+- [x] Accept unconditional, nested, and overlapping cycles, report new cycles,
+  and let an edge pick where a cycle's rounds start with `closesCycle`.
+- [x] Remind the parent when a limit pause waits on an execution stuck in a tool call.
+- [x] Show live executions and a timeline of every execution in the Pi panel.
+- [x] Keep Pi RPC runs open until running Braid jobs finish.
+- [x] Rename Pi's `--braid-ci-timeout` to `--braid-timeout`.
+- [x] Make `braid_status` and Braid errors tell polling agents what changed and what to do.
+
+Read the [0.5 → 0.6 migration guide](docs/compatibility.md#migrating-from-05-to-06)
+for limit defaults, graph and loop changes, and TypeScript interface changes.
 
 ## 0.5 implemented changes
 

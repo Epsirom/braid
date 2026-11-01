@@ -669,7 +669,7 @@ revisit some of these boundaries; see [ROADMAP.md](ROADMAP.md#milestones).
 
 ## Releases and upgrades
 
-The 0.5 API is experimental. See [GitHub releases](https://github.com/Epsirom/braid/releases)
+The 0.6 API is experimental. See [GitHub releases](https://github.com/Epsirom/braid/releases)
 for release and upgrade notes.
 
 - Upgrading from 0.5: read the [0.5 → 0.6 migration guide](docs/compatibility.md#migrating-from-05-to-06).
@@ -677,7 +677,7 @@ for release and upgrade notes.
 - Upgrading from 0.3: also follow the [0.3 → 0.4 migration guide](docs/compatibility.md#migrating-from-03-to-04).
 - Upgrading from 0.2: also follow the [0.2 → 0.3 migration guide](docs/compatibility.md#migrating-from-02-to-03).
 - Upgrading from 0.1: also follow the [0.1 → 0.2 guide](docs/compatibility.md#migrating-from-01-to-02).
-- Using the previous release: see the [0.5.1 documentation](https://github.com/Epsirom/braid/tree/v0.5.1).
+- Using the previous release: see the [0.5.2 documentation](https://github.com/Epsirom/braid/tree/v0.5.2).
 
 ## Contributing and project status
 

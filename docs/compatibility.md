@@ -7,7 +7,7 @@
 | DSH package | Node.js 22.19+, DeepSeek Harness 0.2.0-rc.2 is the pinned developer-preview host target; native Web panel |
 | CI | Core minimum Node 22.0; all three packages on Node 22.19 and 24 on Linux, macOS, Windows |
 | OpenAI-compatible runner | Chat Completions text and function-tool calls; decisions and merge/integrate nodes require tool calling |
-| Browsers / CommonJS | No standalone core browser build or CommonJS entry point in 0.5; the DSH `./client` export is loaded by DSH's Web host |
+| Browsers / CommonJS | No standalone core browser build or CommonJS entry point in 0.6; the DSH `./client` export is loaded by DSH's Web host |
 
 The CI matrix describes configured checks; see actual workflow results for each
 commit. Offline HTTP fixtures validate the adapter contract. They do not prove
