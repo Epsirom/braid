@@ -576,6 +576,16 @@ active, emits `limits_updated`, and never resumes the run by itself. A run alrea
 paused for another reason keeps that pause; reaching a limit then takes effect
 when it is resumed. `snapshot().limits` lists the finite limits.
 
+A pause takes effect at each execution's next checkpoint, so an execution inside
+a long tool call keeps running and the run does not reach `waiting` until the
+tool returns. When a run pause, from a limit or from `pauseRun`, still waits on
+running executions `pauseNoticeMs` after it began (default 30 seconds;
+`Infinity` turns it off), core emits `graph_pause_pending` once for that pause,
+with its `source`, `pausedAt`, and `runningExecutionIds`. The owner can wait,
+fail an execution with `cancelExecutions`, which aborts its signals and so its
+running tool, raise the limit and `resumeRun()`, or cancel the run.
+`graph_waiting` still follows once nothing is active.
+
 ## Failure and budgets
 
 `requireSuccess` defaults to false. Optional failures keep their errors and partial

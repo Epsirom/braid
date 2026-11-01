@@ -566,6 +566,7 @@ function eventText(event: ExecutionEvent): string {
     case "execution_hold_removed": return `hold removed · ${compact(event.nodeId, 40)} · by ${compact(event.source, 20)}`;
     case "replan_requested": return `replan requested · ${compact(event.nodeId, 40)}: ${compact(event.reason, 64)}`;
     case "graph_paused": return `job paused · by ${compact(event.source, 20)}`;
+    case "graph_pause_pending": return `job pause waits on ${event.runningExecutionIds.length} running · ${compact(event.runningExecutionIds.join(", "), 60)}`;
     case "graph_resumed": return "job resumed";
     case "limit_reached": return `limit reached · ${event.limit} ${event.value}${event.executionId ? ` · ${compact(event.executionId, 40)} waits` : ""}`;
     case "limits_updated": return `limits updated · ${Object.entries(event.limits).map(([key, value]) => `${key} ${value}`).join(", ") || "none"}`;

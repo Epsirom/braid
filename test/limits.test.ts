@@ -272,6 +272,64 @@ test("the graph timeout pauses running work and moves the deadline it reports", 
   assert.deepEqual(steps, [1, 2]);
 });
 
+test("a limit pause reports executions stuck in a tool call once, and cancelling one aborts the tool", async t => {
+  const events: ExecutionEvent[] = [];
+  let toolSignal: AbortSignal | undefined;
+  const runner = Object.assign(async (request: ModelRequest) => {
+    await request.checkpoint!();
+    // A tool that never returns on its own, like a test runner that does not exit.
+    toolSignal = request.stepSignal!();
+    await new Promise((_, reject) => toolSignal!.addEventListener("abort", () => reject(toolSignal!.reason), { once: true }));
+    return { output: "unreachable" };
+  }, { pausable: true });
+  const run = await start(t, { goal: "stuck", nodes: [node("a")], edges: [] }, { runner, graphTimeoutMs: 50, pauseNoticeMs: 100 }, events);
+  await until(() => events.some(event => event.type === "graph_pause_pending"), 2_000);
+  const [pending] = events.filter(event => event.type === "graph_pause_pending");
+  const id = executions(run, "a")[0]!.executionId;
+  assert.ok(pending?.type === "graph_pause_pending");
+  assert.equal(pending.source, "graph_timeout");
+  assert.deepEqual(pending.runningExecutionIds, [id]);
+  assert.equal(pending.pausedAt, run.snapshot().pause!.pausedAt);
+  assert.equal(run.snapshot().status, "running");
+  assert.ok(!events.some(event => event.type === "graph_waiting"), "the pause has not taken effect");
+  // Reported once per pause.
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal(events.filter(event => event.type === "graph_pause_pending").length, 1);
+
+  run.cancelExecutions([id], { source: "agent" });
+  assert.equal(toolSignal!.aborted, true, "the tool call is aborted at once");
+  await until(() => run.snapshot().status === "waiting");
+  assert.equal(run.snapshot().executions[id]!.error?.code, "CANCELLED");
+  // With nothing active, the run reports that it waits on the limit pause, as before.
+  const waiting = events.find(event => event.type === "graph_waiting");
+  assert.ok(waiting?.type === "graph_waiting" && waiting.settledExecutionId === id && waiting.pause?.source === "graph_timeout");
+});
+
+test("a limit pause that takes effect, or is resumed, within pauseNoticeMs is not reported", async t => {
+  for (const resume of [false, true]) {
+    const events: ExecutionEvent[] = [];
+    const gate = deferred();
+    const runner = Object.assign(async (request: ModelRequest) => {
+      await request.checkpoint!();
+      await gate.promise;
+      await request.checkpoint!();
+      return { output: "done" };
+    }, { pausable: true });
+    const run = await start(t, { goal: "prompt", nodes: [node("a")], edges: [] }, { runner, graphTimeoutMs: 50, pauseNoticeMs: 200 }, events);
+    await until(() => run.snapshot().pause !== undefined, 2_000);
+    if (resume) {
+      run.setLimits({ graphTimeoutMs: Infinity });
+      run.resumeRun();
+    }
+    gate.resolve();
+    if (!resume) await until(() => run.snapshot().status === "waiting");
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.ok(!events.some(event => event.type === "graph_pause_pending"), resume ? "resumed" : "paused");
+    if (!resume) { run.setLimits({ graphTimeoutMs: Infinity }); run.resumeRun(); }
+    assert.equal((await run.result).status, "completed");
+  }
+});
+
 test("maxTokens pauses the run once settled executions reach it", async t => {
   const events: ExecutionEvent[] = [];
   const chain: BraidInput = { goal: "spend", nodes: [node("a"), node("b"), node("c")], edges: [{ from: "a", to: "b" }, { from: "b", to: "c" }] };
@@ -295,7 +353,7 @@ test("maxTokens pauses the run once settled executions reach it", async t => {
 test("limit options and setLimits are validated, and braid() cannot pause at a limit", async t => {
   const runner: ModelRunner = async () => ({ output: "ok" });
   const graph = { goal: "x", nodes: [node("a")], edges: [] };
-  for (const options of [{ maxExecutions: 0 }, { maxExecutions: 1.5 }, { maxTokens: -1 }, { graphTimeoutMs: 0 }, { onLimit: "wait" }])
+  for (const options of [{ maxExecutions: 0 }, { maxExecutions: 1.5 }, { maxTokens: -1 }, { graphTimeoutMs: 0 }, { onLimit: "wait" }, { pauseNoticeMs: 0 }])
     assert.throws(() => startBraid(graph, { runner, ...options } as BraidOptions), TypeError);
   await assert.rejects(braid(graph, { runner, onLimit: "pause" }), /braid\(\) cannot resume a run at a limit/);
   const gate = deferred();

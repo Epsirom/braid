@@ -342,7 +342,11 @@ reach, which never resets; upserting the node with only `maxRuns` changed raises
 lowers it at any time without rerunning the node. Every limit is unlimited when omitted. Reaching
 `maxExecutions`, `graphTimeoutMs`, or `maxTokens` pauses the job; once nothing is
 active the parent gets the waiting reminder, and `braid_resume({ jobId, limits })`
-raises the limit and resumes the job. Limits count rejected tool calls too. Workers
+raises the limit and resumes the job. A running execution pauses only before its
+next model request; if one is still inside a long tool call 30 seconds after
+`graphTimeoutMs` or `maxTokens` paused the job, the parent gets one reminder
+naming it with its current tool, and `braid_cancel` with `executionIds` aborts
+that tool. Limits count rejected tool calls too. Workers
 receive remaining budget/deadline reminders before model requests. Graph deadlines
 continue during pauses and do not reset on resume or update.
 
