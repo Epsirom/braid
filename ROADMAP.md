@@ -25,7 +25,10 @@ mismatched core version. The 0.5.2 release wakes the parent agent when a graph
 has no active work left but paused work remains. The 0.6.0 release starts RSI
 Mode: limits default to unlimited and pause instead of failing, an execution-only
 graph reruns downstream work, any edge may close a cycle, and Pi RPC runs wait for
-running Braid jobs. Source availability
+running Braid jobs. The 0.7.0 release routes with `choices` on execute nodes and
+removes the decision node type, keeps prompt caching valid for worker nodes,
+including under budgets, and tells the parent agent to split work into nodes only
+for parallel work or a step that needs its own context. Source availability
 and npm availability are separate milestones. Check
 [GitHub releases](https://github.com/Epsirom/braid/releases),
 [@chrok/braid](https://www.npmjs.com/package/@chrok/braid),
@@ -84,6 +87,18 @@ up its asynchronous execution model.
   outcome with `braid_finish` ([#80](https://github.com/Epsirom/braid/issues/80)).
 - [ ] Find out whether DSH single-shot runs exit before Braid jobs finish, and
   match Pi's behavior if they do ([#85](https://github.com/Epsirom/braid/issues/85)).
+
+## 0.7 implemented changes
+
+- [x] Route with `choices` on execute nodes; remove the `decision` node type.
+- [x] Stop disabling prompt caching for Pi worker nodes.
+- [x] Keep the prompt cache valid when budgets are set by sending budget
+  reminders as conversation messages.
+- [x] Use Braid for parallel work or steps that need their own context, and keep
+  sequential steps in one node.
+
+Read the [0.6 → 0.7 migration guide](docs/compatibility.md#migrating-from-06-to-07)
+for the node type change.
 
 ## 0.6 implemented changes
 
