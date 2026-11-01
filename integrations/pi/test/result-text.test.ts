@@ -38,11 +38,14 @@ test("cycle notices name a node that runs only after a choice and how to start r
     { from: "impl", to: "merge" }, { from: "tests", to: "merge" }, { from: "merge", to: "review" },
     { from: "review", to: "impl", choice: "again", ...(closesCycle ? { closesCycle } : {}) },
   ] });
-  assert.equal(formatCycles(newCycles(graph())),
+  const job = { handle: "job-1", revision: 2 };
+  assert.equal(formatCycles(newCycles(graph()), job),
     "New cycles (accepted; each round runs new executions, starting at the first node listed):\n" +
     "- merge -> review -> impl -> merge: can stop at review -> impl [choice=again]; bounded by maxRuns on impl. " +
-    "impl runs only after review chooses again, not before it in the first round; if each round should start at impl, set closesCycle: true on review -> impl [choice=again].");
-  assert.equal(formatCycles(newCycles(graph(true))),
+    "impl runs only after review chooses again, not before it in the first round; if each round should start at impl, call " +
+    'braid_update({"jobId":"job-1","expectedRevision":2,"removeEdges":[{"from":"review","to":"impl","choice":"again"}],' +
+    '"addEdges":[{"from":"review","to":"impl","choice":"again","closesCycle":true}]}) now, which sets closesCycle: true on review -> impl [choice=again].');
+  assert.equal(formatCycles(newCycles(graph(true)), job),
     "New cycles (accepted; each round runs new executions, starting at the first node listed):\n" +
     "- impl -> merge -> review -> impl: can stop at review -> impl [choice=again]; bounded by maxRuns on impl.");
 });

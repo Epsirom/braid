@@ -394,6 +394,16 @@ that node. List the node where rounds start first in `nodes`, and check
 - Pi and DSH waiting reminders name the executions a job pause suspended with
   that pause, so the cause appears once, and call a job limit "the job's
   `<limit>` limit" instead of "its `<limit>` limit".
+- Pi and DSH: when a new cycle has a node that runs only after a choice, the
+  `braid` and `braid_update` results now give the exact `braid_update` call,
+  with the job's handle and current revision, that removes the choice edge and
+  adds it back with `closesCycle: true`, so each round starts at that node.
+- Pi and DSH: the `promptTemplates` descriptions say that templates never
+  include each other, that every `{{name}}` is filled only from the node's
+  `variables`, and that every variable must be used. DSH's `braid_update` now
+  describes `promptTemplates` as Pi's does. When a missing variable has the name
+  of another template, the validation error adds that templates cannot include
+  other templates.
 
 ### Pi RPC runs wait for running jobs
 
