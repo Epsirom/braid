@@ -86,6 +86,12 @@ test("extension registers background tools, a panel command, and guidance to wai
     assert.match(guidance, /keep (other )?consecutive steps .*in one node/);
     assert.doesNotMatch(guidance, /\bFIRST\b|nontrivial/);
   }
+  // Routing lives on execute nodes; a separate choice node is only for independent judgment.
+  for (const guidance of [prompt.systemPrompt, tool.description, tool.promptGuidelines!.join("\n")]) {
+    assert.match(guidance, /give the choice its own node only when it must judge work independently/);
+    assert.doesNotMatch(guidance, /decision node/i);
+  }
+  assert.deepEqual(tool.parameters.properties.nodes.items.properties.type.enum, ["execute", "merge", "integrate"]);
   for (const guidance of [prompt.systemPrompt, tool.description, tool.promptGuidelines!.join("\n")]) {
     assert.match(guidance, /workspace=read-only/);
     assert.match(guidance, /predecessor execution checkpoint/);

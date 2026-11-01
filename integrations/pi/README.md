@@ -196,17 +196,23 @@ an explicit review-only request disables them.
 
 ## Graph definitions
 
-Each node has a unique `id` and one of these four shapes:
+Each node has a unique `id` and one of these three types:
 
 | `type` | `prompt` | `choices` | `workspace` |
 | --- | --- | --- | --- |
-| `execute` | Required | Omit | Optional: `read-only` or `worktree` |
-| `decision` | Required | Required, non-empty, distinct strings | Optional: `read-only` or `worktree` |
+| `execute` | Required | Optional: non-empty, distinct strings, only when the node routes | Optional: `read-only` or `worktree` |
 | `merge` | Optional | Omit | Omit; combines changes in an isolated worktree |
 | `integrate` | Optional | Omit | Omit; applies changes to the invoking checkout |
 
-All four types accept `model`, `notifyOnCompletion`, `pauseAfter`, and
-`requireSuccess`. Omit optional fields when unused. Execute/decision nodes
+An execute node with `choices` routes: it does its work, calls `decide` exactly
+once, and only its outgoing edges labelled with that choice activate. The
+guidance asks the parent to put choices on the node whose result decides the
+route, and to give the choice its own node only when it must judge work
+independently, such as whether a review passes. The former `decision` type is
+rejected with a hint to use `execute` with the same choices.
+
+All three types accept `model`, `notifyOnCompletion`, `pauseAfter`, and
+`requireSuccess`. Omit optional fields when unused. Execute nodes
 default to writable worktrees in Git; outside Git, all workers are read-only.
 The model-facing schema exposes these fields in one object with a `type` enum;
 core validation enforces the type-specific requirements before a submission or
@@ -216,17 +222,18 @@ resulting graph without prompts. If a definition problem repeats,
 inspect/report the mismatch instead of launching more probe jobs.
 
 Edges use exact node IDs in `from` and `to`. `choice` is an exact label declared
-by the source decision; omitting it makes the edge unconditional. Pass `edges: []`
+by the source node's `choices`; omitting it makes the edge unconditional. Pass `edges: []`
 for independent roots.
 
 Any edge may close a cycle, and cycles may be unconditional, nested, or
-overlapping. A retry cycle is usually closed by a decision's choice edge back to
-the node where each round starts, such as
-`{ "from": "check", "to": "work", "choice": "retry" }`; an unconditional cycle
+overlapping. A retry cycle is usually closed by a choice edge back to the node
+where each round starts, such as
+`{ "from": "work", "to": "work", "choice": "retry" }` on a `work` node with
+choices `["retry", "done"]`; an unconditional cycle
 repeats until the parent stops the job, and edges that leave it run in every
 round. The `braid` and `braid_update` results list each new cycle and what can
 stop it, so an accidental cycle is noticed. They also name a node that runs only
-after a decision in the cycle chooses it: when each round should start there
+after a node in the cycle chooses it: when each round should start there
 instead, set `"closesCycle": true` on that choice edge. To bound the rounds, set `maxRuns` on
 a node in the cycle, so `maxRuns: 3` on `work` allows three rounds; omit it unless
 the user asks for a limit. `maxRuns` counts every run of that node, including
@@ -319,7 +326,7 @@ only what the user paused or held from `/braid`, when the user paused the whole
 job, or when the parent's own `braid_pause`, a held result's pause reminder, or
 a timeout pause reminder already accounts for it.
 
-Execute and decision nodes have a `request_replan` tool. A node calls it to
+Execute nodes have a `request_replan` tool. A node calls it to
 report a finding that contradicts its prompt's assumptions, makes its task
 unnecessary, or affects more than its task, with a reason and optionally a
 suggested graph edit (`upsertNodes`, `removeNodeIds`, `addEdges`, `removeEdges`)
@@ -545,8 +552,7 @@ never interrupted. If it arrives while the worker is writing its final answer,
 the worker gets one more round to take it into account. The worker receives it
 labelled as a message from the supervising human, separate from the node prompt
 and predecessor outputs; it cannot lift tool, budget, workspace, or decision
-constraints (a decision node that has already called `decide` keeps its
-choice). Delivered messages appear in the session, in the activity history, in
+constraints (a node that has already called `decide` keeps its choice). Delivered messages appear in the session, in the activity history, in
 the event log, and in the execution's `humanInputs` in `braid_status` results,
 so it stays visible that the result did not come from the graph alone. Messages
 still pending when the execution ends are marked as not delivered and are not
@@ -646,7 +652,7 @@ installed automatically by Braid. Writable workspaces additionally receive `writ
 `edit`, and Pi's `bash` tool (`powershell` is also exposed on Windows), so nodes
 can install local dependencies, build, and run tests. Read-only nodes have no shell.
 Nodes receive no parent transcript, skills, or inherited extension/MCP tools.
-Decision nodes additionally receive `decide`. Git nodes receive
+Execute nodes with choices additionally receive `decide`. Git nodes receive
 local Git inspection; merge/integrate nodes also receive Git integration commands and
 `finish_merge`. Merge agents receive bounded changed-file lists, diff statistics
 and previews; integrate also receives the source checkout's dirty status. The model-facing `git`
@@ -739,7 +745,7 @@ Writable nodes can run shell commands and tests in their assigned working direct
 applies selected changes to the invoking checkout and preserves user edits. Both
 expose Git integration commands and `finish_merge`, require per-source
 `executionId` dispositions, and forbid the `workspace` property. Use ordinary
-execute/decision nodes for analysis; a worker with independent changed code
+execute nodes for analysis; a worker with independent changed code
 inputs needs an explicit merge to produce its starting snapshot.
 
 Nothing is automatically integrated at job completion. To apply implementation
@@ -845,7 +851,7 @@ test is:
 ```text
 Use braid with this complete graph. Goal: "Test routing."
 Nodes:
-1. decision id route, prompt "Select go and then explain briefly", choices ["go", "stop"]
+1. execute id route, prompt "Select go and then explain briefly", choices ["go", "stop"]
 2. execute id left, prompt "Return LEFT"
 3. execute id right, prompt "Return RIGHT"
 4. execute id join, prompt "List your predecessor IDs and outputs"
@@ -853,7 +859,7 @@ Edges:
 - route -> left labelled choice go
 - route -> right labelled choice stop
 - left -> join
-Ask the decision node to choose go. Use the current Pi model.
+Ask route to choose go. Use the current Pi model.
 ```
 
 Expected behavior:

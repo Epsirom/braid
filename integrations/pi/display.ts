@@ -12,6 +12,7 @@ import {
   closingEdges,
   formatActivityStatus,
   formatPauseSource,
+  type BraidNode,
   type BraidResult,
   type Edge,
   type ExecutionActivity,
@@ -23,6 +24,11 @@ import {
 } from "@chrok/braid";
 import type { PiNodeProgress } from "./runner.js";
 
+/** Execute nodes with choices draw as routing ("decision") nodes. */
+type DisplayNodeType = BraidNode["type"] | "decision";
+const displayType = (node: Pick<BraidNode, "type"> & { choices?: unknown }): DisplayNodeType =>
+  node.type === "execute" && node.choices ? "decision" : node.type;
+
 export const MAX_VISIBLE_EVENTS = 80;
 export const MAX_VISIBLE_NODES = 80;
 
@@ -31,7 +37,7 @@ export interface BraidLiveState {
   status: "running" | "completed" | "failed";
   error?: ExecutionError;
   nodes: Record<string, NodeResult>;
-  nodeTypes: Record<string, "execute" | "decision" | "merge" | "integrate">;
+  nodeTypes: Record<string, DisplayNodeType>;
   edges: Edge[];
   progress: Record<string, PiNodeProgress>;
   events: ExecutionEvent[];
@@ -144,7 +150,7 @@ function compact(value: unknown, max = 90): string {
 
 function graphParts(result: BraidResult | BraidLiveState): {
   nodes: Record<string, NodeResult>;
-  nodeTypes: Record<string, "execute" | "decision" | "merge" | "integrate">;
+  nodeTypes: Record<string, DisplayNodeType>;
   edges: Edge[];
   progress: Record<string, PiNodeProgress>;
 } {
@@ -153,14 +159,14 @@ function graphParts(result: BraidResult | BraidLiveState): {
     Object.create(null),
     result.nodes,
   );
-  const nodeTypes: Record<string, "execute" | "decision" | "merge" | "integrate"> = Object.create(null);
+  const nodeTypes: Record<string, DisplayNodeType> = Object.create(null);
   const edges: Edge[] = [];
   for (const event of result.events) {
     if (event.type === "graph_updated") {
       edges.splice(0, edges.length, ...event.graph.edges);
       for (const node of event.graph.nodes) {
         nodes[node.id] ??= { id: node.id, status: "pending" };
-        Object.defineProperty(nodeTypes, node.id, { value: node.type, enumerable: true, configurable: true });
+        Object.defineProperty(nodeTypes, node.id, { value: displayType(node), enumerable: true, configurable: true });
       }
       for (const id of Object.keys(nodes)) if (!event.graph.nodes.some(node => node.id === id)) { delete nodes[id]; delete nodeTypes[id]; }
     } else if (event.type === "execution_created") {
@@ -172,7 +178,7 @@ function graphParts(result: BraidResult | BraidLiveState): {
         nodes[event.nodeId]!.model = event.model;
       }
       Object.defineProperty(nodeTypes, event.nodeId, {
-        value: event.nodeType,
+        value: displayType({ type: event.nodeType, choices: event.choices }),
         enumerable: true,
         configurable: true,
       });
@@ -427,7 +433,7 @@ function executionSource(result: BraidResult | BraidLiveState, { shown, folded }
   }
   shown.forEach((record, index) => {
     names.set(record.executionId, `e${index}`);
-    const [open, close] = record.node.type === "decision" ? ["{", "}"] : ["[", "]"];
+    const [open, close] = displayType(record.node) === "decision" ? ["{", "}"] : ["[", "]"];
     lines.push(`  e${index}${open}"${executionLabelLines(record, result, record.executionId === selected).map(escapeMermaidText).join("<br/>")}"${close}`);
   });
   const drawn = new Set<string>();
@@ -439,7 +445,7 @@ function executionSource(result: BraidResult | BraidLiveState, { shown, folded }
     drawn.add(line);
     lines.push(line);
   };
-  const decision = (record: NodeExecution) => record.node.type === "decision" ? record.decision : undefined;
+  const decision = (record: NodeExecution) => record.decision;
   const records = Object.values(executions);
   const lineages = new Map<string, NodeExecution[]>();
   for (const record of records) (lineages.get(record.id) ?? lineages.set(record.id, []).get(record.id)!).push(record);
@@ -521,7 +527,7 @@ export function renderGraphCall(args: unknown, theme: Palette): Component {
     ? partial.edges.filter(record)
     : [];
   const options = record(partial.options) ? partial.options : {};
-  const decisions = nodes.filter((node) => node.type === "decision").length;
+  const decisions = nodes.filter((node) => Array.isArray(node.choices)).length;
   const route = edges
     .slice(0, 5)
     .map(
@@ -533,13 +539,13 @@ export function renderGraphCall(args: unknown, theme: Palette): Component {
     .slice(0, 8)
     .map(
       (node) =>
-        `${node.type === "decision" ? "◇" : "○"} ${compact(node.id, 30)}`,
+        `${Array.isArray(node.choices) ? "◇" : "○"} ${compact(node.id, 30)}`,
     );
   return new FixedLines([
     theme.fg("toolTitle", "◆ Braid"),
     theme.fg(
       "muted",
-      `${nodes.length} nodes (${decisions} decision) · ${edges.length} edges · max ${options.maxConcurrency ?? 4}`,
+      `${nodes.length} nodes (${decisions} routing) · ${edges.length} edges · max ${options.maxConcurrency ?? 4}`,
     ),
     theme.fg("dim", `goal: ${compact(partial.goal)}`),
     theme.fg(
@@ -671,7 +677,7 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
   state.events.push(preview);
   if (event.type === "execution_created")
     Object.defineProperty(state.nodeTypes, event.nodeId, {
-      value: event.nodeType,
+      value: displayType({ type: event.nodeType, choices: event.choices }),
       enumerable: true,
       configurable: true,
     });
@@ -732,7 +738,7 @@ export function applyEvent(state: BraidLiveState, event: ExecutionEvent): void {
       delete state.nodes[id]; delete state.nodeTypes[id]; delete state.progress[id];
     }
     for (const node of event.graph.nodes) {
-      Object.defineProperty(state.nodeTypes, node.id, { value: node.type, enumerable: true, configurable: true });
+      Object.defineProperty(state.nodeTypes, node.id, { value: displayType(node), enumerable: true, configurable: true });
       if (!Object.hasOwn(state.nodes, node.id)) Object.defineProperty(state.nodes, node.id, {
         value: { id: node.id, status: "pending" }, enumerable: true, configurable: true, writable: true,
       });

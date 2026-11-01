@@ -28,8 +28,8 @@ Each box is a task (a **node**); each arrow passes a result to a dependent task
 For agents that edit code, it also provides separate Git worktrees; an explicit
 `integrate` task applies selected changes to your checkout.
 
-Graphs can also branch on an agent's decision, repeat work in a cycle until a
-decision ends it, and be edited, rerun, or paused while running. See [runnable examples](docs/examples.md)
+Graphs can also branch on a choice an agent makes, repeat work in a cycle until a
+choice ends it, and be edited, rerun, or paused while running. See [runnable examples](docs/examples.md)
 and [execution control](docs/execution-control.md) when you need those features.
 
 ## Get started
@@ -135,7 +135,7 @@ const result = await braid({
   goal: "Assess a proposed change and give a recommendation.",
   nodes: [
     {
-      type: "decision", id: "route", prompt: "Choose a brief answer or a detailed assessment.",
+      type: "execute", id: "route", prompt: "Choose a brief answer or a detailed assessment.",
       choices: ["brief", "detailed"], model: process.env.BRAID_ROUTER_MODEL ?? model,
     },
     { type: "execute", id: "benefits", prompt: "Assess the potential benefits." },
@@ -173,11 +173,8 @@ type NodePrompt = string | {
   variables: Readonly<Record<string, string>>;
 };
 type BraidInputNode =
-  | { type: "execute"; id: string; prompt: NodePrompt; model?: string;
-      workspace?: "read-only" | "worktree"; notifyOnCompletion?: boolean;
-      requireSuccess?: boolean; pauseAfter?: boolean; maxRuns?: number }
-  | { type: "decision"; id: string; prompt: NodePrompt;
-      choices: readonly string[]; model?: string; workspace?: "read-only" | "worktree"; notifyOnCompletion?: boolean;
+  | { type: "execute"; id: string; prompt: NodePrompt; choices?: readonly string[];
+      model?: string; workspace?: "read-only" | "worktree"; notifyOnCompletion?: boolean;
       requireSuccess?: boolean; pauseAfter?: boolean; maxRuns?: number }
   | { type: "merge" | "integrate"; id: string; prompt?: NodePrompt; model?: string;
       notifyOnCompletion?: boolean;
@@ -193,9 +190,10 @@ type BraidInput = {
 ```
 
 IDs are unique, non-empty strings without `@`. Goals, models, choices, plain-string prompts,
-and rendered prompts must be non-empty strings when present. Decision choices
-must be non-empty and unique.
-`workspace` is optional on execute/decision nodes and forbidden on merge/integrate
+and rendered prompts must be non-empty strings when present. `choices`, only on
+execute nodes, must be non-empty and unique when present; a node with choices
+routes (see [routing](#scheduling-and-routing-semantics)).
+`workspace` is optional on execute nodes and forbidden on merge/integrate
 nodes. Both read-only and writable Git executions get isolated predecessor
 snapshots; read-only disables write capabilities. Outside Git all filesystem
 access is read-only. `notifyOnCompletion` requests host reminders, `pauseAfter`
@@ -209,8 +207,8 @@ owner's replacement of a started node always starts. A rerun past it waits with
 
 Unknown fields, missing references, and duplicate edges (the same `from`, `to`,
 and `choice`) are rejected. A cycle is a loop, and any edge may close one:
-unconditional, nested, and overlapping cycles are allowed. A decision's choice
-edge can end a cycle, and `maxRuns` on a node in it bounds its rounds; without
+unconditional, nested, and overlapping cycles are allowed. A choice edge can end
+a cycle, and `maxRuns` on a node in it bounds its rounds; without
 either it repeats until its owner stops it. Braid picks the edge that closes each
 cycle, which decides where each round starts; `closesCycle: true` on an edge picks
 it instead (see [cycles](docs/execution-control.md#cycles)). Each submission or
@@ -218,7 +216,10 @@ update that creates a cycle reports it with a `cycles_created` event, and
 `newCycles(graph, previous)` lists new cycles, whether anything stops them, and
 any node that waits for a choice inside the cycle before its first run.
 Disconnected components are allowed; every root runs.
-Only decision nodes may have choice edges, and choices need not all have exits.
+Only nodes with choices may have choice edges, and choices need not all have exits.
+The `decision` node type was removed in favor of execute nodes with choices;
+submitting it fails validation with a migration hint (see
+[compatibility](docs/compatibility.md)).
 
 `validateGraph(input)` validates without execution. Invalid graphs raise
 `GraphValidationError`; invalid options raise `TypeError`. Optional invocation
@@ -271,7 +272,7 @@ by the core API and Pi's `braid` tool:
   blank rendered prompts throw `GraphValidationError` before any model call.
   All declared templates are syntax-checked, including unused ones. Errors
   identify the template and, for node references/rendering, the affected node.
-- Templates work on execute, decision, merge, and integrate prompts. Omitted
+- Templates work on execute, merge, and integrate prompts. Omitted
   merge/integrate prompts retain their defaults. Plain-string prompts are never rendered,
   even when they contain `{{...}}`.
 
@@ -281,7 +282,7 @@ before asynchronous execution. Templates are local to one submission, with no
 saved registry or new runtime dependencies.
 
 `BraidInputNode`, `NodePrompt`, and `PromptTemplateReference` describe compact
-inputs. `BraidNode`, `ExecuteNode`, `DecisionNode`, `MergeNode`, `IntegrateNode`,
+inputs. `BraidNode`, `ExecuteNode`, `MergeNode`, `IntegrateNode`,
 and `ModelRequest.node` keep their string-prompt types for runners. Core applies the
 same non-empty prompt validation after rendering; it does not impose a prompt
 length or token cap (see [resource limits](docs/resource-limits.md)).
@@ -327,18 +328,19 @@ Edges are resolved from the state of their source node's head:
 | --- | --- |
 | Not yet finished | Unresolved |
 | Completed, unlabelled edge | Active |
-| Completed decision, matching choice | Active |
-| Completed decision, nonmatching choice | Inactive |
+| Completed node with choices, matching choice | Active |
+| Completed node with choices, nonmatching choice | Inactive |
 | Skipped because all inputs were inactive | Inactive |
 | Failed, unlabelled edge | Active (passes error and available output/workspace) |
-| Failed decision, choice-labelled edge | Blocked |
+| Failed node with choices, choice-labelled edge | Blocked |
 | Skipped because of a failed dependency | Blocked |
 
-Only decision nodes may have choice-labelled outgoing edges. Unlabelled edges
-are unconditional, including edges from decisions. A single choice can activate
-any number of edges. Choice routing requires successful decision completion.
-A decision must call `decide` exactly once with exactly one declared choice;
-missing, invalid, or repeated calls fail it. Catching a tool validation error
+An execute node routes by declaring `choices`; only such nodes may have
+choice-labelled outgoing edges. Unlabelled edges are unconditional, including
+edges from nodes with choices. A single choice can activate any number of edges.
+Choice routing requires the node to complete successfully. A node with choices
+does its work and must call `decide` exactly once with exactly one declared
+choice; missing, invalid, or repeated calls fail it. Catching a tool validation error
 inside an adapter does not turn that invocation into a success.
 
 A pending instance waits until **all incoming edges are resolved** and none of
@@ -353,8 +355,8 @@ into a new instance, so changes cascade: a cycle unrolls one round at a time,
 and rerunning a node reruns what depends on it.
 
 Failures propagate as context through unconditional edges, allowing successors
-and merge agents to inspect errors and recover partial work. Failed decisions
-cannot activate choice-labelled edges; their unconditional successors can run.
+and merge agents to inspect errors and recover partial work. A failed node with
+choices cannot activate its choice-labelled edges; their unconditional successors can run.
 There are no automatic retries. Failures are optional by default; a
 `requireSuccess: true` execution failure aborts the whole run, cancels siblings,
 and drains writes and cleanup. The policy belongs to the instance.
@@ -365,7 +367,7 @@ A pending instance is edited in place; a started one never changes and is
 replaced instead. `startBraid` exposes revision-checked `update`, `resume`, `snapshot`, and
 `cancel`, plus `pause`/`pauseRun`/`resumeRun` to suspend running executions at
 their next model request without losing their work, `holdAfter` to hold a
-running execution's result once it settles, and `setLimits` to raise run limits. Execute and decision nodes can call
+running execution's result once it settles, and `setLimits` to raise run limits. Execute nodes can call
 `request.requestReplan` to ask the graph owner to change the plan; it holds their
 result and never edits the graph itself. Updates can add, edit, replace, and
 remove nodes and edges at any time before finalization: upserting a started node
@@ -441,7 +443,7 @@ type ModelRunner = (request: ModelRequest) => Promise<{
 ```
 
 Each request contains the goal, node, resolved model, predecessor outputs,
-execution IDs, and an abort signal. Decision nodes additionally receive
+execution IDs, and an abort signal. Nodes with choices additionally receive
 `request.decide(choice)`. Expose that callback as an actual model tool; do not
 infer decisions by parsing the model's prose. Core assigns `request.workspace`,
 provides local `request.git(args, input?)` operations in Git repositories, and
@@ -543,7 +545,7 @@ without changing the runtime; the core package does not depend on Pi. See
 [`integrations/pi/README.md`](integrations/pi/README.md) for installation and testing.
 
 The included OpenAI-compatible adapter uses fresh Chat Completions contexts,
-a strict `decide({ choice })` tool and one tool-free continuation for decisions.
+a strict `decide({ choice })` tool and one tool-free continuation for nodes with choices.
 Merge/integrate nodes use a local `git` / `finish_merge` tool loop; ordinary OpenAI nodes
 have no filesystem tools. Pi exposes read, guarded write, and shell tools plus
 these core Git/merge tools. Tool errors go back to nodes for recovery. Both

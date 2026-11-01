@@ -39,11 +39,11 @@ const invalid: [string, unknown][] = [
   ["workspace on merge node", {
     goal: "x", nodes: [{ type: "merge", id: "merge", workspace: "read-only" }], edges: [],
   }],
-  ...["execute", "decision", "merge"].flatMap((type) =>
+  ...["execute", "routing execute", "merge"].flatMap((kind) =>
     [null, "true", 1, {}, []].map((notifyOnCompletion) => [
-      `invalid notifyOnCompletion on ${type}: ${JSON.stringify(notifyOnCompletion)}`,
-      { goal: "x", nodes: [{ type, id: "a", prompt: "work", notifyOnCompletion,
-        ...(type === "decision" ? { choices: ["left"] } : {}) }], edges: [] },
+      `invalid notifyOnCompletion on ${kind}: ${JSON.stringify(notifyOnCompletion)}`,
+      { goal: "x", nodes: [{ type: kind === "merge" ? "merge" : "execute", id: "a", prompt: "work", notifyOnCompletion,
+        ...(kind === "routing execute" ? { choices: ["left"] } : {}) }], edges: [] },
     ] as [string, unknown])),
   ["empty choices", graph([decision("a", [])])],
   ["duplicate choices", graph([decision("a", ["same", "same"])])],
@@ -131,6 +131,17 @@ test("validation errors identify the invalid node or edge", () => {
   assert.throws(() => validateGraph({
     ...graph([execute("a"), execute("b")]), edges: [{ from: "a", to: "b", condition: "ok" }],
   } as unknown as BraidInput), /Edge 'a' -> 'b': unsupported field 'condition'/);
+});
+
+test("the removed decision type and choices outside execute nodes fail with a migration hint", () => {
+  assert.throws(() => validateGraph({
+    goal: "x", nodes: [{ type: "decision", id: "route", prompt: "Choose", choices: ["left"] }], edges: [],
+  } as unknown as BraidInput), /Node 'route': the decision node type was removed; use type "execute" with the same choices/);
+  assert.throws(() => validateGraph({
+    goal: "x", nodes: [{ type: "merge", id: "m", choices: ["left"] }], edges: [],
+  } as unknown as BraidInput), /Node 'm' \(merge\): unsupported field 'choices'/);
+  assert.throws(() => validateGraph(graph([execute("a"), execute("b")], [{ from: "a", to: "b", choice: "left" }])),
+    /Choice edge from 'a', which declares no choices/);
 });
 
 test("validation accepts self, unconditional, nested, and overlapping cycles", () => {

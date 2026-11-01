@@ -2,28 +2,12 @@ export interface ExecuteNode {
   type: "execute";
   id: string;
   prompt: string;
-  model?: string;
-  /** Ask the parent adapter for a completion reminder on success or failure. Default: false. */
-  notifyOnCompletion?: boolean;
-  /** Optional failures remain in history; true aborts the entire run on failure. */
-  requireSuccess?: boolean;
-  /** Hold this execution's outgoing dependencies until explicitly resumed. */
-  pauseAfter?: boolean;
   /**
-   * How many executions of this node may start, counting reruns: cycle rounds and
-   * downstream reruns. Skipped executions do not count. An owner's replacement is
-   * never blocked. Unlimited when omitted or Infinity.
+   * Routing choices. A node with choices must call decide exactly once with one of
+   * them, and its choice edges activate only for the chosen one. Omit for a node
+   * that does not route.
    */
-  maxRuns?: number;
-  /** Fresh predecessor snapshot in Git; read-only disables writes. Read-only outside Git. */
-  workspace?: "read-only" | "worktree";
-}
-
-export interface DecisionNode {
-  type: "decision";
-  id: string;
-  prompt: string;
-  choices: readonly string[];
+  choices?: readonly string[];
   model?: string;
   /** Ask the parent adapter for a completion reminder on success or failure. Default: false. */
   notifyOnCompletion?: boolean;
@@ -63,7 +47,7 @@ export interface MergeNode {
 
 export interface IntegrateNode extends Omit<MergeNode, "type"> { type: "integrate"; }
 
-export type BraidNode = ExecuteNode | DecisionNode | MergeNode | IntegrateNode;
+export type BraidNode = ExecuteNode | MergeNode | IntegrateNode;
 
 /** A reference to a template in this graph submission; values are inserted literally. */
 export interface PromptTemplateReference {
@@ -76,7 +60,6 @@ export type NodePrompt = string | PromptTemplateReference;
 /** Submission nodes may use templates; ModelRequest.node always has a string prompt. */
 export type BraidInputNode =
   | (Omit<ExecuteNode, "prompt"> & { prompt: NodePrompt })
-  | (Omit<DecisionNode, "prompt"> & { prompt: NodePrompt })
   | (Omit<MergeNode, "prompt"> & { prompt?: NodePrompt })
   | (Omit<IntegrateNode, "prompt"> & { prompt?: NodePrompt });
 
@@ -137,7 +120,7 @@ export interface GitResult {
 export interface Edge {
   from: string;
   to: string;
-  /** Omit for an unconditional edge, including from a decision node. */
+  /** Omit for an unconditional edge, including from a node with choices. */
   choice?: string;
   /**
    * True makes this edge close the cycle it is on, so each round starts at its
@@ -156,14 +139,14 @@ export interface GraphCycle {
   nodeIds: string[];
   /** The cycle's edges in order: edges[i] leaves nodeIds[i]. The last one closes the cycle. */
   edges: Edge[];
-  /** A decision's choice edges on the cycle, which end it when the decision chooses otherwise. */
+  /** Choice edges on the cycle, which end it when their source chooses otherwise. */
   stops: Edge[];
   /** Nodes on the cycle with a finite maxRuns, which bound how often it repeats. */
   limitedNodeIds: string[];
   /**
    * Choice edges on the cycle, other than the closing edge, that are the only
-   * way their target runs: the target waits for the decision to choose the
-   * edge, so it does not run before that decision, even in the first round.
+   * way their target runs: the target waits for the edge's source to choose it,
+   * so it does not run before that choice, even in the first round.
    */
   choiceGated: Edge[];
 }
@@ -187,7 +170,7 @@ export type NodeStatus =
  * Why a pending instance has not started. predecessors: an input has not run yet;
  * stale: an input has a newer instance, or will get one, that has not settled;
  * hold: an input is held; choice: every input is a choice edge, so the instance
- * runs only once a decision chooses one of them, and its inputs are still waiting
+ * runs only once its source chooses one of them, and its inputs are still waiting
  * for any of the above; limit: a rerun at its node's maxRuns; run_paused: the
  * run is paused; slot: no concurrency slot is free, or the instance it replaces
  * is still stopping.
@@ -269,10 +252,10 @@ export interface ModelRequest {
     sourceStatus?: SourceCheckoutStatus;
     finish: (dispositions: MergeDisposition[]) => Promise<void>;
   };
-  /** Present only on decision nodes. An adapter exposes this as the decide tool. */
+  /** Present only on nodes with choices. An adapter exposes this as the decide tool. */
   decide?: (choice: string) => void;
   /**
-   * Present on execute and decision nodes. An adapter exposes this as the
+   * Present on execute nodes. An adapter exposes this as the
    * request_replan tool. Records the request, holds this execution's result like
    * pauseAfter, and lets the execution continue; the graph owner decides how to
    * replan. A suggestion is validated against the current graph. A repeated call
@@ -366,6 +349,8 @@ export type ExecutionEvent = Readonly<
         type: "execution_created";
         nodeId: string;
         nodeType: BraidNode["type"];
+        /** Present when the node routes: the choices it declares. */
+        choices?: readonly string[];
         generation: number;
         cause: "submitted" | "added" | "cloned" | "replaced";
         model?: string;

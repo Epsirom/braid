@@ -9,7 +9,7 @@ await inTemporaryDirectory(async cwd => {
     nodes: [
       // draft may run twice, so there are at most two rounds.
       { type: "execute", id: "draft", prompt: "Refine the proposal.", maxRuns: 2 },
-      { type: "decision", id: "review", prompt: "Review it.", choices: ["again", "done"], pauseAfter: true },
+      { type: "execute", id: "review", prompt: "Review it.", choices: ["again", "done"], pauseAfter: true },
     ],
     // The choice edge back to draft closes the cycle.
     edges: [{ from: "draft", to: "review" }, { from: "review", to: "draft", choice: "again" }],

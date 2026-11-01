@@ -205,7 +205,7 @@ test(
       {
         runner: async (request) => {
           called.push(request.node.id);
-          if (request.node.type === "decision") request.decide!("left");
+          if (request.decide) request.decide("left");
           else
             assert.deepEqual(predecessorText(request.predecessors), [
               { nodeId: "route", output: "route", decision: "left" },
@@ -637,8 +637,8 @@ test(
     const input = graph([decision()]);
     const result = await braid(input, {
       runner: async (request) => {
-        assert.equal(request.node.type, "decision");
-        if (request.node.type === "decision")
+        assert.equal(request.node.type, "execute");
+        if (request.node.type === "execute")
           request.node.choices = ["injected"];
         request.decide!("injected");
         return { output: "should fail" };
@@ -646,7 +646,7 @@ test(
     });
     assert.equal(result.nodes.route!.error!.code, "INVALID_DECISION");
     const original = input.nodes[0];
-    assert.ok(original?.type === "decision");
+    assert.ok(original?.type === "execute");
     assert.deepEqual(original.choices, ["left", "right"]);
   },
 );

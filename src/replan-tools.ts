@@ -5,7 +5,7 @@ const edge = {
   properties: {
     from: { type: "string" },
     to: { type: "string" },
-    choice: { type: "string", description: "Required on edges from a decision node that route one choice." },
+    choice: { type: "string", description: "Required on edges from a node with choices that route one choice." },
     closesCycle: { type: "boolean", description: "True to make this edge close the cycle it is on, so each round starts at its target." },
   },
   required: ["from", "to"], additionalProperties: false,
@@ -13,9 +13,9 @@ const edge = {
 
 const node = {
   type: "object",
-  description: "A complete node definition, as in the graph: execute and decision nodes need a prompt; decision nodes also need choices.",
+  description: "A complete node definition, as in the graph: execute nodes need a prompt and may declare choices.",
   properties: {
-    type: { type: "string", enum: ["execute", "decision", "merge"] },
+    type: { type: "string", enum: ["execute", "merge"] },
     id: { type: "string" },
     prompt: { type: "string" },
     choices: { type: "array", items: { type: "string" } },
@@ -31,7 +31,7 @@ export function replanToolDefinition() {
     description: "Report a finding that may change the plan to the parent agent. You see only the goal, your prompt, and your direct inputs, not the rest of the graph, so report what you found, not a new plan; the parent decides which planned work it affects. " +
       "Use it when what you found contradicts what your prompt assumes, makes your task unnecessary, or affects more than your task in a way the goal depends on, such as a root cause that also explains other problems. " +
       "Use it rarely: each call holds your successors and wakes the parent. Do not call it for ordinary obstacles you can work through, to report your result, to ask for confirmation, or for uncertainty you can state in your final answer. " +
-      "Call it as soon as you know, so the parent can stop work that is no longer needed. It does not change the graph or stop you: keep working as far as it still makes sense and give your final answer, which the parent reads as evidence. On a decision node it does not replace decide. " +
+      "Call it as soon as you know, so the parent can stop work that is no longer needed. It does not change the graph or stop you: keep working as far as it still makes sense and give your final answer, which the parent reads as evidence. If you have choices, it does not replace decide. " +
       "suggestion is optional; use it only to add nodes after your own node ID, and describe anything else in reason. An invalid suggestion is rejected with the reason; fix it or omit it. Calling again replaces your earlier request.",
     parameters: {
       type: "object",

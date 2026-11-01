@@ -153,7 +153,7 @@ test("g switches the panel between live and timeline; selection and Enter follow
   t.after(() => jobs.dispose());
   const job = jobs.start({ goal: "Loop", nodes: [
     { type: "execute", id: "work", prompt: "work" },
-    { type: "decision", id: "review", prompt: "review", choices: ["again", "done", "escalate"] },
+    { type: "execute", id: "review", prompt: "review", choices: ["again", "done", "escalate"] },
     { type: "execute", id: "ship", prompt: "ship" },
     { type: "execute", id: "human", prompt: "ask" },
   ], edges: [

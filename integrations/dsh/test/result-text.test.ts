@@ -14,7 +14,7 @@ test("git results read like DSH's bash output and keep output byte-exact", () =>
 test("cycle notices name a node that runs only after a choice and how to start rounds there", () => {
   const node = (id: string) => ({ id, type: "execute" as const, prompt: id });
   const graph = (closesCycle?: boolean) => ({ nodes: [{ ...node("impl"), maxRuns: 3 }, node("tests"), { id: "merge", type: "merge" as const },
-    { id: "review", type: "decision" as const, prompt: "review", choices: ["again", "done"] }], edges: [
+    { id: "review", type: "execute" as const, prompt: "review", choices: ["again", "done"] }], edges: [
     { from: "impl", to: "merge" }, { from: "tests", to: "merge" }, { from: "merge", to: "review" },
     { from: "review", to: "impl", choice: "again", ...(closesCycle ? { closesCycle } : {}) },
   ] });

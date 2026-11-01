@@ -150,7 +150,7 @@ test("decision calls count toward finite budgets and can finish at the cap", asy
   ]);
   const choices: string[] = [];
   const output = await createPiRunner(fake.registry, { cwd: readOnlyCwd, maxToolRounds: 1, maxToolCalls: 1 })({
-    ...request({ type: "decision", id: "route", prompt: "Choose", choices: ["go"] }),
+    ...request({ type: "execute", id: "route", prompt: "Choose", choices: ["go"] }),
     decide: choice => { choices.push(choice); },
   });
   assert.equal(output.output, "Go");
@@ -212,7 +212,7 @@ test("Pi runner uses exact model lookup, fresh context, decide, and one bounded 
     onProgress: (update) => progress.push(update),
   });
   const invocation = request({
-    type: "decision",
+    type: "execute",
     id: "route",
     prompt: "Choose",
     choices: ["go", "stop"],

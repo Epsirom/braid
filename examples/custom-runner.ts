@@ -7,8 +7,8 @@ import { inTemporaryDirectory } from "./support.js";
 const runner: ModelRunner = async request => {
   request.signal.throwIfAborted();
   await delay(1, undefined, { signal: request.signal });
-  if (request.node.type === "decision") {
-    request.decide!("continue");
+  if (request.decide) {
+    request.decide("continue");
     return { output: "Continue with the analysis.", model: "offline-example" };
   }
   return {
@@ -19,7 +19,7 @@ const runner: ModelRunner = async request => {
 const result = await inTemporaryDirectory(cwd => braid({
   goal: "Demonstrate a cancellable isolated runner.",
   nodes: [
-    { type: "decision", id: "route", prompt: "Choose a path.", choices: ["continue", "stop"] },
+    { type: "execute", id: "route", prompt: "Choose a path.", choices: ["continue", "stop"] },
     { type: "execute", id: "answer", prompt: "List the supplied predecessor IDs." },
   ],
   edges: [{ from: "route", to: "answer", choice: "continue" }],

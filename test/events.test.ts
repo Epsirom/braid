@@ -72,7 +72,8 @@ test("execution log records graph creation, handoffs, routing, skips, and comple
     executionId: "route@1",
     revision: 0,
     nodeId: "route",
-    nodeType: "decision",
+    nodeType: "execute",
+    choices: ["go", "stop"],
     generation: 1,
     cause: "submitted",
   });

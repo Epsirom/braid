@@ -23,7 +23,7 @@ for (const templated of [false, true]) {
       goal: "Review and integrate",
       nodes: [
         { type: "execute", id: "work", prompt, model: "provider/model-id", workspace: "worktree", pauseAfter: true, notifyOnCompletion: true, requireSuccess: false, maxRuns: 3 },
-        { type: "decision", id: "check", prompt, choices: ["retry", "done"], workspace: "read-only" },
+        { type: "execute", id: "check", prompt, choices: ["retry", "done"], workspace: "read-only" },
         { type: "merge", id: "merge", prompt, requireSuccess: true },
         { type: "integrate", id: "integrate", prompt },
         { type: "merge", id: "defaultMerge" },
@@ -46,11 +46,10 @@ for (const templated of [false, true]) {
 
 const invalidNodes = [
   { type: "execute", id: "a" },
-  { type: "decision", id: "a", choices: ["done"] },
-  { type: "decision", id: "a", prompt: "Choose" },
-  { type: "decision", id: "a", prompt: "Choose", choices: [] },
-  { type: "decision", id: "a", prompt: "Choose", choices: ["done", "done"] },
-  { type: "execute", id: "a", prompt: "Work", choices: ["done"] },
+  { type: "execute", id: "a", choices: ["done"] },
+  { type: "decision", id: "a", prompt: "Choose", choices: ["done"] },
+  { type: "execute", id: "a", prompt: "Choose", choices: [] },
+  { type: "execute", id: "a", prompt: "Choose", choices: ["done", "done"] },
   { type: "merge", id: "a", workspace: "worktree" },
   { type: "integrate", id: "a", workspace: "read-only" },
   { type: "merge", id: "a", choices: ["done"] },

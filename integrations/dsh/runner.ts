@@ -79,9 +79,10 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
       if (request.git) tools.push(gitToolDefinition(integrating));
       if (request.merge) tools.push(finishMergeToolDefinition(request.merge.sources.map(source => source.executionId!)));
       if (request.requestReplan) tools.push(replanToolDefinition());
-      if (request.node.type === "decision") tools.push({
+      const choices = request.node.type === "execute" ? request.node.choices : undefined;
+      if (choices) tools.push({
         name: "decide", description: "Select exactly one declared choice before answering.",
-        parameters: { type: "object", properties: { choice: { type: "string", enum: request.node.choices } }, required: ["choice"], additionalProperties: false },
+        parameters: { type: "object", properties: { choice: { type: "string", enum: choices } }, required: ["choice"], additionalProperties: false },
       });
       const messages: RequestMessage[] = [{ role: "user", content: [{ type: "text", text: JSON.stringify({
         goal: request.goal, nodeId: request.node.id, execution: request.execution,
@@ -97,7 +98,7 @@ export function createDshRunner(llm: DshLlm, options: RunnerOptions): ModelRunne
         "Parent transcript, skills, extension tools, and MCP tools are not inherited. " +
         mergeInstructions(request) +
         replanInstructions(request) +
-        (request.node.type === "decision" ? "Call decide exactly once, then answer. " : "") +
+        (choices ? "Do the work in your prompt, then call decide exactly once with the declared choice that fits your result, and give your result as a natural-language answer. " : "") +
         "Return a nonempty natural-language result." +
         (files.guidance ? `\n\n${files.guidance}` : "");
       let toolRounds = 0, toolCalls = 0, decided = false;

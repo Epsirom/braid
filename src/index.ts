@@ -15,7 +15,6 @@ export type {
   BraidNode,
   BraidOptions,
   BraidResult,
-  DecisionNode,
   Edge,
   ExecuteNode,
   ExecutionContext,

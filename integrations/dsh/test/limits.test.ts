@@ -44,7 +44,7 @@ test("a rerun at its node's maxRuns wakes the parent with how to continue or sto
   const waiting: WaitingNotice[] = [];
   const jobs = new BraidJobs(runtime, undefined, undefined, undefined, undefined, notice => { waiting.push(notice); });
   const job = jobs.start({
-    goal: "refine", nodes: [{ ...node("work"), maxRuns: 1 }, { type: "decision", id: "check", prompt: "review", choices: ["again", "done"] }],
+    goal: "refine", nodes: [{ ...node("work"), maxRuns: 1 }, { type: "execute", id: "check", prompt: "review", choices: ["again", "done"] }],
     edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "again" }],
   }, {}, context());
   await until(() => waiting.length === 1);

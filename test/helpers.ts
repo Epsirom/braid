@@ -1,7 +1,6 @@
 import type {
   BraidInput,
   BraidNode,
-  DecisionNode,
   Edge,
   ExecuteNode,
 } from "../src/index.js";
@@ -29,9 +28,9 @@ export function decision(
   id = "route",
   choices = ["left", "right"],
   model?: string,
-): DecisionNode {
+): ExecuteNode & { choices: string[] } {
   return {
-    type: "decision",
+    type: "execute",
     id,
     prompt: `Choose for ${id}`,
     choices,

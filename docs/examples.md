@@ -6,7 +6,7 @@ Replace a runner with the documented provider adapter for live use.
 
 | Example | Run | Expected result |
 | --- | --- | --- |
-| [Design comparison](../examples/basic.ts) | `npm run demo` | Decision chooses comparison, benefits/risks run concurrently, answer synthesizes them; brief branch skips |
+| [Design comparison](../examples/basic.ts) | `npm run demo` | A routing node chooses comparison, benefits/risks run concurrently, answer synthesizes them; brief branch skips |
 | [Code review](../examples/code-review.ts) | `npx tsx examples/code-review.ts` | Correctness and test reviews run independently; final review lists both findings |
 | [Failure handling](../examples/failure-handling.ts) | `npx tsx examples/failure-handling.ts` | `completed`; optional failure stays in history and join completes with local findings and explicit `remote` error context |
 | [Loop and live update](../examples/execution-control.ts) | `npx tsx examples/execution-control.ts` | Two refinement rounds, a pause, and an atomic graph update/resume |
@@ -21,7 +21,7 @@ Fake responses illustrate control flow; they do not demonstrate model quality.
 
 Export `OPENAI_API_KEY` and `BRAID_MODEL`; optionally export `OPENAI_BASE_URL`.
 Then run `npm run demo -- --live`. This makes billable requests and needs a model
-that supports the decision function schema. `.env.example` documents variables;
+that supports the `decide` function schema. `.env.example` documents variables;
 Braid does not automatically load `.env` files.
 
 ## Pi panel

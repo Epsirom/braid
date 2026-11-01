@@ -8,7 +8,7 @@ const input: BraidInput = {
   goal: "Compare the benefits and risks of adopting a four-day work week.",
   nodes: [
     {
-      type: "decision",
+      type: "execute",
       id: "route",
       prompt: "Choose whether this goal needs a comparison or a short answer.",
       choices: ["compare", "brief"],

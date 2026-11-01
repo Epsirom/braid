@@ -157,24 +157,24 @@ test("requests are rejected when invalid or after the invocation ends", async t 
   assert.throws(() => late!({ reason: "too late" }), /can no longer be requested/);
 });
 
-test("requestReplan is offered to execute and decision nodes only", async t => {
+test("requestReplan is offered to execute nodes, with or without choices, and not to merge nodes", async t => {
   const offered: Record<string, boolean> = {};
   const runner: ModelRunner = async request => {
-    offered[request.node.type] = typeof request.requestReplan === "function";
+    offered[request.node.id] = typeof request.requestReplan === "function";
     if (request.merge) await request.merge.finish([]);
     request.decide?.("done");
     return { output: request.node.id };
   };
   const run = await start(t, {
     goal: "types",
-    nodes: [node("a"), { type: "decision", id: "d", prompt: "d", choices: ["done"] }, { type: "merge", id: "m" }],
+    nodes: [node("a"), { type: "execute", id: "d", prompt: "d", choices: ["done"] }, { type: "merge", id: "m" }],
     edges: [{ from: "a", to: "m" }, { from: "d", to: "m" }],
   }, { runner });
   assert.equal((await run.result).status, "completed");
-  assert.deepEqual(offered, { execute: true, decision: true, merge: false });
+  assert.deepEqual(offered, { a: true, d: true, m: false });
 });
 
-test("worker guidance reminds decision nodes that a replan does not replace decide", () => {
+test("worker guidance reminds nodes with choices that a replan does not replace decide", () => {
   const request = (decision: boolean) => ({ requestReplan: () => {}, ...(decision ? { decide: () => {} } : {}) }) as unknown as ModelRequest;
   assert.match(replanInstructions(request(false)), /call request_replan as soon as you know to report the finding, not a new plan/);
   assert.match(replanInstructions(request(false)), /not the rest of the graph/);

@@ -71,7 +71,7 @@ test("repeated loop visits keep separate execution histories", async () => {
   let visits = 0;
   const result = await braid({
     goal: "loop",
-    nodes: [{ ...execute("work"), maxRuns: 2 }, { type: "decision", id: "check", prompt: "check", choices: ["retry", "done"] }],
+    nodes: [{ ...execute("work"), maxRuns: 2 }, { type: "execute", id: "check", prompt: "check", choices: ["retry", "done"] }],
     edges: [{ from: "work", to: "check" }, { from: "check", to: "work", choice: "retry" }],
   }, {
     onEvent: event => tracker.observe(event),
